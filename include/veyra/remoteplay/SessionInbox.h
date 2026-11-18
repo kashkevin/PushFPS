@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #pragma once
 #include "VideoIngress.h"
+#include "WakeSignal.h"
 #include <memory>
 #include <stdexcept>
 namespace veyra::remoteplay {
@@ -52,6 +53,10 @@ public:
     void frameDecoded(HostTime now);
     void decoderBackend(bool hardware,bool fallback);
     void streamProfile(VideoProfile profile);
+    // Optional: notified after every accepted callback (video sample, state
+    // change, failure) so the owner can wait instead of polling. Kept across
+    // begin(); pass null to return to polling. Never called under the inbox lock.
+    void wakeOn(std::shared_ptr<WakeSignal> signal);
 private:
     std::shared_ptr<Shared> shared_;
 };

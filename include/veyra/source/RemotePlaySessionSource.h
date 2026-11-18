@@ -1,5 +1,7 @@
 #pragma once
 #include "RemotePlaySource.h"
+#include "veyra/remoteplay/ControllerQueue.h"
+#include "veyra/remoteplay/WakeSignal.h"
 #include "veyra/sink/CaptureAudioSession.h"
 #include <atomic>
 #include <condition_variable>
@@ -12,7 +14,8 @@ namespace veyra::source {
 // busy. Only already-decoded presentation opportunities use the latest slot.
 class RemotePlaySessionSource final : public IFrameSource {
 public:
-    ~RemotePlaySessionSource() override { close(); }
+    RemotePlaySessionSource();
+    ~RemotePlaySessionSource() override;
     bool connect(RemotePlayConnectDesc desc);
     // True while the owner loop, including its reconnect retries, still runs.
     bool alive() const { return alive_.load(); }
@@ -36,6 +39,11 @@ public:
     void setAudioSync(unsigned mode, int offset) { audio_.setSync(mode, offset); }
     void videoPresented(double pts, int64_t host) { audio_.videoPresented(pts, host); }
     void videoReset(bool resetAudio=true) { audio_.videoReset(resetAudio); }
+    // Auto-reset Win32 event (a HANDLE), set when a decoded frame is published:
+    // the engine loop waits on it instead of polling read() in timer slices,
+    // as it already does for a capture card. Null when the event could not be
+    // created or VEYRA_TEST_RP_LEGACY_TIMING / _ENGINE_WAKE asks for polling.
+    void* frameEvent() const noexcept { return engineWake_ ? frameEvent_ : nullptr; }
 private:
     friend struct RemotePlaySessionSourceTestAccess;
     void publishDecoded(const AVFrame*,pipeline::FramePacket,const SourceInfo&);
@@ -52,9 +60,13 @@ private:
     SourceInfo info_, publishedInfo_;
     remoteplay::SessionInbox::Snapshot snapshot_;
     std::shared_ptr<const remoteplay::SessionInbox> telemetryInbox_;
-    remoteplay::ControllerState controller_;
-    std::deque<std::pair<remoteplay::HostTime,remoteplay::ControllerState>> pendingControllers_;
-    remoteplay::HostTime controllerStamp_=0;
+    // Pad states from the UI poll to the owner; see ControllerQueue for the
+    // two policies. The owner waits on wake_ for a video sample, a new pad
+    // state, a login PIN or stop, instead of sleeping in 1 ms slices.
+    remoteplay::ControllerQueue controllers_;
+    std::shared_ptr<remoteplay::WakeSignal> wake_;
+    void* frameEvent_=nullptr;
+    bool ownerWake_=true, engineWake_=true;
     std::string pin_;
     uint64_t skipped_=0;
     Rates rates_;

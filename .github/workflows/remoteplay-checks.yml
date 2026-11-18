@@ -1,0 +1,87 @@
+# Fast Windows checks for the PS5 Remote Play low-latency work (a few minutes, no dependencies).
+#
+# build-windows.yml takes about two hours and does not build the Remote Play tests. This workflow
+# gives quick MSVC feedback first:
+#   1. the portable core tests (tests/remoteplay/CoreTests.cpp) compiled by MSVC and run;
+#   2. the new headers compiled with the same strict flags as veyra_sources (/W4 /WX /permissive-);
+#   3. every PowerShell script under scripts/remoteplay parsed, and the hardware detection run once.
+# A pass here does not establish that PushFPS.exe builds, decodes video, reaches a PS5 or is faster.
+name: remoteplay-checks
+
+on:
+  push:
+    paths:
+      - 'include/veyra/remoteplay/**'
+      - 'src/remoteplay/**'
+      - 'tests/remoteplay/**'
+      - 'scripts/remoteplay/**'
+      - '.github/workflows/remoteplay-checks.yml'
+  pull_request:
+    paths:
+      - 'include/veyra/remoteplay/**'
+      - 'src/remoteplay/**'
+      - 'tests/remoteplay/**'
+      - 'scripts/remoteplay/**'
+      - '.github/workflows/remoteplay-checks.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Portable core tests (MSVC)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force out | Out-Null
+          $sources = 'src\remoteplay\Validation.cpp', 'src\remoteplay\AnnexB.cpp', 'src\remoteplay\Timeline.cpp',
+                     'src\remoteplay\VideoIngress.cpp', 'src\remoteplay\SessionInbox.cpp', 'tests\remoteplay\CoreTests.cpp'
+          cl /nologo /std:c++20 /EHsc /O2 /utf-8 /W4 /permissive- /DNOMINMAX /DUNICODE /D_UNICODE /Iinclude /Foout\ /Feout\core_tests.exe @sources
+          if ($LASTEXITCODE -ne 0) { Write-Host '::error::core tests did not compile with MSVC'; exit 1 }
+          & out\core_tests.exe
+          if ($LASTEXITCODE -ne 0) { Write-Host '::error::core tests failed'; exit 1 }
+
+      - name: New headers under /W4 /WX /permissive-
+        shell: pwsh
+        run: |
+          @('#include "veyra/remoteplay/WakeSignal.h"',
+            '#include "veyra/remoteplay/ControllerQueue.h"',
+            '#include "veyra/remoteplay/KeyboardMousePad.h"',
+            '#include "veyra/remoteplay/StreamCadence.h"',
+            'int main() { return 0; }') | Set-Content -Encoding ascii out\headers.cpp
+          cl /nologo /std:c++20 /EHsc /utf-8 /W4 /WX /permissive- /DNOMINMAX /DUNICODE /D_UNICODE /Iinclude /c /Foout\ out\headers.cpp
+          if ($LASTEXITCODE -ne 0) { Write-Host '::error::a new header is not clean under /W4 /WX'; exit 1 }
+
+      - name: PowerShell scripts parse
+        shell: pwsh
+        run: |
+          $bad = 0
+          foreach ($file in Get-ChildItem scripts\remoteplay -Filter *.ps1 -Recurse) {
+            $tokens = $null; $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              $bad++
+              foreach ($e in $errors) { Write-Host "::error file=$($file.FullName),line=$($e.Extent.StartLineNumber)::$($e.Message)" }
+            } else { Write-Host "ok  $($file.Name)" }
+          }
+          if ($bad -gt 0) { exit 1 }
+
+      - name: Hardware detection runs (Windows PowerShell 5.1, as on a user's PC)
+        shell: powershell
+        run: |
+          & scripts\remoteplay\detect-hardware.ps1 -OutFile out\hardware.json -ExpectRefreshHz 60
+          if (-not (Test-Path out\hardware.json)) { Write-Host '::error::detect-hardware.ps1 wrote no file'; exit 1 }
+          Get-Content out\hardware.json | ConvertFrom-Json | Out-Null
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: remoteplay-checks
+          path: out/hardware.json
+          if-no-files-found: ignore

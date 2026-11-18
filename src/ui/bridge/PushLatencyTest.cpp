@@ -103,6 +103,11 @@ void QmlPlayerBridge::pushLatencyTick() {
                 const auto sum = engine::latency::summarize(t.results, uint32_t(t.trials));
                 veyra::log::info("push-latency", std::format("done answered={}/{} meanMs={:.1f} medianMs={:.1f} minMs={:.1f} maxMs={:.1f} pushfpsMs={:.1f}",
                     sum.answered, sum.trials, sum.meanMs, sum.medianMs, sum.minMs, sum.maxMs, t.pushfpsSamples ? t.pushfpsMs / t.pushfpsSamples : 0.0));
+                // Every press, for the A/B analysis (tools/remoteplay_latency_bench/analyze.py): a
+                // median of 8-20 presses cannot resolve a difference of a few milliseconds.
+                std::string values;
+                for (const auto v : t.results) values += std::format("{}{:.1f}", values.empty() ? "" : ",", double(v));
+                veyra::log::info("push-latency", std::format("trials answerMs=[{}]", values));
             } else {
                 probe.beginWindow();
                 t.phase = 0; t.phaseStart = now;
