@@ -1,5 +1,8 @@
 // QML bridge: RemotePlay responsibilities.
 #include "../QmlPlayerBridge_p.h"
+#ifdef VEYRA_ENABLE_REMOTEPLAY
+#include "veyra/ui/RemotePlayKeyboardMouse.h"
+#endif
 
 namespace veyra::ui {
 // --- PS5 Remote Play (P4-e) ---------------------------------------------------
@@ -7,6 +10,42 @@ namespace {
 constexpr uint32_t kPs5Bitrates[] = {5000, 10000, 15000, 20000, 30000, 50000, 80000, 100000};
 #ifdef VEYRA_ENABLE_REMOTEPLAY
 std::filesystem::path ps5Settings() { return remoteplay::profileDirectory() / L"settings.ini"; }
+// Experiments of 2026-11-18, all off unless their variable is set (docs/PS5_REMOTE_PLAY_EXPERIMENTS.md).
+// VEYRA_EXP_RP_PAD_POLL_MS=1..8: pad (and keyboard / mouse) poll interval, default 4.
+int ps5PadPollMs() {
+    if (qEnvironmentVariableIsSet("VEYRA_TEST_RP_LEGACY_TIMING") || qEnvironmentVariableIsSet("VEYRA_TEST_RP_LEGACY_INPUT")) return 8;
+    bool ok = false;
+    const int asked = qEnvironmentVariableIntValue("VEYRA_EXP_RP_PAD_POLL_MS", &ok);
+    return ok && asked >= 1 && asked <= 8 ? asked : 4;
+}
+// VEYRA_EXP_RP_KBM=1 (stick aiming) or =gyro (motion aiming): keyboard and mouse as a DualSense.
+// One bridge exists per process; the capture lives as long as it is wanted.
+std::unique_ptr<RemotePlayKeyboardMouse> ps5KeyboardMouse;
+std::unique_ptr<RemotePlayKeyboardMouse> makePs5KeyboardMouse() {
+    const QString mode = qEnvironmentVariable("VEYRA_EXP_RP_KBM").trimmed().toLower();
+    if (mode.isEmpty() || mode == "0") return nullptr;
+    remoteplay::MouseAimConfig aim;
+    if (mode == "gyro") aim.mode = remoteplay::MouseAimConfig::Mode::Gyro;
+    const auto number = [](const char* name, double fallback) {
+        bool ok = false;
+        const double value = qEnvironmentVariable(name).toDouble(&ok);
+        return ok ? value : fallback;
+    };
+    aim.sensitivity = number("VEYRA_EXP_RP_KBM_SENS", aim.sensitivity);
+    aim.fullSpeedCounts = number("VEYRA_EXP_RP_KBM_FULL", aim.fullSpeedCounts);
+    aim.deadzone = number("VEYRA_EXP_RP_KBM_DEADZONE", aim.deadzone);
+    aim.curve = number("VEYRA_EXP_RP_KBM_CURVE", aim.curve);
+    aim.yScale = number("VEYRA_EXP_RP_KBM_YSCALE", aim.yScale);
+    aim.smoothingMs = number("VEYRA_EXP_RP_KBM_SMOOTH_MS", aim.smoothingMs);
+    aim.gyroDegPerCount = number("VEYRA_EXP_RP_KBM_GYRO_DEG", aim.gyroDegPerCount);
+    aim.invertY = qEnvironmentVariableIntValue("VEYRA_EXP_RP_KBM_INVERT_Y") != 0;
+    aim.invertX = qEnvironmentVariableIntValue("VEYRA_EXP_RP_KBM_INVERT_X") != 0;
+    remoteplay::KeyboardPadBindings bindings;
+    const unsigned unread = bindings.parse(qEnvironmentVariable("VEYRA_EXP_RP_KBM_BINDS").toStdString());
+    veyra::log::info("remoteplay-kbm", std::format("experimental keyboard and mouse: mode={} sens={} full={} deadzone={} curve={} smoothMs={} unreadBindings={}",
+        aim.mode == remoteplay::MouseAimConfig::Mode::Gyro ? "gyro" : "stick", aim.sensitivity, aim.fullSpeedCounts, aim.deadzone, aim.curve, aim.smoothingMs, unread));
+    return std::make_unique<RemotePlayKeyboardMouse>(remoteplay::KeyboardMousePad(aim, std::move(bindings)));
+}
 #endif
 }
 QVariantMap QmlPlayerBridge::ps5() const {
@@ -454,28 +493,48 @@ bool QmlPlayerBridge::ps5Connect() {
         i.engine.openRemotePlay(i.videoWindow, std::move(*request), i.options);
         i.openingSessionId = i.engine.snapshot().sessionId;
         refreshSubtitles({});
-        // Controller forwarding at 8 ms, as 1.4.4; view-only leaves the pad to the PS5.
-        // Started with the session: the poll stops the pad when no session runs.
+        // The pad is polled at 250 Hz, as for PC and Xbox streaming (a DualSense reports at
+        // 250 Hz over USB): a press is seen 2 ms after it happened on average instead of 4 ms
+        // with the 8 ms poll of 1.4.4, and the session owner sends it at once (ControllerQueue).
+        // The session check and the rumble / trigger / haptics feedback keep their 8 ms cadence:
+        // the engine snapshot they need is not taken more often than before.
+        // VEYRA_TEST_RP_LEGACY_TIMING or VEYRA_TEST_RP_LEGACY_INPUT restores the 8 ms poll.
+        // View-only leaves the pad to the PS5. Started with the session: the poll stops the
+        // pad when no session runs.
         if (!viewOnly) {
             if (!i.acquirePad(Impl::PadPs5)) veyra::log::warn("remoteplay-input", "SDL gamepad initialization failed");
             if (!i.controllerTimer) {
                 i.controllerTimer = new QTimer(this);
-                connect(i.controllerTimer, &QTimer::timeout, this, [this] {
+                i.controllerTimer->setTimerType(Qt::PreciseTimer);
+                connect(i.controllerTimer, &QTimer::timeout, this, [this, live = false, tick = 0u]() mutable {
                     auto& j = *impl_;
-                    const auto s = j.engine.snapshot();
-                    if (s.remotePlay && (s.running || s.transport == engine::TransportState::Opening)) {
+                    // Every 8 ms whatever the poll interval is (1, 2, 4 or 8 ms).
+                    const unsigned every = unsigned(std::max(1, 8 / std::max(1, j.controllerTimer->interval())));
+                    const bool slow = (++tick % every) == 0;
+                    // Not live (first tick, or the session ended): always look again.
+                    if (!live || slow) {
+                        const auto s = j.engine.snapshot();
+                        live = s.remotePlay && (s.running || s.transport == engine::TransportState::Opening);
+                    }
+                    if (live) {
                         const bool focused = QGuiApplication::focusWindow() != nullptr;
                         // PushFPS latency test: its own presses go out instead of the pad.
                         if (j.latency.active) { j.engine.remotePlayController(pushLatencyPress()); return; }
-                        j.engine.remotePlayController(j.controller.poll(focused));
-                        j.controller.feedback(j.engine.remotePlayFeedback(), focused);
+                        auto state = j.controller.poll(focused);
+                        if (ps5KeyboardMouse) state = ps5KeyboardMouse->apply(std::move(state), focused);
+                        j.engine.remotePlayController(std::move(state));
+                        if (slow) j.controller.feedback(j.engine.remotePlayFeedback(), focused);
                     } else {
+                        if (ps5KeyboardMouse) ps5KeyboardMouse->stop();
                         j.engine.remotePlayController({}); j.releasePad(Impl::PadPs5); j.controllerTimer->stop();
                     }
                 });
             }
-            i.controllerTimer->start(8);
+            if (!ps5KeyboardMouse) ps5KeyboardMouse = makePs5KeyboardMouse();
+            if (ps5KeyboardMouse) ps5KeyboardMouse->setWindow(GetAncestor(i.videoWindow, GA_ROOT));
+            i.controllerTimer->start(ps5PadPollMs());
         } else {
+            if (ps5KeyboardMouse) ps5KeyboardMouse->stop();
             if (i.controllerTimer) i.controllerTimer->stop();
             i.releasePad(Impl::PadPs5);
         }

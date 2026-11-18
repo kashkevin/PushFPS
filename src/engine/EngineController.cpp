@@ -520,8 +520,14 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
     auto remote=remoteRequest?std::make_shared<source::RemotePlaySessionSource>():nullptr;
     const bool isRemote=bool(remote);
     {std::lock_guard lock(mutex_);activeRemote_=remote;}
+    // PS5 stream: the decoder owner sets this when it publishes a frame, and the
+    // loop below waits on it (and on the GPU fence of a submitted frame) as it
+    // does for a capture card. Without it a decoded frame waited for the rest of
+    // a 1 ms timer slice before it was read, and a finished one for the 0.2 ms
+    // ready poll. Null with VEYRA_TEST_RP_LEGACY_TIMING / _ENGINE_WAKE.
+    const HANDLE remoteFrameEvent=remote?static_cast<HANDLE>(remote->frameEvent()):nullptr;
 #else
-    (void)remoteRequest;const bool isRemote=false;
+    (void)remoteRequest;const bool isRemote=false;const HANDLE remoteFrameEvent=nullptr;
 #endif
 #ifdef VEYRA_ENABLE_MOONLIGHT
     auto moon=moonlightRequest?std::make_shared<source::MoonlightSessionSource>():nullptr;
@@ -1221,7 +1227,14 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
             LiveFgRejectionHold fgRejectionHold;uint64_t fgHeldPairs=0,fgHeldProbes=0;
             // VEYRA_TEST_ADAPTIVE_SCREEN_PHASE=1 and VEYRA_TEST_ARRIVAL_JITTER_MS=<sd> give
             // window capture what a USB card has: this phase and a late callback.
-            const bool adaptiveCapturePhase=(physicalCapture||testReplayAsCard||(isScreen&&GetEnvironmentVariableW(L"VEYRA_TEST_ADAPTIVE_SCREEN_PHASE",nullptr,0)>0))&&GetEnvironmentVariableW(L"VEYRA_TEST_LEGACY_CAPTURE_PHASE",nullptr,0)==0;
+            // Experiment VEYRA_EXP_RP_ADAPTIVE_PHASE=1 (off unless set): a PS5 stream with frame
+            // generation learns its pair phase like a capture card. Without it a stream's real
+            // frame is due a whole source interval plus the processing allowance after it was
+            // decoded; with it the phase follows the measured readiness of the generated frames
+            // (LivePairLatency), which for 2X is about half an interval plus their GPU time.
+            const bool remoteAdaptivePhase=isRemote&&GetEnvironmentVariableW(L"VEYRA_EXP_RP_ADAPTIVE_PHASE",nullptr,0)>0;
+            const bool adaptiveCapturePhase=(physicalCapture||testReplayAsCard||remoteAdaptivePhase||(isScreen&&GetEnvironmentVariableW(L"VEYRA_TEST_ADAPTIVE_SCREEN_PHASE",nullptr,0)>0))&&GetEnvironmentVariableW(L"VEYRA_TEST_LEGACY_CAPTURE_PHASE",nullptr,0)==0;
+            if(remoteAdaptivePhase)veyra::log::info("remoteplay-timing","experiment: adaptive pair phase for the PS5 stream (VEYRA_EXP_RP_ADAPTIVE_PHASE)");
             static const double testArrivalJitterMs=[]{wchar_t v[16]{};return GetEnvironmentVariableW(L"VEYRA_TEST_ARRIVAL_JITTER_MS",v,16)?std::clamp(_wtof(v),0.0,10.0):0.0;}();
             uint32_t testArrivalSeed=7;int64_t testCardStart=0;double testCardFirstPtsMs=0;
             const unsigned testReplayDropEvery=[]{wchar_t value[16]{};return GetEnvironmentVariableW(L"VEYRA_TEST_REPLAY_DROP_EVERY",value,16)?unsigned(std::clamp(_wtoi(value),0,120)):0u;}();
@@ -1490,10 +1503,13 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
             bool processingGraph=false;
             auto waitLive=[&]{
                 const auto due=liveScheduler?liveScheduler->wakeAt():0;
-                const auto arrivalEvent=physicalCapture?captureSource.frameEvent():nullptr;
-                const auto readyEvent=physicalCapture?gpuReadyEvent.handle:nullptr;
+                const auto arrivalEvent=physicalCapture?captureSource.frameEvent():remoteFrameEvent;
+                const auto readyEvent=physicalCapture||remoteFrameEvent?gpuReadyEvent.handle:nullptr;
                 if(preciseDeadlines&&liveScheduler&&liveScheduler->preciseWake()){
-                    deadlineWait.until(due,arrivalEvent,readyEvent,[&]{return stop_||(paused_&&!seekPreviewPending)||seekSeconds_>=0;});
+                    // A frame that is ready and waits for its presentation time (frame generation
+                    // on a PS5 stream): unchanged, the stream's events do not end this wait. Its
+                    // pacing was tuned without them; they stay signalled for the slice below.
+                    deadlineWait.until(due,physicalCapture?arrivalEvent:nullptr,physicalCapture?readyEvent:nullptr,[&]{return stop_||(paused_&&!seekPreviewPending)||seekSeconds_>=0;});
                 }else deadlineWait.slice(due>host100ns()?std::min(1.0,double(due-host100ns())/10000):1.0,arrivalEvent,readyEvent);
             };
             // No full advanceLive here: it collects the graph's timing queries
@@ -2860,10 +2876,12 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
                     watch->predictedGpuStart100ns=std::chrono::duration_cast<std::chrono::nanoseconds>(processStart.time_since_epoch()).count()/100+int64_t(queuedGpuMs*10000);
                     watch->captureArrival=captureArrival;watch->presentationGeneration=jobGeneration;
                     // Learn enough phase for early content-clock deadlines on late capture slots.
-                    watch->phaseAnchor=smoothContentAnchor?presentAnchorFor(out.batch.b100ns):captureArrival;
+                    // A stream's deadlines count from the decoded frame, not from its arrival on the
+                    // network: learn the phase against the same point (only read with the experiment).
+                    watch->phaseAnchor=smoothContentAnchor?presentAnchorFor(out.batch.b100ns):remoteAdaptivePhase?liveInputReady:captureArrival;
                     watch->reflexFrame=currentReflexFrame;
                     pendingCompletions.push_back(watch);
-                    if(physicalCapture&&gpuReadyEvent.handle)for(unsigned i=0;i<out.batch.count;++i){
+                    if((physicalCapture||remoteFrameEvent)&&gpuReadyEvent.handle)for(unsigned i=0;i<out.batch.count;++i){
                         const auto& lease=out.batch.frames[i].lease;
                         if(lease&&lease->readyFenceObject&&lease->readyFence)lease->readyFenceObject->SetEventOnCompletion(lease->readyFence,gpuReadyEvent.handle);
                     }

@@ -203,13 +203,13 @@ jobs:
         run: |
           git config --global core.autocrlf false
           git config --global advice.detachedHead false
-          # Chiaki-ng: a clean pinned checkout, and a worktree with Veyra's two reviewed patches.
+          # Chiaki-ng: a clean pinned checkout, and a worktree with Veyra's three reviewed patches.
           git clone -q https://github.com/streetpea/chiaki-ng.git chiaki-clean
           git -C chiaki-clean checkout -q $env:CHIAKI_COMMIT
           git -C chiaki-clean submodule update -q --init --recursive
           git -C chiaki-clean worktree add -q --detach "$env:DEPS\chiaki-stage" $env:CHIAKI_COMMIT
           git -C chiaki-stage submodule update -q --init --recursive
-          foreach ($p in '0001-chiaki-msvc-vla-compat.patch', '0002-chiaki-video-metadata.patch') {
+          foreach ($p in '0001-chiaki-msvc-vla-compat.patch', '0002-chiaki-video-metadata.patch', '0003-chiaki-feedback-history.patch') {
             git -C chiaki-stage apply "$env:GITHUB_WORKSPACE\scripts\remoteplay\patches\$p"
             if ($LASTEXITCODE -ne 0) { Write-Host "::error::$p does not apply"; exit 1 }
           }

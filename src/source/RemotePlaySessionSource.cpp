@@ -7,9 +7,26 @@ extern "C" {
 #include <libavutil/frame.h>
 }
 namespace veyra::source {
+namespace {
+// A/B switches for the latency work of 2026-11-18: any value restores the
+// original timing of that part, VEYRA_TEST_RP_LEGACY_TIMING of all of them.
+bool legacyTiming(const wchar_t* part){
+    return GetEnvironmentVariableW(L"VEYRA_TEST_RP_LEGACY_TIMING",nullptr,0)>0||GetEnvironmentVariableW(part,nullptr,0)>0;
+}
+}
+RemotePlaySessionSource::RemotePlaySessionSource()
+    :controllers_(legacyTiming(L"VEYRA_TEST_RP_LEGACY_INPUT")?remoteplay::ControllerQueue::Policy::Tick:remoteplay::ControllerQueue::Policy::Immediate),
+     wake_(std::make_shared<remoteplay::WakeSignal>()),
+     frameEvent_(CreateEventW(nullptr,FALSE,FALSE,nullptr)),
+     ownerWake_(!legacyTiming(L"VEYRA_TEST_RP_LEGACY_OWNER_WAIT")),
+     engineWake_(!legacyTiming(L"VEYRA_TEST_RP_LEGACY_ENGINE_WAKE")) {}
+RemotePlaySessionSource::~RemotePlaySessionSource() {
+    close();
+    if(frameEvent_){CloseHandle(static_cast<HANDLE>(frameEvent_));frameEvent_=nullptr;}
+}
 bool RemotePlaySessionSource::connect(RemotePlayConnectDesc desc) {
     close();
-    { std::lock_guard lock(mutex_); initialized_=started_=failed_=false; skipped_=publishedSequence_=0; recovery_={}; rates_={}; feedback_={}; controller_={}; pendingControllers_.clear(); snapshot_={}; }
+    { std::lock_guard lock(mutex_); initialized_=started_=failed_=false; skipped_=publishedSequence_=0; recovery_={}; rates_={}; feedback_={}; controllers_.clearPending(); snapshot_={}; }
     owner_=std::jthread([this, request=std::move(desc)](std::stop_token stop) mutable { run(stop,std::move(request)); });
     std::unique_lock lock(mutex_);
     ready_.wait(lock,[&]{return initialized_;});
@@ -19,6 +36,10 @@ bool RemotePlaySessionSource::connect(RemotePlayConnectDesc desc) {
 void RemotePlaySessionSource::run(std::stop_token stop, RemotePlayConnectDesc desc) {
     alive_.store(true);
     RemotePlaySource source;
+    // Video samples and session state changes wake this thread (see WakeSignal).
+    if(ownerWake_)source.wakeOn(wake_);
+    const bool immediateInput=controllers_.policy()==remoteplay::ControllerQueue::Policy::Immediate;
+    log::info("remoteplay-timing",std::format("ownerWait={} input={} engineWake={} (event-driven unless VEYRA_TEST_RP_LEGACY_* asks for the original polling)",ownerWake_?"event":"poll-1ms",immediateInput?"immediate":"tick-4ms",engineWake_&&frameEvent_?"event":"poll"));
     remoteplay::StreamRecovery recovery;
     bool repeatedTestDisconnect=false;
     const auto milliseconds=[] {return remoteplay::monotonic100ns()/10000;};
@@ -143,12 +164,22 @@ void RemotePlaySessionSource::run(std::stop_token stop, RemotePlayConnectDesc de
                     if(!r.ok)log::warn("remoteplay",std::format("{} code={}",r.operation,r.code));
                 }
                 const auto now=std::chrono::steady_clock::now();
-                if(!desc.request.viewOnly&&now>=nextController) {
-                    remoteplay::ControllerState controller;
-                    {std::lock_guard lock(mutex_);controller=takeControllerLocked(remoteplay::monotonic100ns());}
-                    const auto r=source.submitController(controller);
-                    if(!r.ok)log::warn("remoteplay",std::format("{} code={}",r.operation,r.code));
-                    nextController=now+std::chrono::milliseconds(4);
+                if(!desc.request.viewOnly) {
+                    // Original: one queued state per 4 ms tick. Immediate: everything
+                    // pending goes out now, in order (Chiaki sends each button edge as
+                    // its own history event), and the tick only repeats the current
+                    // state so that a pad that stopped being polled fails neutral.
+                    bool due=now>=nextController;
+                    for(unsigned sent=0;sent<remoteplay::ControllerQueue::kCapacity+1;++sent) {
+                        remoteplay::ControllerState controller;bool more=false;
+                        {std::lock_guard lock(mutex_);
+                            if(!due&&!(immediateInput&&controllers_.pending()))break;
+                            controller=takeControllerLocked(remoteplay::monotonic100ns());more=controllers_.pending();}
+                        const auto r=source.submitController(controller);
+                        if(!r.ok)log::warn("remoteplay",std::format("{} code={}",r.operation,r.code));
+                        due=false;nextController=now+std::chrono::milliseconds(4);
+                        if(!immediateInput||!more)break;
+                    }
                 }
                 pipeline::FramePacket packet; const AVFrame* frame=nullptr;
                 const auto result=source.read(packet,&frame);
@@ -195,7 +226,16 @@ void RemotePlaySessionSource::run(std::stop_token stop, RemotePlayConnectDesc de
                         recovery_.message=snapshot.state==remoteplay::SessionState::LoginPinRequired?L"等待 PS5 登录 PIN 超时，请重新连接。":native.startupRetryAllowed?L"PS5 仍被串流会话占用，请结束其他串流或稍后重试；无需重新配对。":!native.automaticRetryAllowed?L"PS5 已结束或拒绝串流，请检查主机状态后重新连接。":L"PS5 串流未恢复，请检查主机及网络后点击连接；无需重新配对。";
                         recovery_.message+=std::format(L"（终止码 {} / 错误 {}）",native.lastQuitReason,snapshot.errorCode);break;
                     }
-                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    // Nothing to decode. Original: sleep 1 ms and poll again, which on
+                    // Windows is 1-2 ms with a raised timer resolution and up to 15.6 ms
+                    // without one. Now: wait for a sample or a pad state, at most until
+                    // the next controller tick (view-only has no tick: 4 ms, for the
+                    // recovery poll and a login PIN).
+                    if(ownerWake_){
+                        auto left=std::chrono::microseconds(4000);
+                        if(!desc.request.viewOnly)left=std::clamp(std::chrono::duration_cast<std::chrono::microseconds>(nextController-std::chrono::steady_clock::now()),std::chrono::microseconds(100),std::chrono::microseconds(4000));
+                        wake_->waitFor(left);
+                    }else std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 }
             }
         }
@@ -211,7 +251,7 @@ void RemotePlaySessionSource::run(std::stop_token stop, RemotePlayConnectDesc de
             ?std::format(L"PS5 正在释放上一个串流会话，等待后自动重试（{}/3）…",recovery.episodeRetries())
             :desc.controlOnly?std::format(L"PS5 手柄控制中断，正在重新连接（{}/3）…",recovery.episodeRetries())
             :std::format(L"串流中断，正在重新连接（{}/3）…",recovery.episodeRetries())};
-        latest_.reset();pendingControllers_.clear();controller_={};feedback_={};
+        latest_.reset();controllers_.clearPending();feedback_={};
     }
     log::info("remoteplay-recovery",std::format("teardown begin attempt={} retry={} cancelled={}",recovery.reconnects(),retry,stop.stop_requested()));
     if(monitor.joinable()){monitor.request_stop();monitor.join();}
@@ -244,6 +284,9 @@ void RemotePlaySessionSource::publishDecoded(const AVFrame* frame,pipeline::Fram
     if(latest_){++skipped_;item.packet.flags|=latest_->packet.flags;
         item.packet.flags|=static_cast<pipeline::FrameFlags>(pipeline::FrameFlagBits::Drop);}
     latest_=std::move(item);
+    // The engine loop waits on this (see frameEvent()); set under the lock so a
+    // reader that wakes always finds the frame.
+    if(frameEvent_)SetEvent(static_cast<HANDLE>(frameEvent_));
 }
 SourceReadStatus RemotePlaySessionSource::read(pipeline::FramePacket& packet,const AVFrame** frame) {
     if(frame)*frame=nullptr;
@@ -254,30 +297,27 @@ SourceReadStatus RemotePlaySessionSource::read(pipeline::FramePacket& packet,con
     if(frame)*frame=view_.get();return SourceReadStatus::Frame;
 }
 void RemotePlaySessionSource::close() noexcept {
-    if(owner_.joinable()){owner_.request_stop();owner_.join();}
+    if(owner_.joinable()){owner_.request_stop();if(wake_)wake_->notify();owner_.join();}
     std::lock_guard lock(mutex_);latest_.reset();view_.reset();info_={};started_=false;
     SecureZeroMemory(pin_.data(),pin_.size());pin_.clear();
 }
 void RemotePlaySessionSource::controller(remoteplay::ControllerState state){
-    std::lock_guard lock(mutex_);controllerStamp_=remoteplay::monotonic100ns();
-    // A neutral input (focus/device loss) cancels queued actions immediately.
-    if(!state.inputActive)pendingControllers_.clear();
-    if(pendingControllers_.size()>=16){
-        pendingControllers_.clear();pendingControllers_.push_back({controllerStamp_,{}});
-        log::warn("remoteplay-input","Controller queue overflow; releasing before latest state");
+    bool wake=false;
+    {std::lock_guard lock(mutex_);
+        const auto overflows=controllers_.overflows();
+        wake=controllers_.push(remoteplay::monotonic100ns(),std::move(state));
+        if(controllers_.overflows()!=overflows)log::warn("remoteplay-input","Controller queue overflow; releasing before latest state");
     }
-    pendingControllers_.push_back({controllerStamp_,std::move(state)});
+    // Immediate policy only: the tick policy sends on its own 4 ms schedule.
+    if(wake&&ownerWake_&&controllers_.policy()==remoteplay::ControllerQueue::Policy::Immediate)wake_->notify();
 }
 remoteplay::ControllerState RemotePlaySessionSource::takeControllerLocked(remoteplay::HostTime now){
-    if(now-controllerStamp_>1000000){pendingControllers_.clear();controller_={};return controller_;}
-    if(!pendingControllers_.empty()&&now-pendingControllers_.front().first>1000000){
-        while(!pendingControllers_.empty()&&now-pendingControllers_.front().first>1000000)pendingControllers_.pop_front();
-        controller_={};return controller_;
-    }
-    if(!pendingControllers_.empty()){controller_=std::move(pendingControllers_.front().second);pendingControllers_.pop_front();}
-    return controller_;
+    return controllers_.take(now);
 }
-void RemotePlaySessionSource::loginPin(std::string pin){std::lock_guard lock(mutex_);SecureZeroMemory(pin_.data(),pin_.size());pin_=std::move(pin);}
+void RemotePlaySessionSource::loginPin(std::string pin){
+    {std::lock_guard lock(mutex_);SecureZeroMemory(pin_.data(),pin_.size());pin_=std::move(pin);}
+    if(ownerWake_)wake_->notify();
+}
 remoteplay::SessionInbox::Snapshot RemotePlaySessionSource::sessionSnapshot()const{
     std::shared_ptr<const remoteplay::SessionInbox> inbox;{std::lock_guard lock(mutex_);inbox=telemetryInbox_;if(!inbox)return snapshot_;}
     return inbox->snapshot();
