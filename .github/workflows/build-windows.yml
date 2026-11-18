@@ -14,7 +14,7 @@ name: build-windows
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'slipstream/**']
     tags: ['v*']
     paths-ignore: ['**/*.md', 'docs/**', 'assets/**', 'website/**', '.github/workflows/checks.yml', '.github/workflows/screenshots.yml',
                    '.github/workflows/pages.yml', '.github/workflows/deps-probe.yml', '.github/workflows/upstream-inspect.yml']
