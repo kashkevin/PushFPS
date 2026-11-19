@@ -50,6 +50,10 @@ public:
     void setInputBitstream(std::wstring kind);
     // 0 automatic, 1 manual, 2 off. Positive offset delays sound.
     void setSync(unsigned mode,int offsetMs);
+    // PS5 Remote Play experiments, both off by default (docs/PS5_REMOTE_PLAY_EXPERIMENTS.md):
+    // fastRecover = VEYRA_EXP_RP_AUDIO_FAST_RECOVER, lowBuffer = VEYRA_EXP_RP_AUDIO_LOW_BUFFER.
+    // Takes effect at the next start(); ignored while running.
+    void setRemotePlayExperiments(bool fastRecover,bool lowBuffer);
     CaptureAudioState snapshot()const;
 private:
     struct Impl;std::unique_ptr<Impl> p_;
