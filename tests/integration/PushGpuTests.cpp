@@ -16,6 +16,12 @@
 //    picture, a generated frame takes the HUD pixels from the held real frame
 //    and keeps its own everywhere else; a HUD that disappears is released on
 //    that frame; a reset starts over.
+//  - StreamChangePass / StreamChangeRunner (experiment VEYRA_EXP_RP_STREAM_DEDUP): the block-mean
+//    and per-sample change of a luma plane against the previous picture equals the CPU reference
+//    (pipeline/StreamChange.h) for 8-bit and 16-bit planes, includes the smaller blocks at the
+//    edges, sees an object that moves inside one block, reports "not comparable" for the first
+//    picture, after a restart and after a size change; the runner with its own command list gives
+//    the same numbers, also when an answer arrives late or is not waited for.
 //  - PushFlow (PushFPS's own frame generation, RIFE on DirectML): when VEYRA_PUSHFLOW_TEST_RUNTIME names a
 //    folder holding pushflow\ (the release's runtime), two identical frames give the same picture back,
 //    and a square that moves 16 px lands near the middle at t = 0.5, far closer than a blend of the two
@@ -23,6 +29,7 @@
 #include "veyra/pushflow/PushFlowBackend.h"
 #include "veyra/engine/PushHudSampler.h"
 #include "veyra/pipeline/PushHudLock.h"
+#include "veyra/pipeline/StreamChangePass.h"
 #include "veyra/engine/RecordingCompare.h"
 #include "veyra/engine/PushStreamOverlay.h"
 #include "veyra/engine/PushCanvas.h"
@@ -900,6 +907,166 @@ void testHudSampler(Gpu& gpu) {
     const auto failed = sampler.status();
     check(failed.failed && !failed.error.empty() && !failed.running, "hud: an unsupported format fails with a reason");
 }
+// The change of a luma plane against the previous picture (pipeline/StreamChangePass.h) against the
+// CPU reference (pipeline/StreamChange.h).
+void testStreamChange(Gpu& gpu) {
+    constexpr uint32_t W = 200, H = 120;   // 13 x 8 blocks; the last column of blocks is 8 wide, the last row 8 high
+    auto* device = gpu.device.Get();
+    pipeline::StreamChangePass pass;
+    check(pass.initialize(device), "stream change: pass created");
+    if (!pass.ready()) return;
+    Plane luma8{pipeline::makeTexture(device, W, H, DXGI_FORMAT_R8_UNORM, false), DXGI_FORMAT_R8_UNORM, W, H, 1};
+    Plane luma16{pipeline::makeTexture(device, W, H, DXGI_FORMAT_R16_UNORM, false), DXGI_FORMAT_R16_UNORM, W, H, 2};
+    Plane half{pipeline::makeTexture(device, 96, 64, DXGI_FORMAT_R8_UNORM, false), DXGI_FORMAT_R8_UNORM, 96, 64, 1};
+    check(luma8.texture && luma16.texture && half.texture, "stream change: textures created");
+    if (!luma8.texture || !luma16.texture || !half.texture) return;
+    // 8-bit code values of a picture; `moved` shifts the pattern.
+    auto codes = [&](uint32_t w, uint32_t h, int moved) {
+        std::vector<uint8_t> v(size_t(w) * h);
+        for (uint32_t y = 0; y < h; ++y)
+            for (uint32_t x = 0; x < w; ++x) {
+                uint32_t k = uint32_t(int(x) + moved) * 374761393u + uint32_t(int(y) + moved / 2) * 668265263u;
+                k = (k ^ (k >> 13)) * 1274126177u;
+                v[size_t(y) * w + x] = uint8_t(30 + (k >> 25));   // 30..157
+            }
+        return v;
+    };
+    auto bytesOf = [](const std::vector<uint8_t>& v, uint32_t bpp) {
+        if (bpp == 1) return v;
+        std::vector<uint8_t> out(v.size() * 2);                   // the code value in the high byte, as P010 stores it
+        for (size_t i = 0; i < v.size(); ++i) { out[2 * i] = 0; out[2 * i + 1] = v[i]; }
+        return out;
+    };
+    pipeline::StateTracker states;
+    auto measure = [&](const Plane& p, const std::vector<uint8_t>& px, pipeline::StreamChangeMeasurement& m) {
+        gpu.begin();
+        auto up = recordFill(gpu, p, px, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON);
+        states.set(p.texture.Get(), D3D12_RESOURCE_STATE_COMMON);
+        const bool ok = up && pass.record(gpu.list.Get(), states, p.texture.Get(), 0, p.w, p.h);
+        if (!ok) { gpu.list->Close(); return false; }
+        if (!gpu.submitAndWait()) return false;
+        m = pass.read();
+        return true;
+    };
+    auto reference = [&](const Plane& p, const std::vector<uint8_t>& before, const std::vector<uint8_t>& after) {
+        return pipeline::decodeStreamChange(pipeline::streamChangeReference(before.data(), after.data(), size_t(p.w) * p.bpp, p.w, p.h, p.bpp), p.w, p.h, true);
+    };
+    auto close = [](const pipeline::StreamChangeMeasurement& gpuValue, const pipeline::StreamChangeMeasurement& cpuValue) {
+        // 1/64 of a step: float sums on the GPU against integer sums on the CPU, and the 8.8 rounding.
+        // The count of moved samples has no rounding: no sample difference here lies near its limit.
+        return gpuValue.valid && gpuValue.comparable && cpuValue.valid && std::fabs(gpuValue.maxBlock - cpuValue.maxBlock) < 1.0f / 64 &&
+               std::fabs(gpuValue.meanBlock - cpuValue.meanBlock) < 1.0f / 64 && std::fabs(gpuValue.changedShare - cpuValue.changedShare) <= 1.0f / 104 + 1e-6f &&
+               std::fabs(gpuValue.pixelMax - cpuValue.pixelMax) < 1.0f / 64 && gpuValue.pixelsOver == cpuValue.pixelsOver;
+    };
+    auto show = [](const std::string& tag, const char* what, const pipeline::StreamChangeMeasurement& g, const pipeline::StreamChangeMeasurement& c) {
+        std::printf("INFO %s: %s: GPU max %.4f mean %.5f share %.4f sample max %.3f moved %.0f, CPU max %.4f mean %.5f share %.4f sample max %.3f moved %.0f\n", tag.c_str(), what,
+                    g.maxBlock, g.meanBlock, g.changedShare, g.pixelMax, g.pixelsOver, c.maxBlock, c.meanBlock, c.changedShare, c.pixelMax, c.pixelsOver);
+    };
+    for (const Plane* plane : {&luma8, &luma16}) {
+        const Plane& p = *plane;
+        const std::string tag = p.bpp == 1 ? "stream change 8-bit" : "stream change 16-bit";
+        const float scale = p.bpp == 2 ? 65280.0f / 65535.0f : 1.0f;   // a code value in the high byte of a 16-bit word, in 8-bit steps
+        pass.restart();
+        const auto base = codes(W, H, 0);
+        const auto first = bytesOf(base, p.bpp);
+        pipeline::StreamChangeMeasurement m;
+        check(measure(p, first, m) && m.valid && !m.comparable, tag + ": the first picture is measured but has nothing to be compared with");
+        // The same picture again: nothing changed, in no block and in no sample.
+        check(measure(p, first, m) && m.valid && m.comparable && m.maxBlock < 1.0f / 64 && m.meanBlock < 1.0f / 64 && m.changedShare == 0.0f &&
+              m.pixelMax == 0.0f && m.pixelsOver == 0.0f, tag + ": an unchanged picture gives zero");
+        // One block brighter by 5 steps, one sample of another block changed by 64: a repeat-like picture.
+        auto touched = base;
+        for (uint32_t y = 32; y < 48; ++y) for (uint32_t x = 48; x < 64; ++x) touched[size_t(y) * W + x] = uint8_t(touched[size_t(y) * W + x] + 5);
+        touched[size_t(5) * W + 3] = uint8_t(touched[size_t(5) * W + 3] ^ 0x40);
+        const auto touchedBytes = bytesOf(touched, p.bpp);
+        const auto wantTouched = reference(p, first, touchedBytes);
+        check(measure(p, touchedBytes, m) && close(m, wantTouched), tag + ": one changed block matches the CPU reference");
+        show(tag, "one block +5 and one sample", m, wantTouched);
+        check(std::fabs(m.maxBlock - 5.0f * scale) < 0.05f && std::fabs(m.changedShare - 1.0f / 104) < 1e-4f && std::fabs(m.pixelMax - 64.0f * scale) < 0.05f && m.pixelsOver == 257.0f,
+              tag + ": that is 5 steps in one of 104 blocks, 64 steps in one sample, 257 samples moved by more than 4");
+        // The last column and the last row belong to blocks too (8 wide, 8 high): a change there is seen.
+        auto edge = touched;
+        edge[size_t(60) * W + (W - 1)] = uint8_t(edge[size_t(60) * W + (W - 1)] ^ 0x40);
+        edge[size_t(H - 1) * W + 20] = uint8_t(edge[size_t(H - 1) * W + 20] ^ 0x40);
+        const auto edgeBytes = bytesOf(edge, p.bpp);
+        const auto wantEdge = reference(p, touchedBytes, edgeBytes);
+        check(measure(p, edgeBytes, m) && close(m, wantEdge) && m.pixelsOver == 2.0f && m.maxBlock > 0.4f, tag + ": samples in the edge blocks are measured");
+        show(tag, "two edge samples", m, wantEdge);
+        // What a block mean cannot see: a 6x6 object moves one sample to the right inside one block.
+        auto objectA = base, objectB = base;
+        for (uint32_t y = 68; y < 74; ++y) for (uint32_t x = 100; x < 106; ++x) { objectA[size_t(y) * W + x] = 250; objectB[size_t(y) * W + x + 1] = 250; }
+        const auto objectABytes = bytesOf(objectA, p.bpp), objectBBytes = bytesOf(objectB, p.bpp);
+        check(measure(p, objectABytes, m), tag + ": object picture");
+        const auto wantObject = reference(p, objectABytes, objectBBytes);
+        check(measure(p, objectBBytes, m) && close(m, wantObject) && m.pixelsOver == 12.0f && m.pixelMax > 90.0f * scale && m.maxBlock < 1.0f,
+              tag + ": an object moving inside one block shows in the samples, not in the block means");
+        show(tag, "6x6 object moved by one sample", m, wantObject);
+        // Everything moves: a new picture.
+        const auto movedBytes = bytesOf(codes(W, H, 7), p.bpp);
+        const auto wantMoved = reference(p, objectBBytes, movedBytes);
+        check(measure(p, movedBytes, m) && close(m, wantMoved) && m.changedShare > 0.5f && m.pixelsOver > float(W * H) / 2, tag + ": a moved picture matches the CPU reference");
+        show(tag, "moved", m, wantMoved);
+        // After a restart the stored picture is not used.
+        pass.restart();
+        check(measure(p, first, m) && m.valid && !m.comparable, tag + ": not comparable after a restart");
+    }
+    // Another picture size: other stores, nothing to compare with; then comparable again.
+    pipeline::StreamChangeMeasurement m;
+    const auto small0 = codes(96, 64, 0), small1 = codes(96, 64, 5);
+    check(measure(luma8, bytesOf(codes(W, H, 0), 1), m) && m.valid, "stream change: back to the first size");
+    check(measure(half, small0, m) && m.valid && !m.comparable, "stream change: a new picture size starts again");
+    check(measure(half, small1, m) && close(m, reference(half, small0, small1)), "stream change: and is compared from the next picture on");
+    // A texture it cannot read is refused.
+    Plane odd{pipeline::makeTexture(device, 64, 64, DXGI_FORMAT_R32_FLOAT, false), DXGI_FORMAT_R32_FLOAT, 64, 64, 4};
+    gpu.begin();
+    check(odd.texture && !pass.record(gpu.list.Get(), states, odd.texture.Get(), 0, 64, 64), "stream change: an unsupported format is refused");
+    check(!pass.record(gpu.list.Get(), states, luma8.texture.Get(), 0, 8, 8), "stream change: a picture smaller than one block is refused");
+    check(!pass.record(gpu.list.Get(), states, luma8.texture.Get(), 0, 4112, 120), "stream change: a picture wider than the pass measures is refused");
+    gpu.list->Close();
+
+    // The runner: its own command list and fence on the same queue, a bounded wait.
+    pipeline::StreamChangeRunner runner;
+    check(runner.initialize(device, gpu.queue.Get()), "stream change: runner created");
+    if (!runner.ready()) return;
+    auto fill = [&](const std::vector<uint8_t>& px) {
+        gpu.begin();
+        auto up = recordFill(gpu, luma8, px, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON);
+        return up && gpu.submitAndWait();
+    };
+    // Measures the picture now in luma8. When the answer misses the wait (a slow software adapter),
+    // the same picture is measured once more and the first answer is taken from `late`.
+    auto run = [&](pipeline::StreamChangeMeasurement& out, int64_t wait100ns = pipeline::kStreamChangeWait100ns) {
+        auto o = runner.measure(gpu.queue.Get(), luma8.texture.Get(), 0, W, H, nullptr, 0, wait100ns);
+        // Recording and submitting are part of waitMs; the wait itself is the budget plus the timer's precision.
+        check(o.waitMs < double(wait100ns) / 10000.0 + 50.0, "stream change runner: the wait is bounded");
+        // The texture may be let go exactly when the list was seen to finish.
+        check(o.reading == o.queued && runner.reading() == o.queued, "stream change runner: says whether a list may still read the texture");
+        if (o.now.valid) { out = o.now; return true; }
+        if (!o.queued) return false;
+        for (int i = 0; i < 5000 && runner.pending(); ++i) Sleep(1);
+        check(!runner.reading(), "stream change runner: the late list has finished, the texture is free");
+        o = runner.measure(gpu.queue.Get(), luma8.texture.Get(), 0, W, H, nullptr, 0, pipeline::kStreamChangeWait100ns);
+        std::printf("NOTE stream change: a measurement missed its %.1f ms wait and was read late\n", double(wait100ns) / 10000.0);
+        if (!o.hasLate || !o.late.valid) return false;
+        out = o.late;
+        return true;
+    };
+    const auto runA = codes(W, H, 0), runB = codes(W, H, 9);
+    check(fill(runA) && run(m) && m.valid && !m.comparable, "stream change runner: the first picture has nothing to be compared with");
+    check(fill(runB) && run(m) && close(m, reference(luma8, runA, runB)), "stream change runner: matches the CPU reference");
+    check(fill(runB) && run(m) && m.comparable && m.maxBlock < 1.0f / 64 && m.pixelMax == 0.0f, "stream change runner: an unchanged picture gives zero");
+    // No time to wait (a presentation is due): nothing is lost, the answer is read late or was already there.
+    check(fill(runA) && run(m, 0) && close(m, reference(luma8, runB, runA)), "stream change runner: a zero wait still measures the picture");
+    check(fill(runB) && run(m, 3000) && close(m, reference(luma8, runA, runB)), "stream change runner: a 0.3 ms wait still measures the picture");
+    const auto counters = runner.counters();
+    std::printf("INFO stream change runner: measured %llu, timeouts %llu, wait mean %.3f ms, max %.3f ms (this adapter; not the RTX 5070)\n",
+                static_cast<unsigned long long>(counters.measured), static_cast<unsigned long long>(counters.timeouts),
+                counters.measured + counters.timeouts ? counters.waitMsSum / double(counters.measured + counters.timeouts) : 0.0, counters.waitMsMax);
+    check(counters.measured + counters.late >= 5 && counters.failures == 0, "stream change runner: every picture was measured");
+    runner.shutdown();
+    check(!runner.ready(), "stream change runner: shut down");
+    check(!gpu.debugErrors(), "stream change: no D3D12 debug errors");
+}
 void testHudLock(Gpu& gpu) {
     constexpr uint32_t W = 256, H = 144;
     constexpr DXGI_FORMAT F = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -1192,6 +1359,7 @@ int main() {
     testCompareBadges(gpu, true);
     testHudSampler(gpu);
     testHudLock(gpu);
+    testStreamChange(gpu);
     testPushFlowSizes();
     testPushFlow(gpu);
     std::printf("%s (%d failures)\n", failures ? "FAILED" : "OK", failures);

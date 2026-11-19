@@ -54,7 +54,7 @@ struct SwsContext;
 struct NVSDK_NGX_Parameter;
 struct NVSDK_NGX_Handle;
 namespace veyra::guidance { class AmdOpticalFlow; class GpuDisOpticalFlow; }
-namespace veyra::pipeline { class VfgBackend; class VfxSrBackend; }
+namespace veyra::pipeline { class VfgBackend; class VfxSrBackend; class StreamChangeRunner; struct StreamChangeOutcome; }
 
 namespace veyra::gfx {
 class D3D12DeviceContext;
@@ -751,6 +751,15 @@ public:
     // could not be created (frame generation runs without it), 3 asked for but this frame generation
     // has no graph frames to lock (off, or XeSS generating inside its presenter).
     int hudLockState() const { if(!desc_.hudLock)return 0; if(hudLock_)return 1; if(!fgEnabled_||presentSinkFg())return 3; return 2; }
+    // PushFPS experiment VEYRA_EXP_RP_STREAM_DEDUP (pipeline/StreamChangePass.h): how much a
+    // hardware-decoded (D3D12VA) picture differs from the one measured before it. Called by the
+    // engine before it decides whether to keep the frame; waits for the GPU at most wait100ns
+    // (pipeline::streamChangeWaitBudget: 4 ms, and never past the engine's next presentation).
+    // Created on the first call, so a graph that is never asked pays nothing. An outcome without
+    // a valid `now` means: no number for this picture, keep the frame.
+    StreamChangeOutcome measureStreamChange(const AVFrame* frame,int64_t wait100ns);
+    // measured / timed out / failed since this graph was created (for the engine's log line).
+    void streamChangeCounters(uint64_t& measured,uint64_t& timeouts,uint64_t& failures,double& waitMsMax,double& waitMsMean) const;
     // AMD FSR upscaling replaces the SR stage; it is a FidelityFX effect, not
     // an NGX feature, so it also works on non-NVIDIA adapters.
     // Double SR may run FSR in either pass; each pass is its own FidelityFX context.
@@ -1165,6 +1174,9 @@ private:
     std::unique_ptr<gfx::FsrSrBackend> fsrSrBackend_;
     std::unique_ptr<NisPass> nisPass_;  // PushFPS: NVIDIA Image Scaling SR
     std::unique_ptr<PushHudLock> hudLock_;  // PushFPS: Live HUD Lock
+    std::unique_ptr<StreamChangeRunner> streamChange_;  // PushFPS experiment: change of the decoded picture
+    std::shared_ptr<AVFrame> streamChangeFrame_;        // the decoder picture its last list reads
+    bool streamChangeFailed_=false;
     bool initHudLock();
     void composeHudLock(ID3D12GraphicsCommandList* list,unsigned generatedSlot,unsigned heldParity);
     // Double SR first passes on DLSS SR / FSR (the final pass keeps the members above).

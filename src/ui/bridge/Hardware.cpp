@@ -8,6 +8,9 @@
 #include "veyra/ngx/AnrProvider.h"
 #include "veyra/gfx/AmfFrcBackend.h"
 #include "veyra/pushflow/PushFlowBackend.h"
+#include "veyra/engine/DisplayFgBudget.h"
+#include "veyra/engine/PushHardwareCapabilities.h"
+#include <d3d11.h>
 
 namespace veyra::ui {
 
@@ -50,6 +53,182 @@ bool vfgHardwarePossible(){
     const auto name=QString::fromWCharArray(d->Description);
     return d->VendorId==0x10DE&&(name.contains(QStringLiteral("GeForce RTX 30"),Qt::CaseInsensitive)||name.contains(QStringLiteral("GeForce RTX 40"),Qt::CaseInsensitive)||
         name.contains(QStringLiteral("GeForce RTX 50"),Qt::CaseInsensitive)||name.contains(QStringLiteral("Ada"),Qt::CaseInsensitive)||name.contains(QStringLiteral("Blackwell"),Qt::CaseInsensitive));
+}
+// PushFPS first-launch card: which video decode profiles the engine's adapter offers (a PS5 stream is
+// H.264, or HEVC and 10-bit HEVC for HDR). Asked of the adapter itself, never looked up from a model
+// name: the DXVA profiles its Direct3D 11 video device lists, on a short-lived device created the way
+// FFmpegVideoDecoder creates its D3D11VA device. It says the GPU has such a decoder; a stream reports
+// what it really decodes with once it runs. Asked once per chosen adapter; known=false when the adapter
+// or its video device could not be asked. UI thread only. Unverified on Windows.
+QVariantMap pushDecodeCapabilities(){
+    static uint64_t cachedFor=~0ull;static QVariantMap cached;
+    const uint64_t preferred=gfx::preferredAdapterLuid();
+    if(cachedFor==preferred&&!cached.isEmpty())return cached;
+    cachedFor=preferred;
+    cached=QVariantMap{{"known",false},{"h264",false},{"hevc",false},{"hevc10",false}};
+    const auto* desc=engineAdapterDesc();
+    if(!desc)return cached;
+    Microsoft::WRL::ComPtr<IDXGIFactory4> factory;Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
+    Microsoft::WRL::ComPtr<ID3D11Device> device;Microsoft::WRL::ComPtr<ID3D11VideoDevice> video;
+    if(FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))||FAILED(factory->EnumAdapterByLuid(desc->AdapterLuid,IID_PPV_ARGS(&adapter)))||!adapter)return cached;
+    const D3D_FEATURE_LEVEL levels[]={D3D_FEATURE_LEVEL_11_1,D3D_FEATURE_LEVEL_11_0};
+    if(FAILED(D3D11CreateDevice(adapter.Get(),D3D_DRIVER_TYPE_UNKNOWN,nullptr,D3D11_CREATE_DEVICE_VIDEO_SUPPORT,levels,UINT(sizeof(levels)/sizeof(levels[0])),
+        D3D11_SDK_VERSION,&device,nullptr,nullptr))||!device||FAILED(device.As(&video))||!video)return cached;
+    // DXVA2_ModeH264_VLD_NoFGT, DXVA_ModeHEVC_VLD_Main and _Main10 by value (their SDK symbols need dxva.h and dxguid).
+    static const GUID h264{0x1b81be68,0xa0c7,0x11d3,{0xb9,0x84,0x00,0xc0,0x4f,0x2e,0x73,0xc5}};
+    static const GUID hevc{0x5b11d51b,0x2f4c,0x4452,{0xbc,0xc3,0x09,0xf2,0xa1,0x16,0x0c,0xc0}};
+    static const GUID hevc10{0x107af0e0,0xef1a,0x4d19,{0xab,0xa8,0x67,0xa1,0x63,0x07,0x3d,0x13}};
+    bool hasH264=false,hasHevc=false,hasHevc10=false;
+    const UINT count=video->GetVideoDecoderProfileCount();
+    for(UINT i=0;i<count&&i<1024;++i){
+        GUID profile{};
+        if(FAILED(video->GetVideoDecoderProfile(i,&profile)))continue;
+        hasH264=hasH264||IsEqualGUID(profile,h264);hasHevc=hasHevc||IsEqualGUID(profile,hevc);hasHevc10=hasHevc10||IsEqualGUID(profile,hevc10);
+    }
+    cached=QVariantMap{{"known",true},{"h264",hasH264},{"hevc",hasHevc},{"hevc10",hasHevc10}};
+    return cached;
+}
+// PushFPS hardware capability model (veyra/engine/PushHardwareCapabilities.h): its enums carry the engine's
+// numbers and its multiplier table copies displayFgMultiplierSelectable. Checked here, where both are visible.
+static_assert(int(engine::PushFgMethod::Dlss)==int(engine::FrameGenerationBackend::Dlss)&&int(engine::PushFgMethod::XeSS)==int(engine::FrameGenerationBackend::XeSS)&&
+    int(engine::PushFgMethod::Fsr)==int(engine::FrameGenerationBackend::Fsr)&&int(engine::PushFgMethod::Fsr4)==int(engine::FrameGenerationBackend::Fsr4)&&
+    int(engine::PushFgMethod::Vfg)==int(engine::FrameGenerationBackend::Vfg)&&int(engine::PushFgMethod::Anr)==int(engine::FrameGenerationBackend::Anr)&&
+    int(engine::PushFgMethod::AmdFrc)==int(engine::FrameGenerationBackend::AmdFrc)&&int(engine::PushFgMethod::PushFlow)==int(engine::FrameGenerationBackend::PushFlow),
+    "PushFgMethod must keep FrameGenerationBackend's numbers");
+static_assert(int(engine::PushOpticalFlow::Nvidia)==int(engine::OpticalFlowBackend::Nvidia)&&int(engine::PushOpticalFlow::AmdFidelityFx)==int(engine::OpticalFlowBackend::AmdFidelityFx)&&
+    int(engine::PushOpticalFlow::GpuDis)==int(engine::OpticalFlowBackend::GpuDis),"PushOpticalFlow must keep OpticalFlowBackend's numbers");
+static constexpr bool pushMultiplierTablesAgree(){
+    for(unsigned b=0;b<engine::kPushFgMethodCount;++b)
+        for(unsigned m=1;m<=engine::kPushFgLargestMultiplier+1;++m)
+            if(engine::pushFgMultiplierSelectable(static_cast<engine::PushFgMethod>(b),m)!=engine::displayFgMultiplierSelectable(static_cast<engine::FrameGenerationBackend>(b),m))return false;
+    return true;
+}
+static_assert(pushMultiplierTablesAgree(),"pushFgMultiplierSelectable must match displayFgMultiplierSelectable");
+
+namespace {
+// What D3D12 says about one adapter: its highest feature level (0 = could not ask) and whether it shares
+// system memory (an integrated GPU).
+struct PushAdapterArchitecture { uint32_t featureLevel=0; engine::PushCapability uma=engine::PushCapability::Unknown; };
+PushAdapterArchitecture pushAdapterArchitecture(IDXGIAdapter1* adapter){
+    PushAdapterArchitecture out;
+    Microsoft::WRL::ComPtr<ID3D12Device> device;
+    if(!adapter||FAILED(D3D12CreateDevice(adapter,D3D_FEATURE_LEVEL_11_0,IID_PPV_ARGS(&device)))||!device)return out;
+    // 12_2 by value: older SDK headers do not name it.
+    const D3D_FEATURE_LEVEL levels[]={static_cast<D3D_FEATURE_LEVEL>(engine::kPushFeatureLevel12_2),D3D_FEATURE_LEVEL_12_1,D3D_FEATURE_LEVEL_12_0,
+        D3D_FEATURE_LEVEL_11_1,D3D_FEATURE_LEVEL_11_0};
+    D3D12_FEATURE_DATA_FEATURE_LEVELS query{};query.NumFeatureLevels=UINT(sizeof(levels)/sizeof(levels[0]));query.pFeatureLevelsRequested=levels;
+    if(SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_FEATURE_LEVELS,&query,sizeof(query))))out.featureLevel=uint32_t(query.MaxSupportedFeatureLevel);
+    D3D12_FEATURE_DATA_ARCHITECTURE architecture{};architecture.NodeIndex=0;
+    if(SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_ARCHITECTURE,&architecture,sizeof(architecture))))
+        out.uma=architecture.UMA?engine::PushCapability::Yes:engine::PushCapability::No;
+    return out;
+}
+}
+
+// PushFPS: the capability model's input for the engine's adapter (PushHardwareCapabilities.h), as reported by
+// D3D12, DXGI and Windows, never looked up from a model name. refreshHz and vrrState are the bridge's own
+// (displayRefreshHz, vrrState). Adapter facts are asked once per chosen adapter (a short-lived D3D12 device
+// per hardware adapter); HDR and the power source are asked on every call. "defaults" is what
+// pushHardwareDefaults() allows at most on this PC (HEVC, HDR, PushFlow Quality 4X of a 60 fps source asked);
+// it changes no setting. UI thread only. Reporting only: pushHardwareSummary (PushSlipstream.cpp) adds its keys,
+// once per process, while VEYRA_EXP_RP_GOVERNOR or VEYRA_EXP_RP_GPU_BUDGET is set. Unverified on Windows.
+QVariantMap pushAdapterCapabilities(double refreshHz,int vrrState){
+    struct Adapter { uint64_t luid=~0ull; engine::PushHardwareCapabilities caps; };
+    static Adapter cached;
+    const uint64_t preferred=gfx::preferredAdapterLuid();
+    engine::PushHardwareCapabilities caps;
+    if(cached.luid!=preferred){
+        cached=Adapter{};cached.luid=preferred;
+        if(const auto* desc=engineAdapterDesc()){
+            auto& c=cached.caps;
+            c.vendor=engine::pushGpuVendorFromPciId(desc->VendorId);
+            c.dedicatedVramBytes=uint64_t(desc->DedicatedVideoMemory);
+            Microsoft::WRL::ComPtr<IDXGIFactory6> factory;
+            if(SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))){
+                bool othersKnown=true,otherIntegrated=false;
+                for(UINT i=0;i<64;++i){
+                    Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
+                    if(FAILED(factory->EnumAdapterByGpuPreference(i,DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,IID_PPV_ARGS(&adapter)))||!adapter)break;
+                    DXGI_ADAPTER_DESC1 d{};
+                    if(FAILED(adapter->GetDesc1(&d))||(d.Flags&DXGI_ADAPTER_FLAG_SOFTWARE))continue;
+                    const auto architecture=pushAdapterArchitecture(adapter.Get());
+                    if(d.AdapterLuid.LowPart==desc->AdapterLuid.LowPart&&d.AdapterLuid.HighPart==desc->AdapterLuid.HighPart){
+                        c.featureLevel=architecture.featureLevel;c.uma=architecture.uma;
+                    }else if(architecture.uma==engine::PushCapability::Unknown)othersKnown=false;
+                    else otherIntegrated=otherIntegrated||architecture.uma==engine::PushCapability::Yes;
+                }
+                // Hybrid: the engine runs on a discrete adapter and an integrated one exists (a laptop, or a desktop
+                // with the CPU's graphics enabled); the display may then be driven by the other adapter.
+                if(c.uma==engine::PushCapability::No)
+                    c.hybridGpu=otherIntegrated?engine::PushCapability::Yes:othersKnown?engine::PushCapability::No:engine::PushCapability::Unknown;
+                else if(c.uma==engine::PushCapability::Yes)c.hybridGpu=engine::PushCapability::No;
+            }
+        }
+    }
+    caps=cached.caps;
+    const QVariantMap decode=pushDecodeCapabilities();
+    const bool decodeKnown=decode.value("known").toBool();
+    caps.decodeH264=engine::pushCapability(decodeKnown,decode.value("h264").toBool());
+    caps.decodeHevc=engine::pushCapability(decodeKnown,decode.value("hevc").toBool());
+    caps.decodeHevc10=engine::pushCapability(decodeKnown,decode.value("hevc10").toBool());
+    const auto effects=currentEffectCapabilities();
+    const auto has=[&](const char* id){return effects.value(QLatin1String(id)).toMap().value("available").toBool();};
+    for(const auto& [id,method]:std::initializer_list<std::pair<const char*,engine::PushFgMethod>>{{"dlss",engine::PushFgMethod::Dlss},{"xess",engine::PushFgMethod::XeSS},
+            {"fsr3",engine::PushFgMethod::Fsr},{"fsr4",engine::PushFgMethod::Fsr4},{"vfg",engine::PushFgMethod::Vfg},{"anr",engine::PushFgMethod::Anr},
+            {"amdfrc",engine::PushFgMethod::AmdFrc},{"pushflow",engine::PushFgMethod::PushFlow}})
+        if(has(id))caps.fgMethods|=engine::pushFgBit(method);
+    if(has("flow0"))caps.opticalFlows|=engine::pushFlowBit(engine::PushOpticalFlow::Nvidia);
+    if(has("flow1"))caps.opticalFlows|=engine::pushFlowBit(engine::PushOpticalFlow::AmdFidelityFx);
+    caps.opticalFlows|=engine::pushFlowBit(engine::PushOpticalFlow::GpuDis);   // the project's own shaders
+    caps.refreshHz=std::isfinite(refreshHz)&&refreshHz>0?refreshHz:0;
+    caps.vrr=engine::pushVrrState(vrrState);
+    // HDR: any display output in PQ / BT.2020 mode (the window's own monitor is the presenter's business).
+    {
+        Microsoft::WRL::ComPtr<IDXGIFactory1> factory;bool anyOutput=false,anyHdr=false,allAnswered=true;
+        if(SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))))
+            for(UINT a=0;a<64;++a){
+                Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
+                if(factory->EnumAdapters1(a,&adapter)==DXGI_ERROR_NOT_FOUND||!adapter)break;
+                for(UINT o=0;o<64;++o){
+                    Microsoft::WRL::ComPtr<IDXGIOutput> output;
+                    if(FAILED(adapter->EnumOutputs(o,&output))||!output)break;
+                    anyOutput=true;
+                    Microsoft::WRL::ComPtr<IDXGIOutput6> six;DXGI_OUTPUT_DESC1 desc{};
+                    if(FAILED(output.As(&six))||!six||FAILED(six->GetDesc1(&desc))){allAnswered=false;continue;}
+                    anyHdr=anyHdr||desc.ColorSpace==DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
+                }
+            }
+        caps.hdrDisplay=anyHdr?engine::PushCapability::Yes:anyOutput&&allAnswered?engine::PushCapability::No:engine::PushCapability::Unknown;
+    }
+    SYSTEM_POWER_STATUS power{};
+    if(GetSystemPowerStatus(&power))
+        caps.power=power.BatteryFlag==128||power.ACLineStatus==1?engine::PushPowerSource::Mains:power.ACLineStatus==0?engine::PushPowerSource::Battery:engine::PushPowerSource::Unknown;
+
+    engine::PushHardwareRequest most;most.codec=engine::PushStreamCodec::Hevc;most.hdr=true;most.frameGeneration=true;
+    most.fgMethod=engine::PushFgMethod::PushFlow;most.multiplier=4;most.tier=2;most.opticalFlow=engine::PushOpticalFlow::Nvidia;most.sourceFps=60;
+    const auto defaults=engine::pushHardwareDefaults(caps,most);
+    QStringList reasons;
+    for(const auto reason:defaults.reasons)reasons<<QString::fromLatin1(reason.data(),qsizetype(reason.size()));
+    const auto name=[](engine::PushCapability c){return c==engine::PushCapability::Yes?QStringLiteral("yes"):c==engine::PushCapability::No?QStringLiteral("no"):QStringLiteral("unknown");};
+    const auto vendor=engine::pushGpuVendorName(caps.vendor);
+    const QString power_=caps.power==engine::PushPowerSource::Mains?QStringLiteral("mains"):caps.power==engine::PushPowerSource::Battery?QStringLiteral("battery"):QStringLiteral("unknown");
+    QVariantList targets30,targets60;
+    for(const auto& t:engine::pushValidOutputTargets(defaults.fgMethod,30,caps.refreshHz))targets30<<QVariantMap{{"multiplier",t.multiplier},{"fps",t.outputFps},{"even",t.evenWithoutVrr}};
+    for(const auto& t:engine::pushValidOutputTargets(defaults.fgMethod,60,caps.refreshHz))targets60<<QVariantMap{{"multiplier",t.multiplier},{"fps",t.outputFps},{"even",t.evenWithoutVrr}};
+    QVariantMap out{{"vendor",QString::fromLatin1(vendor.data(),qsizetype(vendor.size()))},{"vramMB",qulonglong(caps.dedicatedVramBytes>>20)},
+        {"featureLevel",QString::number(caps.featureLevel,16)},{"uma",name(caps.uma)},{"decodeH264",name(caps.decodeH264)},{"decodeHevc",name(caps.decodeHevc)},
+        {"decodeHevc10",name(caps.decodeHevc10)},{"fgMethods",uint(caps.fgMethods)},{"opticalFlows",uint(caps.opticalFlows)},{"refreshHz",caps.refreshHz},
+        {"vrrState",int(caps.vrr)},{"hdrDisplay",name(caps.hdrDisplay)},{"hybridGpu",name(caps.hybridGpu)},{"power",power_},
+        {"defaults",QVariantMap{{"codec",defaults.codec==engine::PushStreamCodec::Hevc?QStringLiteral("hevc"):QStringLiteral("h264")},{"hdr",defaults.hdr},
+            {"frameGeneration",defaults.frameGeneration},{"fgMethod",int(defaults.fgMethod)},{"multiplier",defaults.multiplier},{"tier",defaults.tier},
+            {"opticalFlow",int(defaults.opticalFlow)},{"reasons",reasons},{"targets30",targets30},{"targets60",targets60}}}};
+    veyra::log::info("push-gpu-caps",std::format("vendor={} vramMB={} featureLevel={:#x} uma={} decode h264={} hevc={} hevc10={} fgMethods={:#x} flows={:#x} refresh={:.2f} vrr={} "
+        "hdr={} hybrid={} power={} ceiling codec={} hdr={} fg={} method={} multiplier={} tier={} reasons={}",vendor,caps.dedicatedVramBytes>>20,caps.featureLevel,
+        name(caps.uma).toStdString(),name(caps.decodeH264).toStdString(),name(caps.decodeHevc).toStdString(),name(caps.decodeHevc10).toStdString(),caps.fgMethods,
+        caps.opticalFlows,caps.refreshHz,int(caps.vrr),name(caps.hdrDisplay).toStdString(),name(caps.hybridGpu).toStdString(),power_.toStdString(),
+        defaults.codec==engine::PushStreamCodec::Hevc?"hevc":"h264",defaults.hdr,defaults.frameGeneration,int(defaults.fgMethod),defaults.multiplier,defaults.tier,
+        reasons.join(',').toStdString()));
+    return out;
 }
 unsigned normalizeFgMultiplier(unsigned value,engine::FrameGenerationBackend backend,unsigned cap){
     value=std::clamp(value,2u,cap);

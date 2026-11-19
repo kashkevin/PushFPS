@@ -73,6 +73,16 @@ QmlPlayerBridge::QmlPlayerBridge(engine::EngineController& engine, std::filesyst
     connect(this, &QmlPlayerBridge::preferencesChanged, vrrProfile, &NvidiaVrrProfileController::changed);
     auto* checker = new UpdateChecker(version(), this);
     updates_ = checker;
+    // Slipstream: a development build (CMake SLIPSTREAM_BUILD) or VEYRA_EXP_RP_NO_UPDATE never asks for,
+    // offers or installs the official project's releases; an official build is unchanged (UpdatePolicy.h).
+#ifdef VEYRA_SLIPSTREAM_BUILD
+    constexpr bool slipstreamBuild = true;
+#else
+    constexpr bool slipstreamBuild = false;
+#endif
+    const QByteArray noUpdate = qgetenv("VEYRA_EXP_RP_NO_UPDATE");
+    checker->setPolicy(updatePolicy(slipstreamBuild, qEnvironmentVariableIsSet("VEYRA_EXP_RP_NO_UPDATE"),
+                                    std::string_view(noUpdate.constData(), static_cast<std::size_t>(noUpdate.size()))));
     connect(checker, &UpdateChecker::notice, this, &QmlPlayerBridge::notice);
     // PushFPS signed updates: the verified installer is running; it waits for this process to exit.
     connect(checker, &UpdateChecker::quitForUpdate, this, [] {
@@ -187,6 +197,7 @@ QmlPlayerBridge::QmlPlayerBridge(engine::EngineController& engine, std::filesyst
     engine::setPushLiveCanvas(pushCanvas(0));   // PushFPS layout (Recording.cpp)
     applyPreference(QStringLiteral("nisSharpness"));
     applyPreference(QStringLiteral("pushFlowHalf"));
+    applyPreference(QStringLiteral("pushLanProfile"));   // PushFPS LAN profile -> the switch the next PS5 connection reads (PushSlipstream.cpp)
     applyPreference(QStringLiteral("magewellLowLatency"));
     const bool presetsLoaded = impl_->facade.importLegacyStores();
     const auto presetNotice = uiText(impl_->facade.error());

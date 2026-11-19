@@ -1,0 +1,83 @@
+SLIPSTREAM TEST PACKAGE   @PACKAGE@
+==========================================================================================
+
+Development builds of the low-latency PS5 Remote Play work on PushFPS, for testing on your own PC.
+PushFPS is built on Veyra by Likely7 (GPL-3.0). This is not an official PushFPS release.
+
+WHAT HAS BEEN CHECKED, AND WHAT HAS NOT
+  The builds were compiled, installed and started on GitHub's Windows build machine (no graphics
+  card, no PS5, no screen to measure). Nothing here has run on a gaming PC yet: no build has shown
+  a PS5 stream, and no latency has been measured.
+  The .cmd files here and the scripts behind them are run once on GitHub's Windows machine by
+  the workflow that made this package (job "verify" of the run named at the end of this file;
+  look there for its result). They have never run on a real PC either.
+  If anything fails, copy the text of the window and send it.
+
+IN THIS PACKAGE
+@BUILDS@
+  testkit\        the measuring kit and its tools (testkit\scripts\remoteplay\testkit)
+  docs\           SETUP.md (settings, every key), HARDWARE_TEST_PROCEDURE.md (measuring),
+                  SLIPSTREAM_STATUS.md (every feature: built, tested, or not yet), and more
+  SHA256SUMS.txt  SHA-256 of every file in this package
+@MISSING@
+
+1. INSTALL                                   10 to 20 minutes, mostly one download of about 750 MB
+   Double-click  Install-Slipstream.cmd
+   It installs the builds above side by side, each with its own installer, into
+       %LOCALAPPDATA%\Programs\PushFPS-original          the original build, for comparison
+       %LOCALAPPDATA%\Programs\PushFPS-slipstream        the stable candidate
+       %LOCALAPPDATA%\Programs\PushFPS-slipstream-exp    the experimental build
+   No administrator rights, no shortcuts, nothing started. It prints what it did and can be run
+   again at any time. If you already use PushFPS, that install and its shortcuts are not touched.
+   Windows may warn about an unknown publisher (nothing here is code signed): "More info", then
+   "Run anyway".
+
+2. USE THIS FIRST
+   Program    %LOCALAPPDATA%\Programs\PushFPS-slipstream\PushFPS.exe      (the stable candidate)
+              Press Win+R, paste that line, Enter.
+   Mode       Ultra Low Latency. Install-Slipstream has written slipstream.ini next to that
+              program with "mode = ultra-low-latency"; there is nothing to edit.
+   You set    Frame generation OFF, in the interface (the settings file does not set it yet).
+   Against    %LOCALAPPDATA%\Programs\PushFPS-original\PushFPS.exe        (the original build)
+              with the same stream quality, codec and bitrate, frame generation OFF there too.
+   Pair each copy with the PS5 once (docs\SETUP.md, section 3). Run one copy at a time.
+   Leave the experimental build for later; it is installed but nothing starts it.
+
+3. MEASURE                                                     about 40 minutes with you at the PC
+   Double-click  Run-First-Test.cmd
+   It starts the kit's quick procedure: original against stable candidate, nine short runs, one
+   zip to send back at the end. The steps are in docs\HARDWARE_TEST_PROCEDURE.md.
+   For frame times as well: put the PresentMon console program (PresentMon-<version>-x64.exe,
+   GitHub: GameTechDev/PresentMon) next to this file and start Run-First-Test.cmd with
+   right-click, "Run as administrator".
+
+4. GOING BACK
+   Rollback-Slipstream.cmd    switches slipstream.ini off (renames it, deletes nothing): the stable
+                              candidate then behaves as a build without settings. Rename the file
+                              back to slipstream.ini to use it again.
+   Start the original         PushFPS-original\PushFPS.exe is always installed beside the others
+                              and never reads slipstream.ini.
+   Uninstall-Slipstream.cmd   removes the three folders above after you type YES. Each copy's own
+                              settings and logs are inside its folder and go with it.
+   testkit\scripts\remoteplay\testkit\collect-diagnostics.cmd
+                              if something goes wrong: makes one zip of logs and PC facts with
+                              names, addresses and ids removed (docs\RELIABILITY.md, section 5).
+                              Read it before sending; it has never run on a real PC.
+   Neither file touches an official PushFPS install, its shortcuts or settings, your PS5 pairing
+   (kept by Windows for your user account, shared by every copy), or your test results.
+
+5. THE IN-APP UPDATER
+   A development build would be offered the official PushFPS release as an "update", and one click
+   could install it over the test copy. Install-Slipstream stops that in all three copies, and
+   builds made from a branch with the guard have the updater off in the program itself (their
+   version ends in "-slipstream"). In these copies "check for updates" therefore answers that
+   nothing newer exists. If a copy shows a plain 3.x.y version in Settings, About, it was replaced:
+   run Install-Slipstream.cmd -Force.
+
+6. PRIVACY
+   This package holds programs, scripts and documents only: no account, no console registration,
+   no settings, no logs, no passwords or keys. What the programs keep on your PC and what the kit
+   puts into the zip you send back is listed in docs\SETUP.md ("What is stored where").
+
+WHERE THE BUILDS CAME FROM
+@SOURCES@
