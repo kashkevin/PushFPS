@@ -1558,6 +1558,22 @@ public:
     // preference pushFlowHalfProbe and, when half precision matches and is faster, pushFlowHalf.
     Q_INVOKABLE bool pushTestPushFlowHalf();
     Q_INVOKABLE bool pushFlowHalfTesting() const;
+    // PushFPS performance modes and first-launch card (src/ui/bridge/PushSlipstream.cpp; the mode table
+    // itself is engine/PushPerformanceMode.h, applied by qml/Veyra/PushModes.js).
+    // pushHardwareSummary(): what this PC offers, by capability and never by model name: gpuName,
+    // gpuVendor ("nvidia" | "amd" | "intel" | ""), decodeKnown + decodeH264 / decodeHevc / decodeHevc10
+    // (the engine adapter's D3D12 video decode profiles), fgBackends (labels of the frame generation
+    // methods that can run), fgMaxMultiplier, displayHz (0 unknown), vrrState (0..4 as vrrState),
+    // lowLatencyNvidia, networkKnown + ethernet / wifi (active adapters), and for a saved PS5 address
+    // routeKnown + routeDirectLan + routeLink ("ethernet" | "wifi" | "other" | "unknown"). No addresses.
+    Q_INVOKABLE QVariantMap pushHardwareSummary();
+    // Automatic mode, only while VEYRA_EXP_AUTO_MODE=1 (pushAutoModeAvailable). pushAutoModeStep feeds
+    // engine::PushAutomaticMode with numbers the snapshot already holds and returns
+    // { available, mode, changed, reason }; `ceiling` is the user's chosen mode, never exceeded.
+    // Call it about once a second from one place (PushModeDriver.qml). pushAutoModeState() only reads.
+    Q_INVOKABLE bool pushAutoModeAvailable() const;
+    Q_INVOKABLE QVariantMap pushAutoModeStep(const QString& ceiling);
+    Q_INVOKABLE QVariantMap pushAutoModeState() const;
     // PushFPS 窗口置顶: keeps a top-level window above others (SetWindowPos, no window recreation).
     Q_INVOKABLE bool pushSetAlwaysOnTop(QObject* window, bool onTop);
     Q_INVOKABLE void copyDiagnostics();
@@ -1677,6 +1693,7 @@ private:
     // audio endpoint). Called after load and after every accepted change.
     void applyPreference(const QString& key);
     void applyPushMix();   // PushFPS mixer preferences -> engine::setPushMix (PushStudio.cpp)
+    void applyPushLanProfile();   // preference pushLanProfile -> VEYRA_EXP_RP_LAN_PROFILE for the next PS5 connection (PushSlipstream.cpp)
     void pushFlowBudgetWatch();   // PushFlow too slow for the frame budget -> a faster tier (PushFps.cpp)
     engine::PushCanvas pushCanvas(int fit) const;   // PushFPS canvas preferences (Recording.cpp)
     void scheduleEnhancementPrewarm();
