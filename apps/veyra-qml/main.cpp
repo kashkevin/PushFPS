@@ -62,6 +62,7 @@
 #include "veyra/ui/QmlDataDirectory.h"
 #include "veyra/ui/QmlDiskCache.h"
 #include "veyra/ui/QmlPlayerBridge.h"
+#include "veyra/ui/SlipstreamSettingsFile.h"
 #include "veyra/ui/StartupMusic.h"
 #include "veyra/ui/ThumbnailProvider.h"
 
@@ -503,6 +504,7 @@ static int runApplication(int argc, char** argv, QString& restartProgram, QStrin
     g_crashDumpDirectory = logPath.parent_path().wstring();
     veyra::engine::EngineWatchdog::setDumpDirectory(g_crashDumpDirectory);
     SetUnhandledExceptionFilter(crashFilter);
+    veyra::ui::applySlipstreamSettingsFile();   // slipstream.ini beside the exe -> VEYRA_EXP_RP_* / VEYRA_TEST_RP_* switches not already set
 
     // Interface scale (设置 → 界面缩放) has to be fixed before Qt starts, so the
     // preference file is read here, from the same data directory the bridge uses.
