@@ -7,6 +7,13 @@ namespace veyra::remoteplay {
 class StreamRecovery {
 public:
     enum class Action {Wait,Keyframe,Reconnect,Fail};
+    // Experiment VEYRA_EXP_RP_IDR_RETRY_MS: how long without a decoded frame
+    // before the first keyframe request of an outage. 1000 is the original and
+    // the default; 250 is the floor. The second request stays 2000 ms after the
+    // first. The console may throttle a client that asks often: unverified
+    // until a real PS5 session has run with a lower value.
+    void setKeyframeRetryMs(int ms){keyframeRetryMs_=ms<250?250:ms>1000?1000:ms;}
+    int keyframeRetryMs()const{return keyframeRetryMs_;}
     void beginAttempt(int64_t now){lastProgress_=now;healthySince_=-1;keyframes_=0;currentVideo_=false;}
     bool frame(int64_t now){
         if(!currentVideo_||healthySince_<0||now<lastProgress_||now-lastProgress_>=1000)healthySince_=now;
@@ -24,7 +31,7 @@ public:
             if((!everVideo_&&!(failed&&startupRetryAllowed))||episodeRetries_>=3)return Action::Fail;
             ++episodeRetries_;++reconnects_;return Action::Reconnect;
         }
-        if(currentVideo_&&keyframes_<2&&silent>=1000+int64_t(keyframes_)*2000){++keyframes_;return Action::Keyframe;}
+        if(currentVideo_&&keyframes_<2&&silent>=int64_t(keyframeRetryMs_)+int64_t(keyframes_)*2000){++keyframes_;return Action::Keyframe;}
         return Action::Wait;
     }
     unsigned reconnects()const{return reconnects_;}
@@ -32,5 +39,6 @@ public:
 private:
     int64_t lastProgress_=0,healthySince_=-1;unsigned keyframes_=0,reconnects_=0,episodeRetries_=0;
     bool everVideo_=false,currentVideo_=false;
+    int keyframeRetryMs_=1000;
 };
 }

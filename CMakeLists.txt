@@ -13,6 +13,16 @@ set(VEYRA_DISPLAY_VERSION "${PROJECT_VERSION}" CACHE STRING "PushFPS version sho
 if(NOT VEYRA_DISPLAY_VERSION)
   set(VEYRA_DISPLAY_VERSION "${PROJECT_VERSION}" CACHE STRING "PushFPS version shown in the app and the EXE resource" FORCE)
 endif()
+# Slipstream: a development build of the low-latency work. It reports a version such as 2.1.5-pushfps.<run>
+# while the official project publishes 3.x releases, so its in-app updater would offer to replace it with
+# the official release. ON: the updater never checks, offers or installs (include/veyra/ui/UpdatePolicy.h)
+# and the version the program shows ends in "-slipstream" (window title and About; no new text to
+# translate). OFF, the default, changes nothing: that is every official build.
+option(SLIPSTREAM_BUILD "Slipstream development build: in-app updater off, version shown with -slipstream" OFF)
+set(VEYRA_SHOWN_VERSION "${VEYRA_DISPLAY_VERSION}")
+if(SLIPSTREAM_BUILD AND NOT VEYRA_SHOWN_VERSION MATCHES "slipstream")
+  string(APPEND VEYRA_SHOWN_VERSION "-slipstream")
+endif()
 
 # Match the compiler's actual bytes, including on localized Windows installs.
 # CMake's cached, decoded prefix can leave Ninja with zero header dependencies.
@@ -1401,7 +1411,11 @@ if(VEYRA_BUILD_QML_UI AND Qt6_FOUND)
   endif()
   # VEYRA_DISPLAY_VERSION is the human-readable version the app reports; it is
   # the same value the resource file uses, so the UI cannot drift from it.
-  target_compile_definitions(veyra_qml_bridge PRIVATE VEYRA_DISPLAY_VERSION="${VEYRA_DISPLAY_VERSION}" VEYRA_UPSTREAM_VERSION="${VEYRA_UPSTREAM_VERSION}")
+  # VEYRA_SHOWN_VERSION is VEYRA_DISPLAY_VERSION, with "-slipstream" added in a Slipstream build.
+  target_compile_definitions(veyra_qml_bridge PRIVATE VEYRA_DISPLAY_VERSION="${VEYRA_SHOWN_VERSION}" VEYRA_UPSTREAM_VERSION="${VEYRA_UPSTREAM_VERSION}")
+  if(SLIPSTREAM_BUILD)
+    target_compile_definitions(veyra_qml_bridge PRIVATE VEYRA_SLIPSTREAM_BUILD=1)
+  endif()
   # libass (ISC) + FreeType/FriBidi/HarfBuzz, static, for full ASS/SSA effect
   # subtitles. Local prebuilt tree only (vcpkg x64-windows-static-md); never in
   # source Git. Without it ASS tracks fall back to the built-in styled renderer.

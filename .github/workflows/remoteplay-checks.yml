@@ -1,0 +1,229 @@
+# Fast Windows checks for the PS5 Remote Play low-latency work (a few minutes, no dependencies).
+#
+# build-windows.yml takes about two hours and does not build the Remote Play tests. This workflow
+# gives quick MSVC feedback first:
+#   1. the portable core tests (tests/remoteplay/CoreTests.cpp) compiled by MSVC and run;
+#   2. the new headers compiled with the same strict flags as veyra_sources (/W4 /WX /permissive-);
+#   3. every PowerShell script under scripts/remoteplay parsed, and the hardware detection run once;
+#   4. the hardware test kit run dry (scripts/remoteplay/testkit/run-tests.ps1 -DryRun: no PushFPS, no
+#      PS5, made-up log lines) under Windows PowerShell 5.1, its zip searched for the private values
+#      the dry run plants, and the report tooling's tests and the report itself run on that zip.
+# A pass here does not establish that PushFPS.exe builds, decodes video, reaches a PS5 or is faster.
+name: remoteplay-checks
+
+on:
+  push:
+    paths:
+      - 'include/veyra/remoteplay/**'
+      - 'include/veyra/engine/PushPerformanceMode.h'
+      - 'include/veyra/engine/SlipstreamSettings.h'
+      - 'include/veyra/ui/UpdatePolicy.h'
+      - 'tools/remoteplay_latency_bench/**'
+      - 'src/remoteplay/**'
+      - 'tests/remoteplay/**'
+      - 'scripts/remoteplay/**'
+      - '.github/workflows/remoteplay-checks.yml'
+  pull_request:
+    paths:
+      - 'include/veyra/remoteplay/**'
+      - 'include/veyra/engine/PushPerformanceMode.h'
+      - 'include/veyra/engine/SlipstreamSettings.h'
+      - 'include/veyra/ui/UpdatePolicy.h'
+      - 'tools/remoteplay_latency_bench/**'
+      - 'src/remoteplay/**'
+      - 'tests/remoteplay/**'
+      - 'scripts/remoteplay/**'
+      - '.github/workflows/remoteplay-checks.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Portable core tests (MSVC)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force out | Out-Null
+          $sources = 'src\remoteplay\Validation.cpp', 'src\remoteplay\AnnexB.cpp', 'src\remoteplay\Timeline.cpp',
+                     'src\remoteplay\VideoIngress.cpp', 'src\remoteplay\SessionInbox.cpp', 'tests\remoteplay\CoreTests.cpp'
+          cl /nologo /std:c++20 /EHsc /O2 /utf-8 /W4 /permissive- /DNOMINMAX /DUNICODE /D_UNICODE /Iinclude /Foout\ /Feout\core_tests.exe @sources
+          if ($LASTEXITCODE -ne 0) { Write-Host '::error::core tests did not compile with MSVC'; exit 1 }
+          & out\core_tests.exe
+          if ($LASTEXITCODE -ne 0) { Write-Host '::error::core tests failed'; exit 1 }
+
+      - name: New headers under /W4 /WX /permissive-
+        shell: pwsh
+        run: |
+          @('#include "veyra/remoteplay/WakeSignal.h"',
+            '#include "veyra/remoteplay/ControllerQueue.h"',
+            '#include "veyra/remoteplay/KeyboardMousePad.h"',
+            '#include "veyra/remoteplay/KbmCapture.h"',
+            '#include "veyra/remoteplay/KbmProfile.h"',
+            '#include "veyra/remoteplay/StreamCadence.h"',
+            '#include "veyra/engine/PushPerformanceMode.h"',
+            '#include "veyra/engine/SlipstreamSettings.h"',
+            '#include "veyra/remoteplay/TransportTuning.h"',
+            '#include "veyra/remoteplay/ConnectionHealth.h"',
+            '#include "veyra/ui/UpdatePolicy.h"',
+            'int main() { return 0; }') | Set-Content -Encoding ascii out\headers.cpp
+          cl /nologo /std:c++20 /EHsc /utf-8 /W4 /WX /permissive- /DNOMINMAX /DUNICODE /D_UNICODE /Iinclude /c /Foout\ out\headers.cpp
+          if ($LASTEXITCODE -ne 0) { Write-Host '::error::a new header is not clean under /W4 /WX'; exit 1 }
+
+      - name: PowerShell scripts parse
+        shell: pwsh
+        run: |
+          $bad = 0
+          foreach ($file in Get-ChildItem scripts\remoteplay -Filter *.ps1 -Recurse) {
+            $tokens = $null; $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              $bad++
+              foreach ($e in $errors) { Write-Host "::error file=$($file.FullName),line=$($e.Extent.StartLineNumber)::$($e.Message)" }
+            } else { Write-Host "ok  $($file.Name)" }
+          }
+          if ($bad -gt 0) { exit 1 }
+
+      - name: Hardware detection runs (Windows PowerShell 5.1, as on a user's PC)
+        shell: powershell
+        run: |
+          & scripts\remoteplay\detect-hardware.ps1 -OutFile out\hardware.json -ExpectRefreshHz 60
+          if (-not (Test-Path out\hardware.json)) { Write-Host '::error::detect-hardware.ps1 wrote no file'; exit 1 }
+          Get-Content out\hardware.json | ConvertFrom-Json | Out-Null
+
+      - name: Report tooling tests (Python standard library)
+        shell: pwsh
+        run: |
+          python -B tools\remoteplay_latency_bench\test_report.py
+          if ($LASTEXITCODE -ne 0) { Write-Host '::error::report tooling tests failed'; exit 1 }
+
+      - name: Hardware test kit dry run (Windows PowerShell 5.1) and its redaction
+        shell: powershell
+        run: |
+          # The kit samples inside its own loop and writes run.json last in every run, so when the script
+          # returns nothing is still writing. Without -Quick it runs every quick and standard arm of arms.csv.
+          $problems = New-Object System.Collections.Generic.List[string]
+          try {
+            & scripts\remoteplay\testkit\run-tests.ps1 -DryRun -Soak -Impairment -OutRoot out\kit -ExpectRefreshHz 60
+          } catch {
+            $problems.Add("run-tests.ps1 stopped: $($_.Exception.Message) (script line $($_.InvocationInfo.ScriptLineNumber))")
+          }
+          $unzipped = 'out\kit\unzipped'
+          $zip = $null
+          if (Test-Path out\kit) { $zip = Get-ChildItem out\kit -Filter *.zip | Select-Object -First 1 }
+          if (-not $zip) { $problems.Add('the dry run made no zip') }
+          else { Expand-Archive -LiteralPath $zip.FullName -DestinationPath $unzipped -Force }
+          $files = @()
+          if (Test-Path $unzipped) { $files = @(Get-ChildItem $unzipped -Recurse -File) }
+
+          # Expected runs: one per quick or standard arm, one soak and one impairment run of mod-all.
+          $expected = @()
+          foreach ($row in (Get-Content scripts\remoteplay\testkit\arms.csv | Where-Object { $_ -and ($_ -notmatch '^\s*#') } | ConvertFrom-Csv)) {
+            if (($row.set -eq 'quick') -or ($row.set -eq 'standard')) { $expected += $row.name }
+          }
+          $expected += 'soak-mod-all'
+          $expected += 'impairment-mod-all'
+          $bench = @($files | Where-Object { $_.Directory.Name -eq 'bench' })
+          foreach ($name in $expected) {
+            $logs = @($bench | Where-Object { $_.Name -like ($name + '@*.txt') })
+            if ($logs.Count -eq 0) { $problems.Add("missing run log: bench\$($name)@<time>.txt"); continue }
+            if ($logs.Count -gt 1) { $problems.Add("run '$name' has $($logs.Count) logs, expected 1") }
+            foreach ($log in $logs) {
+              $run = Join-Path (Join-Path $unzipped 'runs') $log.BaseName
+              foreach ($needed in @('run.json', 'samples.csv')) {
+                if (-not (Test-Path -LiteralPath (Join-Path $run $needed))) { $problems.Add("missing file: runs\$($log.BaseName)\$needed") }
+              }
+              if (Test-Path -LiteralPath (Join-Path $run 'run.json')) {
+                $record = Get-Content -LiteralPath (Join-Path $run 'run.json') -Raw | ConvertFrom-Json
+                if (-not $record.completed) { $problems.Add("run did not finish (run.json has no completed=true): runs\$($log.BaseName)") }
+                if ($record.sampleRows -lt 1) { $problems.Add("run recorded no sample: runs\$($log.BaseName)") }
+              }
+              if (Test-Path -LiteralPath (Join-Path $run 'samples.csv')) {
+                $rows = @(Get-Content -LiteralPath (Join-Path $run 'samples.csv')).Count
+                if ($rows -lt 2) { $problems.Add("samples.csv has a header and no row: runs\$($log.BaseName)") }
+              }
+              if ($name -eq 'impairment-mod-all') {
+                $markers = Join-Path $run 'markers.csv'
+                if (-not (Test-Path -LiteralPath $markers)) { $problems.Add("missing file: runs\$($log.BaseName)\markers.csv") }
+                elseif (@(Get-Content -LiteralPath $markers).Count -ne 5) { $problems.Add("markers.csv should hold a header and 4 markers: runs\$($log.BaseName)") }
+              }
+            }
+          }
+          foreach ($log in $bench) {
+            $label = $log.BaseName.Split('@')[0]
+            if ($expected -notcontains $label) { $problems.Add("unexpected run log: bench\$($log.Name)") }
+          }
+          foreach ($folder in @(Get-ChildItem (Join-Path $unzipped 'runs') -Directory -ErrorAction SilentlyContinue)) {
+            if (@($bench | Where-Object { $_.BaseName -eq $folder.Name }).Count -eq 0) { $problems.Add("unexpected run folder without a log: runs\$($folder.Name)") }
+          }
+
+          # Values the dry run plants in its made-up log, and this machine's own names: none may be in the zip.
+          $planted = @('Planted', '0123456789abcdef', '192.168.1.77', '203.0.113.9', 'AABBCCDDEEFF', '00:1A:2B', 'fe80', '00112233445566778899', $env:COMPUTERNAME, $env:USERNAME)
+          foreach ($value in $planted) {
+            if ((-not $value) -or ($files.Count -eq 0)) { continue }
+            foreach ($hit in @($files | Select-String -SimpleMatch -Pattern $value | Select-Object -First 3)) {
+              $problems.Add("a value that must be removed is in the zip: $(Split-Path -Leaf $hit.Path) line $($hit.LineNumber)")
+            }
+          }
+          # What the masking must have left in the run logs.
+          foreach ($value in @('host=192.168.x.x', 'host=[name]', 'host=x.x.x.x', '[ipv6]', '[mac]', '[hex]', 'trials answerMs=[')) {
+            if (($bench.Count -gt 0) -and (@($bench | Select-String -SimpleMatch -Pattern $value).Count -eq 0)) { $problems.Add("no run log holds '$value'") }
+          }
+          foreach ($needed in @('kit.json', 'hardware.json', 'arms.csv', 'camera.csv', 'withheld.txt')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $unzipped $needed))) { $problems.Add("missing file: $needed") }
+          }
+          if (Test-Path -LiteralPath (Join-Path $unzipped 'hardware.json')) {
+            $hardware = Get-Content -LiteralPath (Join-Path $unzipped 'hardware.json') -Raw | ConvertFrom-Json
+            if ($hardware.computer -ne '(removed)') { $problems.Add('hardware.json still names the computer') }
+          }
+          if (Test-Path -LiteralPath (Join-Path $unzipped 'withheld.txt')) {
+            $withheld = @(Get-Content -LiteralPath (Join-Path $unzipped 'withheld.txt'))
+            if ($withheld[0] -ne 'files the kit left out of the zip: 0') { $problems.Add("the kit withheld its own files: $($withheld -join '; ')") }
+          }
+
+          if (($problems.Count -eq 0) -and $zip) {
+            python -B tools\remoteplay_latency_bench\report.py $zip.FullName --out out\kit\report --strict
+            if ($LASTEXITCODE -ne 0) { $problems.Add("report.py exit code $LASTEXITCODE (2 = its privacy check found something)") }
+            elseif (-not (Test-Path out\kit\report\report.html)) { $problems.Add('report.py wrote no report.html') }
+          }
+
+          if ($problems.Count -gt 0) {
+            foreach ($problem in $problems) { Write-Host ('::error::kit dry run: ' + ($problem -replace '\s+', ' ')) }
+            Write-Host '::group::evidence tree (from the zip)'
+            foreach ($file in $files) { Write-Host ("{0,10}  {1}" -f $file.Length, $file.FullName.Substring((Resolve-Path $unzipped).Path.Length + 1)) }
+            if ($files.Count -eq 0) { Write-Host '(nothing was unzipped)' }
+            Write-Host '::endgroup::'
+            Write-Host '::group::out\kit as left on disk'
+            if (Test-Path out\kit) { Get-ChildItem out\kit -Recurse | Where-Object { $_.FullName -notlike '*\unzipped\*' } | ForEach-Object { Write-Host $_.FullName } }
+            Write-Host '::endgroup::'
+            foreach ($log in $bench) {
+              Write-Host "::group::run log $($log.Name) (last 40 lines)"
+              Get-Content -LiteralPath $log.FullName -Tail 40 | ForEach-Object { Write-Host $_ }
+              Write-Host '::endgroup::'
+            }
+            foreach ($name in @('kit.json', 'withheld.txt')) {
+              if (Test-Path -LiteralPath (Join-Path $unzipped $name)) {
+                Write-Host "::group::$name"
+                Get-Content -LiteralPath (Join-Path $unzipped $name) | ForEach-Object { Write-Host $_ }
+                Write-Host '::endgroup::'
+              }
+            }
+            exit 1
+          }
+          Write-Host "kit dry run: $($bench.Count) runs, all expected files present, nothing private in the zip, report written"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: remoteplay-checks
+          path: |
+            out/hardware.json
+            out/kit/*.zip
+            out/kit/report/
+          if-no-files-found: ignore

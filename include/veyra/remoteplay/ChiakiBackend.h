@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #pragma once
 #include "SessionInbox.h"
+#include "TransportTuning.h"
 #include <array>
 #include <chrono>
 #include <memory>
@@ -46,6 +47,16 @@ struct NativeSnapshot {
     uint64_t qualityReports=0;
 };
 BackendResult initializeChiaki();
+// Experimental transport profile (chiaki patch 0004; see TransportTuning.h).
+// Process-wide in the library, read when the next session connects: call on
+// the session owner before ChiakiBackend::start(). A default TransportTuning
+// asks for the library's own values. Also restarts the library's counters, and
+// with threadPriority raises the Takion and feedback sender threads of
+// sessions started afterwards. Never called when no VEYRA_EXP_RP_* transport
+// switch is set, so the library then runs exactly as unpatched.
+void configureTransport(const TransportTuning&);
+// Any thread; plain atomic reads, no lock.
+TransportCounters readTransportCounters() noexcept;
 class ChiakiBackend {
 public:
     ChiakiBackend();
