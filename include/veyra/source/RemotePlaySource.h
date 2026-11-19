@@ -59,6 +59,8 @@ public:
     remoteplay::SessionInbox::Snapshot sessionSnapshot() const;
     std::shared_ptr<const remoteplay::SessionInbox> telemetryInbox()const{return inbox_;}
     void recoverVideo(){flushDecoder();if(token_)inbox_->decodeFailed(token_->generation());}
+    // Applied to the inbox of this and every later connect(); see SessionInbox::wakeOn.
+    void wakeOn(std::shared_ptr<remoteplay::WakeSignal> signal){wake_=std::move(signal);inbox_->wakeOn(wake_);}
 
     const SourceInfo& info() const override { return info_; }
     SourceReadStatus read(pipeline::FramePacket& out, const AVFrame** decodedFrame) override;
@@ -116,6 +118,7 @@ private:
     std::shared_ptr<ID3D12Device> decodeDevice_;
     bool hardwareFallback_=false;
     bool discardMedia_=false;
+    std::shared_ptr<remoteplay::WakeSignal> wake_;
 };
 
 class RemotePlayAudioSource final : public sink::AudioPcmSource {

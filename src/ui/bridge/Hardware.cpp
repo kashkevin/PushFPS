@@ -8,6 +8,7 @@
 #include "veyra/ngx/AnrProvider.h"
 #include "veyra/gfx/AmfFrcBackend.h"
 #include "veyra/pushflow/PushFlowBackend.h"
+#include <d3d11.h>
 
 namespace veyra::ui {
 
@@ -50,6 +51,40 @@ bool vfgHardwarePossible(){
     const auto name=QString::fromWCharArray(d->Description);
     return d->VendorId==0x10DE&&(name.contains(QStringLiteral("GeForce RTX 30"),Qt::CaseInsensitive)||name.contains(QStringLiteral("GeForce RTX 40"),Qt::CaseInsensitive)||
         name.contains(QStringLiteral("GeForce RTX 50"),Qt::CaseInsensitive)||name.contains(QStringLiteral("Ada"),Qt::CaseInsensitive)||name.contains(QStringLiteral("Blackwell"),Qt::CaseInsensitive));
+}
+// PushFPS first-launch card: which video decode profiles the engine's adapter offers (a PS5 stream is
+// H.264, or HEVC and 10-bit HEVC for HDR). Asked of the adapter itself, never looked up from a model
+// name: the DXVA profiles its Direct3D 11 video device lists, on a short-lived device created the way
+// FFmpegVideoDecoder creates its D3D11VA device. It says the GPU has such a decoder; a stream reports
+// what it really decodes with once it runs. Asked once per chosen adapter; known=false when the adapter
+// or its video device could not be asked. UI thread only. Unverified on Windows.
+QVariantMap pushDecodeCapabilities(){
+    static uint64_t cachedFor=~0ull;static QVariantMap cached;
+    const uint64_t preferred=gfx::preferredAdapterLuid();
+    if(cachedFor==preferred&&!cached.isEmpty())return cached;
+    cachedFor=preferred;
+    cached=QVariantMap{{"known",false},{"h264",false},{"hevc",false},{"hevc10",false}};
+    const auto* desc=engineAdapterDesc();
+    if(!desc)return cached;
+    Microsoft::WRL::ComPtr<IDXGIFactory4> factory;Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
+    Microsoft::WRL::ComPtr<ID3D11Device> device;Microsoft::WRL::ComPtr<ID3D11VideoDevice> video;
+    if(FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))||FAILED(factory->EnumAdapterByLuid(desc->AdapterLuid,IID_PPV_ARGS(&adapter)))||!adapter)return cached;
+    const D3D_FEATURE_LEVEL levels[]={D3D_FEATURE_LEVEL_11_1,D3D_FEATURE_LEVEL_11_0};
+    if(FAILED(D3D11CreateDevice(adapter.Get(),D3D_DRIVER_TYPE_UNKNOWN,nullptr,D3D11_CREATE_DEVICE_VIDEO_SUPPORT,levels,UINT(sizeof(levels)/sizeof(levels[0])),
+        D3D11_SDK_VERSION,&device,nullptr,nullptr))||!device||FAILED(device.As(&video))||!video)return cached;
+    // DXVA2_ModeH264_VLD_NoFGT, DXVA_ModeHEVC_VLD_Main and _Main10 by value (their SDK symbols need dxva.h and dxguid).
+    static const GUID h264{0x1b81be68,0xa0c7,0x11d3,{0xb9,0x84,0x00,0xc0,0x4f,0x2e,0x73,0xc5}};
+    static const GUID hevc{0x5b11d51b,0x2f4c,0x4452,{0xbc,0xc3,0x09,0xf2,0xa1,0x16,0x0c,0xc0}};
+    static const GUID hevc10{0x107af0e0,0xef1a,0x4d19,{0xab,0xa8,0x67,0xa1,0x63,0x07,0x3d,0x13}};
+    bool hasH264=false,hasHevc=false,hasHevc10=false;
+    const UINT count=video->GetVideoDecoderProfileCount();
+    for(UINT i=0;i<count&&i<1024;++i){
+        GUID profile{};
+        if(FAILED(video->GetVideoDecoderProfile(i,&profile)))continue;
+        hasH264=hasH264||IsEqualGUID(profile,h264);hasHevc=hasHevc||IsEqualGUID(profile,hevc);hasHevc10=hasHevc10||IsEqualGUID(profile,hevc10);
+    }
+    cached=QVariantMap{{"known",true},{"h264",hasH264},{"hevc",hasHevc},{"hevc10",hasHevc10}};
+    return cached;
 }
 unsigned normalizeFgMultiplier(unsigned value,engine::FrameGenerationBackend backend,unsigned cap){
     value=std::clamp(value,2u,cap);

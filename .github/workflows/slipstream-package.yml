@@ -1,0 +1,146 @@
+# Slipstream test package: ONE zip with the original build, the stable candidate and the experimental
+# build side by side, the measuring kit, the documents and double-click install / test / uninstall files.
+#
+# It builds nothing. It takes the PushFPS artifact of the newest successful build-windows run of three
+# branches, unpacks them next to each other and adds the kit (packaging/slipstream/slipstream_package.py).
+# A branch without a usable run does not fail the package: what exists is packaged and START-HERE.txt
+# says what is missing.
+#
+# Job "package" (Linux) makes and uploads the zip. Job "verify" (Windows) then unpacks that zip and runs
+# its scripts under Windows PowerShell 5.1 as a user would: install twice, start every copy and read its
+# update check from the log, rollback, uninstall, with a stand-in for an official PushFPS install that
+# must survive untouched. A red "verify" does not remove the uploaded package; it says the scripts in it
+# are not to be trusted yet. Neither job establishes anything about a real PC, a PS5 or latency.
+name: slipstream-package
+
+on:
+  push:
+    branches: ['slipstream/package']
+  workflow_dispatch:
+    inputs:
+      original_branch:
+        description: 'Branch of the original build'
+        required: false
+        default: 'slipstream/baseline'
+      stable_branch:
+        description: 'Branch of the stable candidate'
+        required: false
+        default: 'slipstream/next'
+      experimental_branch:
+        description: 'Branch of the experimental build'
+        required: false
+        default: 'slipstream/dev'
+      original_run:
+        description: 'Optional: build-windows run number to take the original build from (instead of the newest successful run)'
+        required: false
+        default: ''
+      stable_run:
+        description: 'Optional: build-windows run number for the stable candidate'
+        required: false
+        default: ''
+      experimental_run:
+        description: 'Optional: build-windows run number for the experimental build'
+        required: false
+        default: ''
+      build_workflow:
+        description: 'Workflow file that built them'
+        required: false
+        default: 'build-windows.yml'
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: slipstream-package-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      name: ${{ steps.name.outputs.name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Package name
+        id: name
+        run: |
+          name="Slipstream-test-package-$(date -u +%Y-%m-%d)-${GITHUB_RUN_NUMBER}"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "$name"
+
+      - name: Packaging tool tests
+        run: python3 -B packaging/slipstream/test_slipstream_package.py
+
+      # The token can read workflow runs and artifacts of this repository and nothing else
+      # (permissions above). It is in the environment of this step only and is never written to disk.
+      - name: Download the three builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ORIGINAL_BRANCH: ${{ inputs.original_branch || 'slipstream/baseline' }}
+          STABLE_BRANCH: ${{ inputs.stable_branch || 'slipstream/next' }}
+          EXPERIMENTAL_BRANCH: ${{ inputs.experimental_branch || 'slipstream/dev' }}
+          ORIGINAL_RUN: ${{ inputs.original_run }}
+          STABLE_RUN: ${{ inputs.stable_run }}
+          EXPERIMENTAL_RUN: ${{ inputs.experimental_run }}
+          BUILD_WORKFLOW: ${{ inputs.build_workflow || 'build-windows.yml' }}
+        run: |
+          tool=packaging/slipstream/slipstream_package.py
+          python3 -B "$tool" fetch --slot original     --branch "$ORIGINAL_BRANCH"     --run-id "$ORIGINAL_RUN"     --workflow "$BUILD_WORKFLOW" --out art/original
+          python3 -B "$tool" fetch --slot stable       --branch "$STABLE_BRANCH"       --run-id "$STABLE_RUN"       --workflow "$BUILD_WORKFLOW" --out art/stable
+          python3 -B "$tool" fetch --slot experimental --branch "$EXPERIMENTAL_BRANCH" --run-id "$EXPERIMENTAL_RUN" --workflow "$BUILD_WORKFLOW" --out art/experimental
+
+      - name: Assemble the package
+        env:
+          PACKAGE_NAME: ${{ steps.name.outputs.name }}
+          MADE_BY: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 -B packaging/slipstream/slipstream_package.py assemble --artifacts art --repo . --out dist \
+            --name "$PACKAGE_NAME" --made-by "$MADE_BY" --summary "$GITHUB_STEP_SUMMARY"
+          ls -l dist
+          cat "dist/$PACKAGE_NAME/START-HERE.txt"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.name.outputs.name }}
+          path: |
+            dist/${{ steps.name.outputs.name }}.zip
+            dist/${{ steps.name.outputs.name }}.zip.sha256
+          if-no-files-found: error
+          compression-level: 0
+
+  verify:
+    needs: package
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.package.outputs.name }}
+          path: D:\slip\download
+
+      # Windows PowerShell 5.1, as on a user's PC. The script unpacks the zip, checks SHA256SUMS.txt and
+      # runs install, start, rollback and uninstall against D:\slip\programs, never the real profile.
+      - name: Package scripts on Windows (install, update guard, rollback, uninstall)
+        shell: powershell
+        env:
+          PACKAGE_NAME: ${{ needs.package.outputs.name }}
+        run: |
+          & scripts\remoteplay\verify-slipstream-package.ps1 -Zip "D:\slip\download\$env:PACKAGE_NAME.zip" -Work D:\slip\work
+          exit $LASTEXITCODE
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: slipstream-package-verify-log
+          path: D:\slip\work\verify-*.txt
+          if-no-files-found: ignore

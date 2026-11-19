@@ -11,6 +11,7 @@
 #include "veyra/pipeline/Rdna3NrBackend.h"
 #include "veyra/pipeline/AmdNrProvider.h"
 #include "veyra/pipeline/VfgBackend.h"
+#include "veyra/pipeline/StreamChangePass.h"
 #include "veyra/engine/GraphDescription.h"
 #include "veyra/engine/ColorLut.h"
 #include "veyra/engine/EffectChain.h"
@@ -1563,6 +1564,49 @@ bool EnhanceGraph::initHudLock() {
     }
     hudLock_=std::move(pass);
     return true;
+}
+// PushFPS experiment VEYRA_EXP_RP_STREAM_DEDUP: the change of a hardware-decoded picture against
+// the one measured before it, read back as eight words (pipeline/StreamChangePass.h). The engine
+// thread calls this before EnhanceGraph::process for the same frame; the wait inside is bounded by
+// wait100ns (at most StreamChangeRunner::kWaitMs) on a high-resolution timer. Unverified on Windows.
+StreamChangeOutcome EnhanceGraph::measureStreamChange(const AVFrame* frame,int64_t wait100ns){
+    StreamChangeOutcome outcome;
+    if(!initialized_||streamChangeFailed_||!frame||frame->format!=AV_PIX_FMT_D3D12||frame->width<=0||frame->height<=0)return outcome;
+    auto* d3dFrame=reinterpret_cast<AVD3D12VAFrame*>(frame->data[0]);
+    if(d3dFrame==nullptr||d3dFrame->texture==nullptr)return outcome;
+    if(!streamChange_){
+        auto runner=std::make_unique<StreamChangeRunner>();
+        if(!runner->initialize(context_.device(),ring_.queue())){
+            streamChangeFailed_=true;
+            veyra::log::warn("stream-change","the measurement pass could not be created; decoded pictures are not numbered");
+            return outcome;
+        }
+        streamChange_=std::move(runner);
+    }
+    if(!streamChange_->ready()){streamChangeFailed_=true;return outcome;}
+    // The list reads the decoder's texture until its fence, and the caller's frame only covers this
+    // call. So a reference of our own is taken on every call, before anything is submitted, and it
+    // is kept whenever a list that reads this picture may still run (a wait that timed out, or an
+    // error after the list was submitted): a decoder surface is never released or reused under a
+    // list. It replaces the reference held before only then: a new list is recorded only after the
+    // earlier one was seen to finish. Held no longer than that: a surface kept back is one the
+    // decoder cannot reuse.
+    AVFrame* cloned=av_frame_clone(frame);
+    if(!cloned)return outcome;
+    std::shared_ptr<AVFrame> held(cloned,[](AVFrame* value){av_frame_free(&value);});
+    outcome=streamChange_->measure(ring_.queue(),d3dFrame->texture,static_cast<UINT>(d3dFrame->subresource_index),
+        uint32_t(frame->width),uint32_t(frame->height),d3dFrame->sync_ctx.fence,d3dFrame->sync_ctx.fence_value,wait100ns);
+    if(outcome.reading)streamChangeFrame_=std::move(held);
+    else if(!streamChange_->reading())streamChangeFrame_.reset();
+    return outcome;
+}
+void EnhanceGraph::streamChangeCounters(uint64_t& measured,uint64_t& timeouts,uint64_t& failures,double& waitMsMax,double& waitMsMean) const{
+    measured=timeouts=failures=0;waitMsMax=waitMsMean=0;
+    if(!streamChange_)return;
+    const auto& counters=streamChange_->counters();
+    measured=counters.measured;timeouts=counters.timeouts+counters.skipped;failures=counters.failures;waitMsMax=counters.waitMsMax;
+    const uint64_t waited=counters.measured+counters.timeouts;
+    waitMsMean=waited?counters.waitMsSum/double(waited):0.0;
 }
 void EnhanceGraph::composeHudLock(ID3D12GraphicsCommandList* list,unsigned generatedSlot,unsigned heldParity){
     if(hudLock_&&!hudLock_->compose(list,tracker_,generatedSlot,heldParity))
@@ -4546,7 +4590,10 @@ uint32_t EnhanceGraph::actualFlowPerf()const{return nvof_?nvof_->caps().actualPe
 bool EnhanceGraph::vfgFastReady() const { return vfgBackend_&&vfgBackend_->fastReady(); }
 bool EnhanceGraph::fgCreated() const
 {
-    return (vfgBackend_&&vfgBackend_->created()) || fsrActive() || amfFrcActive() || (fgBackend_ && fgBackend_->created());
+    // PushFlow too: at f306f570 it was missing here, so fgCandidates stayed 0 and a live PushFlow session
+    // presented no generated frame (PS Remote Play window, RTX 4090, 2026-11-18; the GPU tests drive
+    // PushFlowBackend directly, not through the graph).
+    return (vfgBackend_&&vfgBackend_->created()) || fsrActive() || amfFrcActive() || pushFlowActive() || (fgBackend_ && fgBackend_->created());
 }
 
 uint64_t EnhanceGraph::lastNvofSignal() const
@@ -4583,6 +4630,8 @@ ID3D12Resource* EnhanceGraph::generatedFrameResource(uint32_t slot) const
 // ---------------------------------------------------------------------------
 void EnhanceGraph::shutdown()
 {
+    // Its own list and fence: wait for it (bounded) before the decoder picture it reads is let go.
+    streamChange_.reset();streamChangeFrame_.reset();streamChangeFailed_=false;
     pausedNrCacheValid_=pausedNrResidualOnly_=false;pausedNrFrame_=nullptr;
     lastAppliedSettings_.reset();pausedNrSettings_.reset();
     if (!initialized_ && !coreHost_ && !nrAdapter_ && !nvof_ && !srcRgba_) return;

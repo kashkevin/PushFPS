@@ -100,6 +100,41 @@ QVariantMap QmlPlayerBridge::pushLiveStats() const {
     m["outputWidth"] = int(s.metrics.resolution.output.width);
     m["outputHeight"] = int(s.metrics.resolution.output.height);
     m["hdr"] = s.sourceHdr;
+    // Statistics overlay (PushStatsOverlay.qml) and the performance modes: numbers the engine already has,
+    // copied as they are. A key that is absent or null means "not measured" and is shown as that.
+    m["realPresentFps"] = flow.realPresentFps;
+    m["generatedPresentFps"] = flow.generatedPresentFps;
+    m["remotePlay"] = s.remotePlay;
+    if (s.remotePlay && s.remoteRatesReady) {
+        m["streamReceivedFps"] = s.remoteReceivedFps;
+        m["streamDecodedFps"] = s.remoteDecodedFps;
+    }
+    // VEYRA_EXP_RP_STREAM_DEDUP: what the console sends and how many of those pictures are new, per 10 s.
+    const auto& cadence = s.streamCadence;
+    m["cadenceActive"] = cadence.active;
+    if (cadence.active) {
+        m["cadenceState"] = cadence.state;
+        m["cadenceStreamFps"] = cadence.streamFps;
+        m["cadenceSourceFps"] = cadence.sourceFps;
+        m["cadenceRealPresentedFps"] = cadence.realPresentedFps;
+        m["cadenceGeneratedPresentedFps"] = cadence.generatedPresentedFps;
+        m["cadencePresentedFps"] = cadence.presentedFps;
+    }
+    // VEYRA_EXP_RP_HEALTH: the newest five-second connection health snapshot. No addresses.
+    const auto& health = s.remoteHealth;
+    m["healthValid"] = s.remotePlay && health.valid;
+    if (s.remotePlay && health.valid) {
+        m["healthGrade"] = QString::fromLatin1(remoteplay::healthGradeName(health.grade));
+        m["healthLossPercent"] = health.lossPercent;
+        m["healthJitterMs"] = health.frameJitterMs;
+        m["healthJitterPeakMs"] = health.frameJitterPeakMs;
+        m["healthRecoveryEvents"] = QVariant::fromValue(qulonglong(health.recoveryEvents()));
+        m["healthFrameDrops"] = QVariant::fromValue(qulonglong(health.networkFrameDrops));
+        m["healthRttMs"] = optionalNumber(health.rttMs);
+        m["routeKnown"] = health.route.addressKnown;
+        m["routeDirectLan"] = health.route.directLan();
+        m["routeLink"] = QString::fromLatin1(health.route.linkName());
+    }
     return m;
 }
 
