@@ -1,0 +1,444 @@
+diff --git a/lib/include/chiaki/takion.h b/lib/include/chiaki/takion.h
+index 32f228b1..f23231be 100644
+--- a/lib/include/chiaki/takion.h
++++ b/lib/include/chiaki/takion.h
+@@ -120,6 +120,14 @@ typedef struct chiaki_takion_connect_info_t
+ } ChiakiTakionConnectInfo;
+ 
+ 
++#define CHIAKI_VEYRA_REORDER_SKIP_MEMORY 4
++typedef struct chiaki_veyra_reorder_skip_t
++{
++	uint64_t begin; // first packet index a reorder timeout gave up on
++	uint64_t count; // how many; 0 = unused
++	int64_t wait_start_us; // when the wait for them began
++} ChiakiVeyraReorderSkip;
++
+ typedef struct chiaki_takion_t
+ {
+ 	ChiakiLog *log;
+@@ -157,6 +165,11 @@ typedef struct chiaki_takion_t
+ 	bool video_queue_initialized;
+ 	int64_t video_queue_head_wait_start_us;
+ 	uint64_t video_queue_head_wait_seq_num;
++	int64_t av_reorder_timeout_us; // latched from the Veyra transport tuning in chiaki_takion_connect()
++	// The last few reorder timeouts, to recognise a packet that arrives after
++	// it was given up on. Written and read by the Takion thread only.
++	ChiakiVeyraReorderSkip veyra_reorder_skips[CHIAKI_VEYRA_REORDER_SKIP_MEMORY];
++	unsigned int veyra_reorder_skip_next;
+ 	ChiakiTakionSendBuffer send_buffer;
+ 
+ 	ChiakiTakionCallback cb;
+@@ -274,6 +287,74 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_v7_av_packet_parse(ChiakiTakionAVPac
+ 
+ CHIAKI_EXPORT void chiaki_takion_format_congestion(uint8_t *buf, ChiakiTakionCongestionPacket *packet, uint64_t key_pos);
+ 
++/*
++ * Veyra transport tuning and counters. Process-wide (one streaming session at
++ * a time is assumed). With the tuning never set, or set to 0, behaviour is
++ * exactly upstream's: 16000 us AV reorder wait, SO_RCVBUF = a_rwnd (0x19000).
++ * A tuned SO_RCVBUF the system refuses never fails the connection: a_rwnd is
++ * set instead, as upstream would have, and the fallback is counted.
++ * Neither value changes anything sent to the console: the advertised a_rwnd
++ * stays 0x19000 whatever the socket buffer is.
++ */
++#define CHIAKI_VEYRA_TRANSPORT_API 1
++#define CHIAKI_VEYRA_AV_REORDER_TIMEOUT_US_DEFAULT 16000
++#define CHIAKI_VEYRA_TRANSPORT_LIVE_REORDER_API 1 // the live reorder wait and the lateness counters below
++#define CHIAKI_VEYRA_REORDER_LATENESS_BUCKETS 9
++
++typedef enum chiaki_veyra_transport_stat_t {
++	CHIAKI_VEYRA_STAT_AV_PACKETS = 0, // AV datagrams parsed (video, audio, haptics)
++	CHIAKI_VEYRA_STAT_VIDEO_PACKETS, // of those, video units entering the reorder queue
++	CHIAKI_VEYRA_STAT_REORDER_GAPS, // times the head of the video queue was missing and a wait began
++	CHIAKI_VEYRA_STAT_REORDER_TIMEOUTS, // waits that ran out
++	CHIAKI_VEYRA_STAT_REORDER_SKIPPED, // missing video packets given up after a timeout
++	CHIAKI_VEYRA_STAT_REORDER_DROPPED, // video packets refused by the queue: late, duplicate or overflow
++	CHIAKI_VEYRA_STAT_FRAMES_FEC_RECOVERED, // frames completed by FEC
++	CHIAKI_VEYRA_STAT_FRAMES_FEC_FAILED, // frames FEC could not complete
++	CHIAKI_VEYRA_STAT_CORRUPT_REPORTS, // corrupt-frame reports sent to the console
++	CHIAKI_VEYRA_STAT_CORRUPT_FRAMES, // frames named in those reports
++	CHIAKI_VEYRA_STAT_IDR_REQUESTS, // keyframe requests sent to the console
++	CHIAKI_VEYRA_STAT_CONGESTION_REPORTS, // congestion packets sent (one per 200 ms)
++	CHIAKI_VEYRA_STAT_CONGESTION_RECEIVED, // sum of measured received counts, before clamping
++	CHIAKI_VEYRA_STAT_CONGESTION_LOST, // sum of measured lost counts, before clamping
++	CHIAKI_VEYRA_STAT_CONGESTION_LOST_REPORTED, // sum of lost counts as sent (after packet_loss_max)
++	CHIAKI_VEYRA_STAT_SENKUSHA_RTT_US, // set, not added: average Senkusha RTT; 0 = not measured
++	CHIAKI_VEYRA_STAT_REORDER_TIMEOUT_US, // set: wait in use by the newest Takion connection
++	CHIAKI_VEYRA_STAT_RCVBUF_REQUESTED, // set: SO_RCVBUF asked for by the newest Takion connection
++	CHIAKI_VEYRA_STAT_RCVBUF_EFFECTIVE, // set: what getsockopt reported afterwards; 0 = unknown
++	CHIAKI_VEYRA_STAT_RCVBUF_FALLBACKS, // tuned SO_RCVBUF refused by the system; connection continued with a_rwnd
++	CHIAKI_VEYRA_STAT_REORDER_LATE_ARRIVALS, // video packets that arrived after their wait had run out (among REORDER_DROPPED)
++	// Sum over REORDER_TIMEOUTS of how much longer than asked the wait lasted
++	// (timer granularity and scheduling of the Takion thread; also a live wait
++	// shortened while one was running).
++	CHIAKI_VEYRA_STAT_REORDER_OVERSHOOT_US,
++	// How long after its wait began an out-of-order video packet arrived, in time
++	// or too late: <=1000, <=2000, <=3000, <=4000, <=6000, <=8000, <=12000,
++	// <=16000 us, and above (CHIAKI_VEYRA_REORDER_LATENESS_BUCKETS counters).
++	CHIAKI_VEYRA_STAT_REORDER_LATENESS_0,
++	CHIAKI_VEYRA_STAT_REORDER_LATENESS_LAST = CHIAKI_VEYRA_STAT_REORDER_LATENESS_0 + CHIAKI_VEYRA_REORDER_LATENESS_BUCKETS - 1,
++	CHIAKI_VEYRA_STAT_COUNT
++} ChiakiVeyraTransportStat;
++
++/**
++ * Applies to Takion connections made after the call. 0 = upstream default.
++ * Thread-safe; call before chiaki_session_start().
++ */
++CHIAKI_EXPORT void chiaki_veyra_transport_set_tuning(uint32_t av_reorder_timeout_us, uint32_t rcvbuf_bytes);
++
++/**
++ * Changes the AV reorder wait of the running Takion connection: its thread
++ * takes the value the next time it looks at the video queue. 0 = keep what
++ * the connection started with. Never longer than upstream's 16000 us.
++ * Cleared by chiaki_veyra_transport_set_tuning(). Thread-safe, lock-free.
++ */
++CHIAKI_EXPORT void chiaki_veyra_transport_set_av_reorder_timeout_live(uint32_t av_reorder_timeout_us);
++
++/** Thread-safe, lock-free. */
++CHIAKI_EXPORT void chiaki_veyra_transport_stat_add(ChiakiVeyraTransportStat stat, uint64_t n);
++CHIAKI_EXPORT void chiaki_veyra_transport_stat_set(ChiakiVeyraTransportStat stat, uint64_t value);
++CHIAKI_EXPORT uint64_t chiaki_veyra_transport_stat_get(ChiakiVeyraTransportStat stat);
++CHIAKI_EXPORT void chiaki_veyra_transport_stats_reset(void);
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/lib/src/congestioncontrol.c b/lib/src/congestioncontrol.c
+index 64095287..62534844 100644
+--- a/lib/src/congestioncontrol.c
++++ b/lib/src/congestioncontrol.c
+@@ -25,6 +25,9 @@ static void *congestion_control_thread_func(void *user)
+ 		ChiakiTakionCongestionPacket packet = { 0 };
+ 		uint64_t total = received + lost;
+ 		control->packet_loss = total > 0 ? (double)lost / total : 0;
++		chiaki_veyra_transport_stat_add(CHIAKI_VEYRA_STAT_CONGESTION_REPORTS, 1);
++		chiaki_veyra_transport_stat_add(CHIAKI_VEYRA_STAT_CONGESTION_RECEIVED, received);
++		chiaki_veyra_transport_stat_add(CHIAKI_VEYRA_STAT_CONGESTION_LOST, lost);
+ 		if(control->packet_loss > control->packet_loss_max)
+ 		{
+ 			CHIAKI_LOGD(control->takion->log, "Clamping reported packet loss: measured=%.1f%% reported_max=%.1f%%",
+@@ -34,6 +37,7 @@ static void *congestion_control_thread_func(void *user)
+ 		}
+ 		packet.received = (uint16_t)received;
+ 		packet.lost = (uint16_t)lost;
++		chiaki_veyra_transport_stat_add(CHIAKI_VEYRA_STAT_CONGESTION_LOST_REPORTED, lost);
+ 		CHIAKI_LOGV(control->takion->log, "Sending Congestion Control Packet, received: %u, lost: %u",
+ 			(unsigned int)packet.received, (unsigned int)packet.lost);
+ 		chiaki_takion_send_congestion(control->takion, &packet);
+diff --git a/lib/src/senkusha.c b/lib/src/senkusha.c
+index 05b45178..34737f94 100644
+--- a/lib/src/senkusha.c
++++ b/lib/src/senkusha.c
+@@ -383,6 +383,7 @@ static ChiakiErrorCode senkusha_run_rtt_test(ChiakiSenkusha *senkusha, uint16_t
+ 	}
+ 
+ 	*rtt_us = rtt_us_acc / pings_successful;
++	chiaki_veyra_transport_stat_set(CHIAKI_VEYRA_STAT_SENKUSHA_RTT_US, *rtt_us ? *rtt_us : 1);
+ 	CHIAKI_LOGI(senkusha->log, "Senkusha determined average RTT = %.3f ms", (float)(*rtt_us) * 0.001f);
+ 
+ 	return CHIAKI_ERR_SUCCESS;
+diff --git a/lib/src/streamconnection.c b/lib/src/streamconnection.c
+index afa1a60a..ebcf992d 100644
+--- a/lib/src/streamconnection.c
++++ b/lib/src/streamconnection.c
+@@ -1279,6 +1279,8 @@ CHIAKI_EXPORT ChiakiErrorCode stream_connection_send_corrupt_frame(ChiakiStreamC
+ 	}
+ 
+ 	CHIAKI_LOGW(stream_connection->log, "StreamConnection reporting corrupt frame(s) from %u to %u", (unsigned int)start, (unsigned int)end);
++	chiaki_veyra_transport_stat_add(CHIAKI_VEYRA_STAT_CORRUPT_REPORTS, 1);
++	chiaki_veyra_transport_stat_add(CHIAKI_VEYRA_STAT_CORRUPT_FRAMES, (uint64_t)(ChiakiSeqNum16)(end - start) + 1);
+ 	return chiaki_takion_send_message_data(&stream_connection->takion, 1, 2, buf, stream.bytes_written, NULL);
+ }
+ 
+@@ -1298,5 +1300,6 @@ CHIAKI_EXPORT ChiakiErrorCode stream_connection_send_idr_request(ChiakiStreamCon
+ 	}
+ 
+ 	CHIAKI_LOGI(stream_connection->log, "StreamConnection requesting IDR frame");
++	chiaki_veyra_transport_stat_add(CHIAKI_VEYRA_STAT_IDR_REQUESTS, 1);
+ 	return chiaki_takion_send_message_data(&stream_connection->takion, 1, 2, buf, stream.bytes_written, NULL);
+ }
+diff --git a/lib/src/takion.c b/lib/src/takion.c
+index 4e653a2a..64dce220 100644
+--- a/lib/src/takion.c
++++ b/lib/src/takion.c
+@@ -56,6 +56,131 @@
+ #define TAKION_EXPECT_TIMEOUT_MS 5000
+ 
+ #define MAX_CONNECT_RESEND_TRIES 3
++
++// Veyra transport tuning and counters, see takion.h. 64-bit interlocked
++// operations only: no lock is taken on the per-packet path.
++#ifdef _WIN32
++#define VEYRA_ATOMIC_ADD(ptr, n) ((uint64_t)InterlockedExchangeAdd64((volatile LONG64 *)(ptr), (LONG64)(n)))
++#define VEYRA_ATOMIC_SET(ptr, v) ((void)InterlockedExchange64((volatile LONG64 *)(ptr), (LONG64)(v)))
++#else
++#define VEYRA_ATOMIC_ADD(ptr, n) __atomic_fetch_add((ptr), (uint64_t)(n), __ATOMIC_RELAXED)
++#define VEYRA_ATOMIC_SET(ptr, v) __atomic_store_n((ptr), (uint64_t)(v), __ATOMIC_RELAXED)
++#endif
++
++static uint64_t veyra_transport_stats[CHIAKI_VEYRA_STAT_COUNT];
++static uint64_t veyra_tuning_av_reorder_timeout_us; // 0 = TAKION_AV_REORDER_TIMEOUT_US
++static uint64_t veyra_tuning_rcvbuf_bytes; // 0 = a_rwnd
++static uint64_t veyra_live_av_reorder_timeout_us; // 0 = what the connection latched
++
++CHIAKI_EXPORT void chiaki_veyra_transport_set_tuning(uint32_t av_reorder_timeout_us, uint32_t rcvbuf_bytes)
++{
++	VEYRA_ATOMIC_SET(&veyra_tuning_av_reorder_timeout_us, av_reorder_timeout_us);
++	VEYRA_ATOMIC_SET(&veyra_tuning_rcvbuf_bytes, rcvbuf_bytes > (uint32_t)INT32_MAX ? (uint32_t)INT32_MAX : rcvbuf_bytes);
++	VEYRA_ATOMIC_SET(&veyra_live_av_reorder_timeout_us, 0);
++}
++
++CHIAKI_EXPORT void chiaki_veyra_transport_set_av_reorder_timeout_live(uint32_t av_reorder_timeout_us)
++{
++	if(av_reorder_timeout_us > CHIAKI_VEYRA_AV_REORDER_TIMEOUT_US_DEFAULT)
++		av_reorder_timeout_us = CHIAKI_VEYRA_AV_REORDER_TIMEOUT_US_DEFAULT;
++	VEYRA_ATOMIC_SET(&veyra_live_av_reorder_timeout_us, av_reorder_timeout_us);
++}
++
++CHIAKI_EXPORT void chiaki_veyra_transport_stat_add(ChiakiVeyraTransportStat stat, uint64_t n)
++{
++	if((unsigned int)stat < (unsigned int)CHIAKI_VEYRA_STAT_COUNT)
++		VEYRA_ATOMIC_ADD(&veyra_transport_stats[stat], n);
++}
++
++CHIAKI_EXPORT void chiaki_veyra_transport_stat_set(ChiakiVeyraTransportStat stat, uint64_t value)
++{
++	if((unsigned int)stat < (unsigned int)CHIAKI_VEYRA_STAT_COUNT)
++		VEYRA_ATOMIC_SET(&veyra_transport_stats[stat], value);
++}
++
++CHIAKI_EXPORT uint64_t chiaki_veyra_transport_stat_get(ChiakiVeyraTransportStat stat)
++{
++	if((unsigned int)stat >= (unsigned int)CHIAKI_VEYRA_STAT_COUNT)
++		return 0;
++	return VEYRA_ATOMIC_ADD(&veyra_transport_stats[stat], 0);
++}
++
++CHIAKI_EXPORT void chiaki_veyra_transport_stats_reset(void)
++{
++	for(int i=0; i<CHIAKI_VEYRA_STAT_COUNT; i++)
++		VEYRA_ATOMIC_SET(&veyra_transport_stats[i], 0);
++}
++
++static int veyra_takion_rcvbuf(ChiakiTakion *takion)
++{
++	uint64_t tuned = VEYRA_ATOMIC_ADD(&veyra_tuning_rcvbuf_bytes, 0);
++	int rcvbuf_val = tuned ? (int)tuned : (int)takion->a_rwnd;
++	chiaki_veyra_transport_stat_set(CHIAKI_VEYRA_STAT_RCVBUF_REQUESTED, (uint64_t)rcvbuf_val);
++	return rcvbuf_val;
++}
++
++// After a failed setsockopt(SO_RCVBUF) with rcvbuf_val. A tuned size that the
++// system refuses must not cost the connection: set upstream's a_rwnd instead and
++// return that call's result. Untuned (rcvbuf_val is a_rwnd already) there is
++// nothing to fall back to: -1, and the caller fails exactly as upstream does.
++static int veyra_takion_rcvbuf_fallback(ChiakiTakion *takion, int rcvbuf_val)
++{
++	static uint64_t logged; // the warning once per process; every fallback is counted
++	const int original_val = (int)takion->a_rwnd;
++	if(rcvbuf_val == original_val)
++		return -1;
++	if(VEYRA_ATOMIC_ADD(&logged, 1) == 0)
++		CHIAKI_LOGW(takion->log, "Takion failed to setsockopt tuned SO_RCVBUF of %d: " CHIAKI_SOCKET_ERROR_FMT ", continuing with %d", rcvbuf_val, CHIAKI_SOCKET_ERROR_VALUE, original_val);
++	chiaki_veyra_transport_stat_add(CHIAKI_VEYRA_STAT_RCVBUF_FALLBACKS, 1);
++	return setsockopt(takion->sock, SOL_SOCKET, SO_RCVBUF, (const CHIAKI_SOCKET_BUF_TYPE)&original_val, sizeof(original_val));
++}
++
++static void veyra_takion_rcvbuf_applied(ChiakiTakion *takion)
++{
++	int effective = 0;
++	socklen_t effective_size = sizeof(effective);
++	if(getsockopt(takion->sock, SOL_SOCKET, SO_RCVBUF, (CHIAKI_SOCKET_BUF_TYPE)&effective, &effective_size) < 0 || effective < 0)
++		effective = 0;
++	chiaki_veyra_transport_stat_set(CHIAKI_VEYRA_STAT_RCVBUF_EFFECTIVE, (uint64_t)effective);
++}
++
++// Takion thread only. The live reorder wait, when one was set since the tuning.
++static void veyra_takion_reorder_refresh(ChiakiTakion *takion)
++{
++	uint64_t live = VEYRA_ATOMIC_ADD(&veyra_live_av_reorder_timeout_us, 0);
++	if(live && (int64_t)live != takion->av_reorder_timeout_us)
++	{
++		takion->av_reorder_timeout_us = (int64_t)live;
++		chiaki_veyra_transport_stat_set(CHIAKI_VEYRA_STAT_REORDER_TIMEOUT_US, live);
++	}
++}
++
++static void veyra_takion_reorder_lateness(int64_t lateness_us)
++{
++	static const int64_t edges[CHIAKI_VEYRA_REORDER_LATENESS_BUCKETS - 1] = { 1000, 2000, 3000, 4000, 6000, 8000, 12000, 16000 };
++	int bucket = 0;
++	while(bucket < CHIAKI_VEYRA_REORDER_LATENESS_BUCKETS - 1 && lateness_us > edges[bucket])
++		bucket++;
++	chiaki_veyra_transport_stat_add((ChiakiVeyraTransportStat)(CHIAKI_VEYRA_STAT_REORDER_LATENESS_0 + bucket), 1);
++}
++
++// Takion thread only. A video packet older than the queue's head: was it one
++// of the packets a recent timeout gave up on? Then it was late, not lost.
++static void veyra_takion_reorder_late_arrival(ChiakiTakion *takion, ChiakiReorderQueue *queue, uint64_t seq_num)
++{
++	if(!queue->seq_num_lt(seq_num, queue->begin))
++		return;
++	for(unsigned int i=0; i<CHIAKI_VEYRA_REORDER_SKIP_MEMORY; i++)
++	{
++		uint64_t begin = takion->veyra_reorder_skips[i].begin;
++		uint64_t count = takion->veyra_reorder_skips[i].count;
++		if(!count || queue->seq_num_lt(seq_num, begin) || !queue->seq_num_lt(seq_num, queue->seq_num_add(begin, count)))
++			continue;
++		chiaki_veyra_transport_stat_add(CHIAKI_VEYRA_STAT_REORDER_LATE_ARRIVALS, 1);
++		veyra_takion_reorder_lateness((int64_t)chiaki_time_now_monotonic_us() - takion->veyra_reorder_skips[i].wait_start_us);
++		return;
++	}
++}
+ /**
+  * Base type of Takion packets. Lower nibble of the first byte in datagrams.
+  */
+@@ -224,6 +349,13 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_connect(ChiakiTakion *takion, Chiaki
+ 	takion->cb = info->cb;
+ 	takion->cb_user = info->cb_user;
+ 	takion->a_rwnd = TAKION_A_RWND;
++	{
++		uint64_t tuned = VEYRA_ATOMIC_ADD(&veyra_tuning_av_reorder_timeout_us, 0);
++		takion->av_reorder_timeout_us = tuned ? (int64_t)tuned : TAKION_AV_REORDER_TIMEOUT_US;
++		chiaki_veyra_transport_stat_set(CHIAKI_VEYRA_STAT_REORDER_TIMEOUT_US, (uint64_t)takion->av_reorder_timeout_us);
++		memset(takion->veyra_reorder_skips, 0, sizeof(takion->veyra_reorder_skips));
++		takion->veyra_reorder_skip_next = 0;
++	}
+ 
+ 	takion->tag_local = chiaki_random_32(); // 0x4823
+ 	takion->seq_num_local = takion->tag_local;
+@@ -257,14 +389,17 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_connect(ChiakiTakion *takion, Chiaki
+ 			CHIAKI_LOGE(takion->log, "Takion had problem reading extra messages from socket using PSN Connection with error: " CHIAKI_SOCKET_ERROR_FMT, CHIAKI_SOCKET_ERROR_VALUE);
+ 			goto error_sock;
+ 		}
+-		const int rcvbuf_val = takion->a_rwnd;
++		const int rcvbuf_val = veyra_takion_rcvbuf(takion);
+ 		int r = setsockopt(takion->sock, SOL_SOCKET, SO_RCVBUF, (const CHIAKI_SOCKET_BUF_TYPE)&rcvbuf_val, sizeof(rcvbuf_val));
++		if(r < 0)
++			r = veyra_takion_rcvbuf_fallback(takion, rcvbuf_val);
+ 		if(r < 0)
+ 		{
+ 			CHIAKI_LOGE(takion->log, "Takion failed to setsockopt SO_RCVBUF: " CHIAKI_SOCKET_ERROR_FMT, CHIAKI_SOCKET_ERROR_VALUE);
+ 			ret = CHIAKI_ERR_NETWORK;
+ 			goto error_sock;
+ 		}
++		veyra_takion_rcvbuf_applied(takion);
+ 
+ #if defined(__APPLE__) && TARGET_OS_OSX
+ 		SInt32 majorVersion;
+@@ -345,14 +480,17 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_connect(ChiakiTakion *takion, Chiaki
+ 			ret = CHIAKI_ERR_NETWORK;
+ 			goto error_pipe;
+ 		}
+-		const int rcvbuf_val = takion->a_rwnd;
++		const int rcvbuf_val = veyra_takion_rcvbuf(takion);
+ 		int r = setsockopt(takion->sock, SOL_SOCKET, SO_RCVBUF, (const CHIAKI_SOCKET_BUF_TYPE)&rcvbuf_val, sizeof(rcvbuf_val));
++		if(r < 0)
++			r = veyra_takion_rcvbuf_fallback(takion, rcvbuf_val);
+ 		if(r < 0)
+ 		{
+ 			CHIAKI_LOGE(takion->log, "Takion failed to setsockopt SO_RCVBUF: " CHIAKI_SOCKET_ERROR_FMT, CHIAKI_SOCKET_ERROR_VALUE);
+ 			ret = CHIAKI_ERR_NETWORK;
+ 			goto error_sock;
+ 		}
++		veyra_takion_rcvbuf_applied(takion);
+ 		if(info->ip_dontfrag)
+ 		{
+ #if defined(__APPLE__) && TARGET_OS_OSX
+@@ -931,6 +1069,7 @@ static void takion_av_drop(uint64_t seq_num, void *elem_user, void *cb_user)
+ {
+ 	ChiakiTakion *takion = cb_user;
+ 	CHIAKI_LOGD(takion->log, "Takion dropping AV packet with index %#llx", (unsigned long long)seq_num);
++	chiaki_veyra_transport_stat_add(CHIAKI_VEYRA_STAT_REORDER_DROPPED, 1);
+ 	TakionAVPacketEntry *entry = elem_user;
+ 	free(entry->buf);
+ 	free(entry);
+@@ -946,6 +1085,7 @@ static void takion_av_queue_flush_with_timeout(ChiakiTakion *takion, ChiakiReord
+ {
+ 	int64_t now = chiaki_time_now_monotonic_us();
+ 	bool made_progress = true;
++	veyra_takion_reorder_refresh(takion);
+ 
+ 	while(made_progress)
+ 	{
+@@ -956,6 +1096,8 @@ static void takion_av_queue_flush_with_timeout(ChiakiTakion *takion, ChiakiReord
+ 		while(chiaki_reorder_queue_pull(queue, &seq_num, (void **)&entry))
+ 		{
+ 			made_progress = true;
++			if(*head_wait_start_us != 0 && seq_num == *head_wait_seq_num)
++				veyra_takion_reorder_lateness(now - *head_wait_start_us); // the awaited packet came
+ 			if(takion->cb)
+ 			{
+ 				ChiakiTakionEvent event = { 0 };
+@@ -993,12 +1135,13 @@ static void takion_av_queue_flush_with_timeout(ChiakiTakion *takion, ChiakiReord
+ 		// Head slot is missing (packet lost or not yet arrived)
+ 		if(*head_wait_start_us == 0)
+ 		{
++			chiaki_veyra_transport_stat_add(CHIAKI_VEYRA_STAT_REORDER_GAPS, 1);
+ 			*head_wait_start_us = now;
+ 			*head_wait_seq_num = queue->begin;
+ 			break;
+ 		}
+ 
+-		if(now - *head_wait_start_us <= TAKION_AV_REORDER_TIMEOUT_US)
++		if(now - *head_wait_start_us <= takion->av_reorder_timeout_us)
+ 			break;
+ 
+ 		// Timeout exceeded: skip directly to the first buffered packet so startup
+@@ -1018,6 +1161,13 @@ static void takion_av_queue_flush_with_timeout(ChiakiTakion *takion, ChiakiReord
+ 		CHIAKI_LOGD(takion->log, "Takion AV reorder timeout: skipping %llu missing packet(s) before %#llx",
+ 			(unsigned long long)skipped,
+ 			(unsigned long long)queue->seq_num_add(queue->begin, skipped));
++		chiaki_veyra_transport_stat_add(CHIAKI_VEYRA_STAT_REORDER_TIMEOUTS, 1);
++		chiaki_veyra_transport_stat_add(CHIAKI_VEYRA_STAT_REORDER_SKIPPED, skipped);
++		chiaki_veyra_transport_stat_add(CHIAKI_VEYRA_STAT_REORDER_OVERSHOOT_US, (uint64_t)(now - *head_wait_start_us - takion->av_reorder_timeout_us));
++		takion->veyra_reorder_skips[takion->veyra_reorder_skip_next].begin = queue->begin;
++		takion->veyra_reorder_skips[takion->veyra_reorder_skip_next].count = skipped;
++		takion->veyra_reorder_skips[takion->veyra_reorder_skip_next].wait_start_us = *head_wait_start_us;
++		takion->veyra_reorder_skip_next = (takion->veyra_reorder_skip_next + 1) % CHIAKI_VEYRA_REORDER_SKIP_MEMORY;
+ 		queue->begin = queue->seq_num_add(queue->begin, skipped);
+ 		queue->count -= skipped;
+ 		*head_wait_start_us = 0;
+@@ -1048,7 +1198,7 @@ static uint64_t takion_av_queues_next_timeout_ms(ChiakiTakion *takion)
+ 		if(head_wait_start_us == 0)
+ 			continue;
+ 
+-		int64_t remaining_us = TAKION_AV_REORDER_TIMEOUT_US - (now - head_wait_start_us);
++		int64_t remaining_us = takion->av_reorder_timeout_us - (now - head_wait_start_us);
+ 		if(remaining_us <= 0)
+ 			return 0;
+ 
+@@ -1656,6 +1806,9 @@ static void takion_handle_packet_av(ChiakiTakion *takion, uint8_t base_type, uin
+ 	}
+ 
+ 	bool is_video = (base_type == TAKION_PACKET_TYPE_VIDEO);
++	chiaki_veyra_transport_stat_add(CHIAKI_VEYRA_STAT_AV_PACKETS, 1);
++	if(is_video)
++		chiaki_veyra_transport_stat_add(CHIAKI_VEYRA_STAT_VIDEO_PACKETS, 1);
+ 	if(!is_video)
+ 	{
+ 		if(takion->cb)
+@@ -1710,6 +1863,7 @@ static void takion_handle_packet_av(ChiakiTakion *takion, uint8_t base_type, uin
+ 	entry->buf_size = buf_size;
+ 	entry->packet = packet;
+ 
++	veyra_takion_reorder_late_arrival(takion, queue, packet.packet_index);
+ 	chiaki_reorder_queue_push(queue, packet.packet_index, entry);
+ 	takion_av_queue_flush_with_timeout(takion, queue, head_wait, head_wait_seq_num);
+ }
+diff --git a/lib/src/videoreceiver.c b/lib/src/videoreceiver.c
+index cd86b0ef..58456c59 100644
+--- a/lib/src/videoreceiver.c
++++ b/lib/src/videoreceiver.c
+@@ -201,6 +201,10 @@ static ChiakiErrorCode chiaki_video_receiver_flush_frame(ChiakiVideoReceiver *vi
+ 	uint8_t *frame;
+ 	size_t frame_size;
+ 	ChiakiFrameProcessorFlushResult flush_result = chiaki_frame_processor_flush(&video_receiver->frame_processor, &frame, &frame_size);
++	if(flush_result == CHIAKI_FRAME_PROCESSOR_FLUSH_RESULT_FEC_SUCCESS)
++		chiaki_veyra_transport_stat_add(CHIAKI_VEYRA_STAT_FRAMES_FEC_RECOVERED, 1);
++	else if(flush_result == CHIAKI_FRAME_PROCESSOR_FLUSH_RESULT_FEC_FAILED)
++		chiaki_veyra_transport_stat_add(CHIAKI_VEYRA_STAT_FRAMES_FEC_FAILED, 1);
+ 
+ 	if(flush_result == CHIAKI_FRAME_PROCESSOR_FLUSH_RESULT_FAILED
+ 		|| flush_result == CHIAKI_FRAME_PROCESSOR_FLUSH_RESULT_FEC_FAILED)

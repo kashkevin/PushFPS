@@ -6,6 +6,14 @@
 #if !defined(CHIAKI_VEYRA_VIDEO_METADATA_API) || CHIAKI_VEYRA_VIDEO_METADATA_API != 1
 #error The reviewed Chiaki video metadata patch is required
 #endif
+#include <chiaki/takion.h>
+#if !defined(CHIAKI_VEYRA_TRANSPORT_API) || CHIAKI_VEYRA_TRANSPORT_API != 1
+#error The Chiaki transport tuning patch (0004) is required
+#endif
+#if !defined(CHIAKI_VEYRA_TRANSPORT_LIVE_REORDER_API) || CHIAKI_VEYRA_TRANSPORT_LIVE_REORDER_API != 1
+#error The Chiaki transport tuning patch (0004) with the live reorder wait is required
+#endif
+#include <chiaki/thread.h>
 #include <chiaki/opusdecoder.h>
 #include <chiaki/controller.h>
 #include <chiaki/orientation.h>
@@ -45,6 +53,67 @@ BackendResult initializeChiaki(){
     static ChiakiErrorCode code=CHIAKI_ERR_UNKNOWN;
     std::call_once(flag,[]{code=chiaki_lib_init();});
     return result(code,"chiaki_lib_init");
+}
+namespace {
+// VEYRA_EXP_RP_THREAD_PRIORITY. Chiaki calls its affinity hook at the start of
+// each of its threads, on that thread; the two that carry the stream (Takion:
+// receive, reorder, FEC, our video callback) and the pad (feedback sender) go
+// one step above normal. Installed once and only when the switch was ever on;
+// with it off the hook returns before doing anything.
+std::atomic<bool> boostThreads{false};
+std::atomic<std::uint32_t> threadsRaised{0},threadPriorityFailures{0};
+void threadHook(ChiakiThreadName name,void*) noexcept {
+    if(!boostThreads.load(std::memory_order_relaxed))return;
+    if(name!=CHIAKI_THREAD_NAME_TAKION&&name!=CHIAKI_THREAD_NAME_FEEDBACK)return;
+    if(SetThreadPriority(GetCurrentThread(),THREAD_PRIORITY_ABOVE_NORMAL))++threadsRaised;else ++threadPriorityFailures;
+}
+std::uint32_t stat32(ChiakiVeyraTransportStat stat) noexcept {
+    const auto value=chiaki_veyra_transport_stat_get(stat);
+    return value>0xffffffffull?0xffffffffu:static_cast<std::uint32_t>(value);
+}
+}
+void configureTransport(const TransportTuning& tuning){
+    chiaki_veyra_transport_set_tuning(tuning.reorderTimeoutUs,tuning.receiveBufferBytes);
+    chiaki_veyra_transport_stats_reset();
+    threadsRaised=0;threadPriorityFailures=0;
+    boostThreads=tuning.threadPriority;
+    if(tuning.threadPriority){
+        static std::once_flag installed;
+        std::call_once(installed,[]{chiaki_thread_set_affinity_cb(threadHook,nullptr);});
+    }
+}
+TransportCounters readTransportCounters() noexcept {
+    TransportCounters c;
+    c.avPackets=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_AV_PACKETS);
+    c.videoPackets=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_VIDEO_PACKETS);
+    c.reorderGaps=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_REORDER_GAPS);
+    c.reorderTimeouts=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_REORDER_TIMEOUTS);
+    c.reorderSkipped=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_REORDER_SKIPPED);
+    c.reorderDropped=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_REORDER_DROPPED);
+    c.fecRecovered=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_FRAMES_FEC_RECOVERED);
+    c.fecFailed=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_FRAMES_FEC_FAILED);
+    c.corruptReports=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_CORRUPT_REPORTS);
+    c.corruptFrames=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_CORRUPT_FRAMES);
+    c.idrRequests=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_IDR_REQUESTS);
+    c.congestionReports=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_CONGESTION_REPORTS);
+    c.congestionReceived=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_CONGESTION_RECEIVED);
+    c.congestionLost=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_CONGESTION_LOST);
+    c.congestionLostReported=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_CONGESTION_LOST_REPORTED);
+    c.senkushaRttUs=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_SENKUSHA_RTT_US);
+    c.reorderTimeoutUs=stat32(CHIAKI_VEYRA_STAT_REORDER_TIMEOUT_US);
+    c.receiveBufferRequested=stat32(CHIAKI_VEYRA_STAT_RCVBUF_REQUESTED);
+    c.receiveBufferEffective=stat32(CHIAKI_VEYRA_STAT_RCVBUF_EFFECTIVE);
+    c.receiveBufferFallbacks=stat32(CHIAKI_VEYRA_STAT_RCVBUF_FALLBACKS);
+    c.threadsRaised=threadsRaised.load();c.threadPriorityFailures=threadPriorityFailures.load();
+    c.reorderLateArrivals=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_REORDER_LATE_ARRIVALS);
+    c.reorderOvershootUs=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_REORDER_OVERSHOOT_US);
+    static_assert(static_cast<int>(kReorderLatenessBuckets)==CHIAKI_VEYRA_REORDER_LATENESS_BUCKETS);
+    for(std::size_t i=0;i<kReorderLatenessBuckets;++i)
+        c.reorderLateness[i]=chiaki_veyra_transport_stat_get(static_cast<ChiakiVeyraTransportStat>(static_cast<int>(CHIAKI_VEYRA_STAT_REORDER_LATENESS_0)+static_cast<int>(i)));
+    return c;
+}
+void setLiveReorderTimeout(std::uint32_t microseconds) noexcept {
+    chiaki_veyra_transport_set_av_reorder_timeout_live(microseconds);
 }
 struct ChiakiBackend::Impl {
     explicit Impl(SessionInbox::Token t):token(std::move(t)),owner(std::this_thread::get_id()){}

@@ -757,6 +757,7 @@ bool AudioRenderer::start(AudioFormat input,double requestedBufferMs,std::wstrin
     std::lock_guard endpointLock(endpointMutex_);
     if(client_||enum_)return checked(E_UNEXPECTED,"Endpoint already initialized");
     lastError_=S_OK;bufferedMs_=0;smoothedGain_=0;fadeInRemaining_=0;underruns_=0;underrunFrames_=0;silenceFrames_=0;
+    lowLatencyActive_=false;
     liveGap_.reset();
     emptyPulls_=0;recoveryFades_=0;
     clockStalledGaps_=0;
@@ -825,11 +826,38 @@ bool AudioRenderer::start(AudioFormat input,double requestedBufferMs,std::wstrin
     sampleRate_ = kAudioRate;
     requestedBufferMs=std::clamp(requestedBufferMs,5.0,50.0);
     const REFERENCE_TIME requestedBufferHns=static_cast<REFERENCE_TIME>(std::llround(requestedBufferMs*10000.0));
-    hr = client_->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK |
-        AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
-        requestedBufferHns, 0, &mix.Format, nullptr);
-    const bool initOk = checked(hr,"Initialize AudioClient");
-    if (!initOk) return false;
+    lowLatencyActive_=false;
+    bool lowLatencyOpened=false;
+    if(lowLatency_){
+        // Experiment: the engine's smallest shared-mode period. It needs the format the engine
+        // accepts without conversion; anything else fails here and the original call below runs.
+        IAudioClient3* client3=nullptr;
+        HRESULT lowHr=client_->QueryInterface(__uuidof(IAudioClient3),reinterpret_cast<void**>(&client3));
+        UINT32 defaultPeriod=0,fundamentalPeriod=0,minPeriod=0,maxPeriod=0;
+        if(SUCCEEDED(lowHr)&&client3){
+            lowHr=client3->GetSharedModeEnginePeriod(&mix.Format,&defaultPeriod,&fundamentalPeriod,&minPeriod,&maxPeriod);
+            if(SUCCEEDED(lowHr)&&minPeriod>0&&minPeriod<defaultPeriod){
+                lowHr=client3->InitializeSharedAudioStream(AUDCLNT_STREAMFLAGS_EVENTCALLBACK,minPeriod,&mix.Format,nullptr);
+                lowLatencyOpened=SUCCEEDED(lowHr);
+            }else if(SUCCEEDED(lowHr))lowHr=S_FALSE; // nothing below the default period: original call
+            client3->Release();
+        }
+        log::info("audio",std::format("low-latency period request hr=0x{:08X} defaultFrames={} minFrames={} fundamentalFrames={} opened={}",unsigned(lowHr),defaultPeriod,minPeriod,fundamentalPeriod,lowLatencyOpened));
+        if(!lowLatencyOpened&&FAILED(lowHr)&&client3){
+            // A client whose initialization failed is not reused: activate a fresh one.
+            client_->Release();client_=nullptr;
+            hr = device_->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,reinterpret_cast<void**>(&client_));
+            if (!checked(hr,"Activate AudioClient")) return false;
+        }
+    }
+    if(!lowLatencyOpened){
+        hr = client_->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK |
+            AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+            requestedBufferHns, 0, &mix.Format, nullptr);
+        const bool initOk = checked(hr,"Initialize AudioClient");
+        if (!initOk) return false;
+    }
+    lowLatencyActive_=lowLatencyOpened;
     if (!checked(client_->GetBufferSize(&bufferFrames_),"GetBufferSize")) return false;
     REFERENCE_TIME devicePeriod=0;
     if(!checked(client_->GetDevicePeriod(&devicePeriod,nullptr),"GetDevicePeriod"))return false;
