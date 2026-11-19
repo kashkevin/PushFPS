@@ -11,7 +11,9 @@
 #include "veyra/pipeline/Rdna3NrBackend.h"
 #include "veyra/pipeline/AmdNrProvider.h"
 #include "veyra/pipeline/VfgBackend.h"
+#include "veyra/pipeline/StreamChangePass.h"
 #include "veyra/engine/GraphDescription.h"
+#include "veyra/engine/PushStreamDedup.h"
 #include "veyra/engine/ColorLut.h"
 #include "veyra/engine/EffectChain.h"
 #include "veyra/diagnostics/CpuStallTrace.h"
@@ -773,7 +775,8 @@ bool EnhanceGraph::initialize(const EnhanceGraphDesc& desc)
     const bool videoRestore=!desc.stillImage&&desc.videoSrQuality>=1&&desc.videoSrQuality<=4;
     srEnabled_ = desc.enableSr && (srcW_ != workW_ || srcH_ != workH_ || videoRestore || srPrescaleActive() || srResolveActive());
     lmxxfNr_ = context_.adapter().vendorId == 0x1002 || desc.nrRuntime == engine::NrRuntime::LmxxfAmd;
-    if(context_.adapter().vendorId==0x1002 && desc_.opticalFlowBackend==engine::OpticalFlowBackend::Nvidia)
+    // PushFPS: any non-NVIDIA adapter (AMD as before, now also Intel and unknown vendors) uses FidelityFX flow.
+    if(!context_.adapter().isNvidia && desc_.opticalFlowBackend==engine::OpticalFlowBackend::Nvidia)
         desc_.opticalFlowBackend=engine::OpticalFlowBackend::AmdFidelityFx;
     nrEnabled_ = desc.enableNr && !desc.noFeatures && (!desc.noNgx || lmxxfNr_);
     fgEnabled_ = desc.enableFg && !desc.noFeatures && !desc.stillImage &&
@@ -923,6 +926,7 @@ bool EnhanceGraph::initialize(const EnhanceGraphDesc& desc)
         if(firstTemporal&&!createSignedHdrRestore(firstSrHdrRestore_,desc_.firstSrWidth,desc_.firstSrHeight))return false;
     }
     if (!createComputePasses()) return false;
+    (void)initStreamChange();   // PushFPS experiment VEYRA_EXP_RP_STREAM_DEDUP; nothing unless the switch is set
 
     initialized_ = true;
     failedBackend_=engine::FailedBackend::None;
@@ -1563,6 +1567,81 @@ bool EnhanceGraph::initHudLock() {
     }
     hudLock_=std::move(pass);
     return true;
+}
+// PushFPS experiment VEYRA_EXP_RP_STREAM_DEDUP: the change of a hardware-decoded picture against
+// the one measured before it, read back as result words (pipeline/StreamChangePass.h). The pass
+// and its stores are created with the graph when the switch is set (initStreamChange), never on a
+// live frame. The engine thread calls measureStreamChange before EnhanceGraph::process for the
+// same frame; the wait inside ends at deadline100ns at the latest. Unverified on Windows.
+bool EnhanceGraph::initStreamChange(){
+    wchar_t value[4]{};
+    const DWORD length=GetEnvironmentVariableW(L"VEYRA_EXP_RP_STREAM_DEDUP",value,4);
+    if(length==0||length>=4||!engine::PushStreamDedup::switchedOn(std::wstring_view(value,length)))return true;   // off: nothing exists
+    if(desc_.wideYuvInput()){
+        // 10-bit and HDR pictures are refused: the classifier's thresholds were chosen on 8-bit SDR only.
+        streamChangeFailed_=true;
+        veyra::log::warn("stream-change","10-bit / HDR input is not supported by VEYRA_EXP_RP_STREAM_DEDUP; decoded pictures are not numbered");
+        return true;
+    }
+    auto runner=std::make_unique<StreamChangeRunner>();
+    if(!runner->initialize(context_.device(),ring_.queue(),desc_.sourceWidth,desc_.sourceHeight)){
+        streamChangeFailed_=true;
+        veyra::log::warn("stream-change","the measurement pass could not be created; decoded pictures are not numbered");
+        return true;   // the graph works without it
+    }
+    streamChange_=std::move(runner);
+    return true;
+}
+void EnhanceGraph::settleStreamChange(){
+    // A decoder picture held for a measurement that timed out is let go as soon as its list has
+    // finished, also when no further picture is measured.
+    if(streamChangeFrame_&&(!streamChange_||!streamChange_->reading()))streamChangeFrame_.reset();
+}
+StreamChangeOutcome EnhanceGraph::measureStreamChange(const AVFrame* frame,int64_t deadline100ns){
+    StreamChangeOutcome outcome;
+    if(!initialized_||streamChangeFailed_||!streamChange_||!frame||frame->format!=AV_PIX_FMT_D3D12||frame->width<=0||frame->height<=0)return outcome;
+    auto* d3dFrame=reinterpret_cast<AVD3D12VAFrame*>(frame->data[0]);
+    if(d3dFrame==nullptr||d3dFrame->texture==nullptr)return outcome;
+    if(!streamChange_->ready()){
+        streamChangeFailed_=true;settleStreamChange();
+        veyra::log::warn("stream-change","the measurement stopped (see the line above); decoded pictures are not numbered until the graph is rebuilt");
+        return outcome;
+    }
+    if(d3dFrame->texture->GetDesc().Format!=DXGI_FORMAT_NV12){
+        // P010 / P016: 10-bit or HDR. Refused, said once.
+        streamChangeFailed_=true;settleStreamChange();
+        veyra::log::warn("stream-change","the decoder's pictures are not 8-bit NV12 (10-bit / HDR): not supported by VEYRA_EXP_RP_STREAM_DEDUP; decoded pictures are not numbered");
+        return outcome;
+    }
+    if(streamChangeWaitLeft(deadline100ns,StreamChangeRunner::now100ns())<=0){
+        // No time (a presentation is due): nothing is cloned, recorded or dispatched for this picture.
+        outcome=streamChange_->noTime();
+        settleStreamChange();
+        return outcome;
+    }
+    // The list reads the decoder's texture until its fence, and the caller's frame only covers this
+    // call. So a reference of our own is taken on every call, before anything is submitted, and it
+    // is kept whenever a list that reads this picture may still run (a wait that timed out, or an
+    // error after the list was submitted): a decoder surface is never released or reused under a
+    // list. It replaces the reference held before only then: a new list is recorded only after the
+    // earlier one was seen to finish. Held no longer than that: a surface kept back is one the
+    // decoder cannot reuse.
+    AVFrame* cloned=av_frame_clone(frame);
+    if(!cloned)return outcome;
+    std::shared_ptr<AVFrame> held(cloned,[](AVFrame* value){av_frame_free(&value);});
+    outcome=streamChange_->measure(ring_.queue(),d3dFrame->texture,static_cast<UINT>(d3dFrame->subresource_index),
+        uint32_t(frame->width),uint32_t(frame->height),d3dFrame->sync_ctx.fence,d3dFrame->sync_ctx.fence_value,deadline100ns);
+    if(outcome.reading)streamChangeFrame_=std::move(held);
+    else settleStreamChange();
+    return outcome;
+}
+void EnhanceGraph::streamChangeCounters(uint64_t& measured,uint64_t& timeouts,uint64_t& failures,double& waitMsMax,double& waitMsMean) const{
+    measured=timeouts=failures=0;waitMsMax=waitMsMean=0;
+    if(!streamChange_)return;
+    const auto& counters=streamChange_->counters();
+    measured=counters.measured;timeouts=counters.timeouts+counters.skipped+counters.notDispatched;failures=counters.failures;waitMsMax=counters.waitMsMax;
+    const uint64_t waited=counters.measured+counters.timeouts;
+    waitMsMean=waited?counters.waitMsSum/double(waited):0.0;
 }
 void EnhanceGraph::composeHudLock(ID3D12GraphicsCommandList* list,unsigned generatedSlot,unsigned heldParity){
     if(hudLock_&&!hudLock_->compose(list,tracker_,generatedSlot,heldParity))
@@ -2724,6 +2803,7 @@ bool EnhanceGraph::composeExclusion(ID3D12GraphicsCommandList* list,unsigned out
 
 bool EnhanceGraph::process(const AVFrame* frame, double ptsMs, bool reset, FrameOutputs& out, uint64_t sourceFrameId, const ColorDescription* color, const HardwareSurfaceInput* hardwareSurface, bool retainReferences, const FgAdmission& admitFg, unsigned previewMultiplier, bool pausedResidualRefresh, const std::function<void()>& previewCheckpoint)
 {
+    settleStreamChange();   // PushFPS experiment: a decoder picture held for a finished measurement is let go
     retainReferences=retainReferences||desc_.exclusion.enabled;
     reset=reset||nrAutoResetPending_;nrAutoResetPending_=false;
     frameFlowValid_=false;
@@ -4388,7 +4468,7 @@ bool EnhanceGraph::applySettings(const engine::EnhancementSettings& s){
     // but has this NGX-only stage explicitly disabled in the graph. Do not
     // reject unrelated live settings in that degraded, playable state.
     if(s.nr&&desc_.enableNr&&!nrCreated())return false;
-    const auto requestedFlow=context_.adapter().vendorId==0x1002&&s.opticalFlowBackend==engine::OpticalFlowBackend::Nvidia
+    const auto requestedFlow=!context_.adapter().isNvidia&&s.opticalFlowBackend==engine::OpticalFlowBackend::Nvidia
         ?engine::OpticalFlowBackend::AmdFidelityFx:s.opticalFlowBackend;
     const bool usesSharedFlow=dlaaRequested()||nvofStandalone_||(desc_.enableFg&&desc_.fgUsesFlow())||
         (srEnabled_&&desc_.srUsesFlow()&&temporalSrPass(desc_));
@@ -4546,7 +4626,10 @@ uint32_t EnhanceGraph::actualFlowPerf()const{return nvof_?nvof_->caps().actualPe
 bool EnhanceGraph::vfgFastReady() const { return vfgBackend_&&vfgBackend_->fastReady(); }
 bool EnhanceGraph::fgCreated() const
 {
-    return (vfgBackend_&&vfgBackend_->created()) || fsrActive() || amfFrcActive() || (fgBackend_ && fgBackend_->created());
+    // PushFlow too: at f306f570 it was missing here, so fgCandidates stayed 0 and a live PushFlow session
+    // presented no generated frame (PS Remote Play window, RTX 4090, 2026-11-18; the GPU tests drive
+    // PushFlowBackend directly, not through the graph).
+    return (vfgBackend_&&vfgBackend_->created()) || fsrActive() || amfFrcActive() || pushFlowActive() || (fgBackend_ && fgBackend_->created());
 }
 
 uint64_t EnhanceGraph::lastNvofSignal() const
@@ -4583,6 +4666,11 @@ ID3D12Resource* EnhanceGraph::generatedFrameResource(uint32_t slot) const
 // ---------------------------------------------------------------------------
 void EnhanceGraph::shutdown()
 {
+    // Its own list and fence: wait for it (bounded) before the decoder picture it reads is let go.
+    // A list still running after that wait keeps its GPU objects and its picture: both are left
+    // alone (leaked) instead of released under it.
+    if(streamChange_&&!streamChange_->shutdown()&&streamChangeFrame_)(void)new std::shared_ptr<AVFrame>(std::move(streamChangeFrame_));
+    streamChange_.reset();streamChangeFrame_.reset();streamChangeFailed_=false;
     pausedNrCacheValid_=pausedNrResidualOnly_=false;pausedNrFrame_=nullptr;
     lastAppliedSettings_.reset();pausedNrSettings_.reset();
     if (!initialized_ && !coreHost_ && !nrAdapter_ && !nvof_ && !srcRgba_) return;

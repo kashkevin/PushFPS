@@ -1,0 +1,36 @@
+# Test arms of the Slipstream hardware test kit (read by run-tests.ps1 and tools/remoteplay_latency_bench/report.py).
+# name      short name; becomes part of file names (letters, digits, '-' only)
+# exe       original | modified (the stable candidate) | experimental (the experimental build; only with -Versus or -Arms)
+# set       quick (always run) | standard (run unless -Quick) | experimental (only with -Experimental or -Arms) |
+#           versus (only with -Versus: the stable candidate against the experimental build, one named switch set per arm;
+#           duplicate detection VEYRA_EXP_RP_STREAM_DEDUP is in no arm)
+# compare   the arm its differences are taken against
+# switches  NAME=VALUE;NAME=VALUE put into the environment of that run only
+# note      shown before the run starts
+#
+# The original build logs only a summary per latency test, not every press, so the per-press baseline is
+# mod-legacy: the modified build with the original timing of every part.
+# fg        off | on: what frame generation must be in that arm; a run that logs otherwise is refused (and offered for a repeat)
+name,exe,set,compare,switches,note,fg
+original,original,quick,mod-legacy,,The original build. Frame generation OFF.,off
+mod-legacy,modified,quick,mod-legacy,VEYRA_TEST_RP_LEGACY_TIMING=1,Modified build with the original timing of all three parts (the baseline; should match 'original'). Frame generation OFF.,off
+mod-all,modified,quick,mod-legacy,,Modified build as installed: all three timing changes together. Frame generation OFF.,off
+mod-input,modified,standard,mod-legacy,VEYRA_TEST_RP_LEGACY_OWNER_WAIT=1;VEYRA_TEST_RP_LEGACY_ENGINE_WAKE=1,Only the immediate controller dispatch (and 4 ms poll) is new. Frame generation OFF.,off
+mod-ownerwait,modified,standard,mod-legacy,VEYRA_TEST_RP_LEGACY_INPUT=1;VEYRA_TEST_RP_LEGACY_ENGINE_WAKE=1,Only the event-driven owner wait is new. Frame generation OFF.,off
+mod-enginewake,modified,standard,mod-legacy,VEYRA_TEST_RP_LEGACY_INPUT=1;VEYRA_TEST_RP_LEGACY_OWNER_WAIT=1,Only the event-driven engine wake is new. Frame generation OFF.,off
+exp-poll2,modified,experimental,mod-all,VEYRA_EXP_RP_PAD_POLL_MS=2,Experiment: 2 ms controller poll. Frame generation OFF.,off
+exp-poll1,modified,experimental,mod-all,VEYRA_EXP_RP_PAD_POLL_MS=1,Experiment: 1 ms controller poll. Frame generation OFF.,off
+exp-fg,modified,experimental,exp-fg,,Reference for the next arm: frame generation ON at 3X. Set it before connecting.,on
+exp-fg-adaptive-phase,modified,experimental,exp-fg,VEYRA_EXP_RP_ADAPTIVE_PHASE=1,Experiment: adaptive pair phase. Frame generation ON at 3X exactly as in exp-fg.,on
+exp-lan,modified,experimental,mod-all,VEYRA_EXP_RP_LAN_PROFILE=1,Experiment: LAN profile. Only meaningful in a build that contains the network work; otherwise identical to mod-all. Frame generation OFF.,off
+exp-thread-priority,modified,experimental,mod-all,VEYRA_EXP_RP_THREAD_PRIORITY=1,Experiment: raised thread priority. Only meaningful in a build that contains the network work. Frame generation OFF.,off
+stable,modified,versus,stable,,The stable candidate as installed (the reference of the comparison with the experimental build). Frame generation OFF.,off
+x-base,experimental,versus,stable,,The experimental build with no experiment switched on. Frame generation OFF.,off
+x-lan,experimental,versus,x-base,VEYRA_EXP_RP_LAN_PROFILE=1,Experimental build: LAN profile. Frame generation OFF.,off
+x-reorder,experimental,versus,x-base,VEYRA_EXP_RP_REORDER_ADAPTIVE=1,Experimental build: adaptive reorder wait. Frame generation OFF.,off
+x-health,experimental,versus,x-base,VEYRA_EXP_RP_HEALTH=1,Experimental build: network health line (observation only; shows its own cost). Frame generation OFF.,off
+x-backlog,experimental,versus,x-base,VEYRA_EXP_RP_BACKLOG=1,Experimental build: bounded decode backlog. Frame generation OFF.,off
+x-kbm,experimental,versus,x-base,VEYRA_EXP_RP_KBM=1,Experimental build: keyboard and mouse mode on (the latency test still uses the controller path). Frame generation OFF.,off
+x-audio,experimental,versus,x-base,VEYRA_EXP_RP_AUDIO_FAST_RECOVER=1,Experimental build: audio fast recovery. Frame generation OFF.,off
+x-governor,experimental,versus,x-base,VEYRA_EXP_RP_GOVERNOR=1,Experimental build: latency governor in observe mode (logs only). Frame generation OFF.,off
+x-gpubudget,experimental,versus,x-base,VEYRA_EXP_RP_GPU_BUDGET=1,Experimental build: GPU budget in observe mode (logs only). Frame generation OFF.,off

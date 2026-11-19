@@ -301,6 +301,13 @@ bool QmlPlayerBridge::setPreference(const QString& key, const QVariant& value) {
                                    "mixDesktopOn", "mixDesktopMuted", "mixAuxOn", "mixAuxMuted",
                                    // PushFPS: PushFlow half precision, turned on after PushFlowBench --fp16-probe passed.
                                    "pushFlowHalf",
+                                   // PushFPS performance modes (PushModeRow.qml): the LAN profile for the next PS5
+                                   // connection, Automatic (only shown with VEYRA_EXP_AUTO_MODE=1), the statistics
+                                   // overlay, and the first-launch card dismissed. All unset = off.
+                                   "pushLanProfile", "pushModeAuto", "pushStatsOverlay", "pushWelcomeDone",
+                                   // PushFPS first-launch recommendation (PushModes.js): a mode chosen with this version
+                                   // wants its experiment switches, "Keep my settings", the new-install check done.
+                                   "pushModeSwitches", "pushCalibrationKept", "pushWelcomeChecked",
                                    // PushFPS encoder tuning (NVENC): psycho-visual AQ for recordings and streams.
                                    "recordPsychoAq", "streamPsychoAq"};
     QVariant stored;
@@ -431,7 +438,15 @@ bool QmlPlayerBridge::setPreference(const QString& key, const QVariant& value) {
         const QJsonDocument doc = QJsonDocument::fromJson(v.toUtf8(), &error);
         if (error.error != QJsonParseError::NoError || !doc.isObject()) return false;
         stored = v;
+    } else if (key == QLatin1String("pushMode")) {
+        // PushFPS performance mode (qml/Veyra/PushModes.js): one of the four concrete modes of
+        // engine/PushPerformanceMode.h by its name there, or empty for the user's own settings.
+        const QString v = value.toString();
+        static const QStringList modes{"", "ultra-low-latency", "competitive", "balanced", "maximum-smoothness"};
+        if (!modes.contains(v)) return false;
+        stored = v;
     } else if (key == QLatin1String("pushGamePresets") || key == QLatin1String("pushBenchmark") || key == QLatin1String("pushLowestLatency") ||
+               key == QLatin1String("pushModeRestore") || key == QLatin1String("pushCalibrationRestore") || key == QLatin1String("pushCalibrationApplied") ||
                key == QLatin1String("studioScenes") || key == QLatin1String("pushOptimizeRestore") || key == QLatin1String("pushFlowHalfProbe") ||
                key == QLatin1String("pushOptimizeSkip")) {
         // PushFPS: the user's own game presets, the last "Optimise for my PC" result and the settings
@@ -575,6 +590,7 @@ void QmlPlayerBridge::applyPreference(const QString& key) {
         if (n == 0 || std::wstring_view(current) == L"fp16-checked")
             SetEnvironmentVariableW(L"VEYRA_PUSHFLOW_PRECISION", impl_->prefBool("pushFlowHalf", false) ? L"fp16-checked" : nullptr);
     }
+    else if (key == QLatin1String("pushLanProfile")) applyPushLanProfile();
     else if (key == QLatin1String("nisSharpness"))
         pipeline::setNisSharpness(float(impl_->prefInt("nisSharpness", int(pipeline::kNisDefaultSharpness * 100))) / 100.0f);
     else if (key == QLatin1String("magewellLowLatency")) source::magewell::setLowLatencyPreference(impl_->prefBool("magewellLowLatency", false));
