@@ -165,6 +165,17 @@ QtObject {
     }
     function pushQualityCancel() { qualityCancels++ }
     function pushQualityStatus() { return qualityState }
+    // PushFPS latency test (tst_push_latency_test.qml): what the dialog asked for; latencyState is the status it reads.
+    property var latencyCalls: []
+    property var latencyState: ({state: "idle"})
+    function pushLatencyTestBegin(trials) { return pushLatencyTestBeginWith(trials, "ps") }
+    function pushLatencyTestBeginWith(trials, button) {
+        latencyCalls = latencyCalls.concat([{trials: trials, button: button}])
+        latencyState = ({state: "running", trial: 0, trials: trials})
+        return true
+    }
+    function pushLatencyTestCancel() { latencyState = ({state: "idle"}) }
+    function pushLatencyTestStatus() { return latencyState }
     function pushSetExclusionRegions(regions, feather) {
         lastRegions = regions
         exclusionState = ({enabled: regions.length > 0, feather: feather, regions: regions})
@@ -333,7 +344,20 @@ QtObject {
     function nrAutoSelectionReason(index) { return "Auto is unavailable in this four-layer UI fixture" }
     function effectAvailability(id) { return effectCapabilities[id] || {available:true, reason:""} }
     function resetNrLayer(index) {}
+    // PushFPS keys the real validator (src/ui/bridge/Preferences.cpp setPreference) accepts; any other
+    // push* key is refused as there. The performance-mode and calibration JSON keys must hold a JSON object or
+    // array (older tests still clear other JSON keys with "", which the real validator refuses).
+    property var pushKeys: ["pushAlwaysOnTop","pushAutoFullscreen","pushBenchmark","pushCalibrationApplied","pushCalibrationKept","pushCalibrationRestore","pushCompareLayout","pushCompareSeconds","pushConsole","pushDiscordWebhook","pushFlowHalf","pushFlowHalfProbe","pushGameFps","pushGamePresets","pushGsyncChecked","pushLanProfile","pushLatencyOverlay","pushLowestLatency","pushMode","pushModeAuto","pushModeRestore","pushModeSwitches","pushOptimizeGoal","pushOptimizeRestore","pushOptimizeSkip","pushProfiles","pushSmoothPacing","pushSmoothPacing2","pushStatsOverlay","pushSunset","pushTheme","pushWelcomeChecked","pushWelcomeDone"]
+    property var pushJsonKeys: ["pushModeRestore","pushCalibrationRestore","pushCalibrationApplied"]
     function setPreference(key, value) {
+        if (String(key).indexOf("push") === 0) {
+            if (pushKeys.indexOf(key) < 0) return false
+            if (pushJsonKeys.indexOf(key) >= 0) {
+                let doc = null
+                try { doc = JSON.parse(String(value)) } catch (e) { return false }
+                if (doc === null || typeof doc !== "object") return false
+            }
+        }
         const copy = Object.assign({}, preferences)
         copy[key] = value
         preferences = copy

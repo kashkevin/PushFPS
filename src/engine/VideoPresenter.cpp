@@ -6,6 +6,8 @@
 #include "veyra/sink/ImageExportSink.h"
 #include <array>
 #include <memory>
+#include <thread>
+#include "veyra/gfx/NvidiaVrrProfile.h"
 namespace veyra::engine {
 bool VideoPresenter::beginSourceInput(uint64_t stallUs){
     if(!reflexInputFrame_&&reflex_.active())reflexInputFrame_=reflex_.begin(stallUs);
@@ -84,6 +86,7 @@ bool VideoPresenter::open(gfx::D3D12DeviceContext& ctx,HWND window,pipeline::Enh
         veyra::log::info("present",std::format("XeSS retained buffers {}x{} client={}x{}; window scaling avoids provider rebuild",d.width,d.height,rc.right,rc.bottom));
     }
     if(!reuse&&!sink_.initialize(ctx.device(),queue,d,st))return false;
+    if(!reuse)openSlipstreamExperiments();
     if(reuse)veyra::log::info("present-reuse",std::format("retained native swapchain generation={} format={} fg={} output={}x{}; rebinding drained graph descriptors",generation_,unsigned(graph.outputFormat()),graph.fgEnabled(),graph.workWidth(),graph.workHeight()));
     pass_={};rtvs_.Reset();compositeTarget_.Reset();exclusionUiTarget_.Reset();exclusionHudlessTarget_.Reset();
     exclusionUiEnabled_=graph.xessEnabled()&&graph.exclusionEnabled();
@@ -124,6 +127,9 @@ bool VideoPresenter::open(gfx::D3D12DeviceContext& ctx,HWND window,pipeline::Enh
         pipeline::makeSrv(ctx.device(),graph.unmaskedVideo(i),graph.outputFormat(),
             {pass_.heap->GetCPUDescriptorHandleForHeapStart().ptr+size_t(pipeline::kOutputPoolSlots+6+i)*pass_.increment});
     if(!reuse)startDisplayState();
+    // VEYRA_EXP_PRESENT_VRR_REQUEST: read the driver's VRR state again 3 s into this chain's
+    // presentation, so [display-vrr] shows whether VRR is requested/active for it.
+    if(!reuse&&vrrRequestSwitch_)vrrConfirmAt_=std::chrono::steady_clock::now()+std::chrono::seconds(3);
     return true;
 }
 bool VideoPresenter::prepareGraphChange(){
@@ -509,6 +515,7 @@ bool VideoPresenter::present(gfx::D3D12DeviceContext& ctx,gfx::CommandSlotRing& 
     const bool presented=sink_.present(st);
     reflex_.presentEnd(reflexFrame,generated);
     const auto presentEnd=std::chrono::steady_clock::now();
+    lastPresentReturnHost100ns_=std::chrono::duration_cast<std::chrono::nanoseconds>(presentEnd.time_since_epoch()).count()/100;
     const auto ms=[](auto d){return std::chrono::duration<double,std::milli>(d).count();};
     const bool slow=ms(presentEnd-presentStart)>=80.0;
     if(slow||presentEnd>=nextCostLog_){
@@ -680,7 +687,24 @@ PresentationSettings VideoPresenter::configurePresentation(gfx::D3D12DeviceConte
     // VRR presentation just started: ask the driver once more whether it runs.
     if(vrrSync_&&!wasVrrSync)vrrConfirmAt_=std::chrono::steady_clock::now()+std::chrono::seconds(3);
     if(vrrSync_){requested.display=DisplaySync::Vsync;effective.display=DisplaySync::Vsync;}
-    const bool vsync=presentationVsync(requested),tearing=presentationTearing(requested);
+    bool vsync=presentationVsync(requested),tearing=presentationTearing(requested);
+    // VEYRA_EXP_PRESENT_TEARING (off unless "1"): present like the Tearing choice (sync interval 0
+    // + DXGI_PRESENT_ALLOW_TEARING, no display-queue wait) where VSync would apply, only while the
+    // driver reports the display in VRR mode, no frame generation runs, no provider presents and
+    // no output cap below the display rate (Follow display is allowed) is set. Anything else: VSync as before.
+    {
+        PushTearingInputs in;
+        in.switchOn=tearingSwitch_;in.vsync=vsync;in.tearingSupported=sink_.tearingSupported();in.frameGeneration=fg;
+        in.outputCap=effective.outputRate==OutputRateMode::Custom&&!followDisplay;in.provider=xessActive();in.vrrLevel=gfx::vrrLevel(vrr_);
+        const char* refusal=pushTearingRefusal(in);
+        tearingExperiment_=refusal==nullptr;
+        if(tearingExperiment_){vsync=false;tearing=true;}
+        const char* reason=refusal?refusal:"active";
+        if(tearingSwitch_&&reason!=tearingReason_){
+            tearingReason_=reason;
+            veyra::log::info("slipstream-present",std::format("experiment=tearing active={} reason={} vrrLevel={}",tearingExperiment_?1:0,reason,in.vrrLevel));
+        }
+    }
     providerOwnedPresentation_=xessActive();
     // The interface translates this line piece by piece at " · " and "；"
     // (UiLanguage), so every piece is its own catalog entry without separators.
@@ -732,6 +756,54 @@ PresentationSettings VideoPresenter::configurePresentation(gfx::D3D12DeviceConte
     }
     status=join({latency,cap,queue,syncMode,syncDetail});
     return effective;
+}
+namespace {
+bool slipstreamSwitch(const wchar_t* name){
+    wchar_t value[4]{};
+    const DWORD length=GetEnvironmentVariableW(name,value,4);
+    return length==1&&value[0]==L'1';
+}
+}
+void VideoPresenter::openSlipstreamExperiments(){
+    latency_.reset();
+    if(sink_.slipstreamStats())latency_=std::make_unique<PushPresentLatency>();
+    tearingSwitch_=slipstreamSwitch(L"VEYRA_EXP_PRESENT_TEARING");
+    vrrRequestSwitch_=slipstreamSwitch(L"VEYRA_EXP_PRESENT_VRR_REQUEST");
+    tearingExperiment_=false;tearingReason_=nullptr;
+    if(tearingSwitch_||vrrRequestSwitch_)
+        veyra::log::info("slipstream-present",std::format("switches tearing={} vrrRequest={} stats={}",tearingSwitch_?1:0,vrrRequestSwitch_?1:0,latency_?1:0));
+    // VEYRA_EXP_PRESENT_VRR_REQUEST, once per process: read the NVIDIA G-SYNC profile for this
+    // program (read-only, the same inspection the G-SYNC check button starts) on a worker and log
+    // what its repair would change. Nothing is written: a write stays the user's explicit action.
+    static bool profileInspected=false;
+    if(vrrRequestSwitch_&&!profileInspected){
+        profileInspected=true;
+        wchar_t path[MAX_PATH]{};
+        const DWORD length=GetModuleFileNameW(nullptr,path,MAX_PATH);
+        if(length==0||length>=MAX_PATH){veyra::log::info("slipstream-present","vrrProfile state=unavailable reason=module-path");return;}
+        try{
+            std::thread([executable=std::wstring(path,length)]{
+                const auto result=gfx::inspectVrrProfile(executable);
+                const auto plan=gfx::planVrrProfileRepair(result.snapshot);
+                // Values only: never the path or the profile name (they can carry the user name).
+                veyra::log::info("slipstream-present",std::format("vrrProfile error={} driverStatus={} exists={} isolated={} appMode={}/{} appRequest={}/{} globalMode={} globalRequest={} configured={} repairAllowed={} repairWouldChange={} (read-only; the G-SYNC button in Professional > Display writes it)",
+                    int(result.error),result.driverStatus,result.snapshot.exists?1:0,result.snapshot.isolated?1:0,
+                    result.snapshot.settings[0].value,result.snapshot.settings[0].local?1:0,result.snapshot.settings[1].value,result.snapshot.settings[1].local?1:0,
+                    result.snapshot.global[0].value,result.snapshot.global[1].value,result.snapshot.configured()?1:0,plan.allowed?1:0,plan.changes()?1:0));
+            }).detach();
+        }catch(const std::exception&){veyra::log::info("slipstream-present","vrrProfile state=unavailable reason=thread");}
+    }
+}
+void VideoPresenter::latencyObserved(int64_t arrival100ns,int64_t decoded100ns,int64_t pickup100ns){
+    if(!latency_)return;
+    for(const auto& dated:sink_.datedScanouts())latency_->scanout(dated.id,dated.scanout100ns);
+    latency_->presented(sink_.lastPresentId(),{arrival100ns,decoded100ns,pickup100ns,lastPresentCallHost100ns_,lastPresentReturnHost100ns_});
+    const int64_t now=lastPresentReturnHost100ns_;
+    if(!latency_->due(now))return;
+    PushPresentContract contract;
+    contract.syncInterval=sink_.presentSyncInterval();contract.tearing=sink_.presentTearing();
+    contract.queueLatency=sink_.queueLatency();contract.waitable=sink_.waitable();contract.compositionMode=sink_.compositionMode();
+    veyra::log::info("slipstream-latency",formatSlipstreamLatency(latency_->take(now),contract));
 }
 Microsoft::WRL::ComPtr<ID3D12Resource> VideoPresenter::presentedResourceForTest() {
     Microsoft::WRL::ComPtr<ID3D12Resource> buffer;

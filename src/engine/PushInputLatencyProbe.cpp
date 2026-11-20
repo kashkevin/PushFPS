@@ -25,15 +25,42 @@ int64_t PushInputLatencyProbe::now100ns() {
 
 void PushInputLatencyProbe::beginWindow() {
     std::lock_guard lock(m_);
-    open_ = true; sent_ = 0; answerMs_ = -1; detector_.reset();
+    open_ = true; sent_ = 0; answerMs_ = -1; answerPresent_ = 0; answerPts_ = 0; detector_.reset();
+    collecting_.store(true, std::memory_order_relaxed);
 }
 void PushInputLatencyProbe::endWindow() {
     std::lock_guard lock(m_);
     open_ = false;
+    collecting_.store(false, std::memory_order_relaxed);
 }
 void PushInputLatencyProbe::markSent(int64_t sentHost100ns) {
     std::lock_guard lock(m_);
-    sent_ = sentHost100ns; answerMs_ = -1;
+    sent_ = sentHost100ns; answerMs_ = -1; answerPresent_ = 0; answerPts_ = 0;
+}
+void PushInputLatencyProbe::setDetectorMode(latency::Detector::Mode mode) {
+    std::lock_guard lock(m_);
+    detector_.setMode(mode);
+}
+void PushInputLatencyProbe::noteArrival(int64_t pts100ns, int64_t arrivalHost100ns) {
+    if (!collecting_.load(std::memory_order_relaxed) || pts100ns <= 0 || arrivalHost100ns <= 0) return;
+    std::lock_guard lock(m_);
+    arrivals_[arrivalNext_ % arrivals_.size()] = Arrival{pts100ns, arrivalHost100ns};
+    ++arrivalNext_;
+}
+PushInputLatencyProbe::PressTiming PushInputLatencyProbe::timing() const {
+    std::lock_guard lock(m_);
+    PressTiming t;
+    t.sent = sent_;
+    if (answerMs_ >= 0) t.present = answerPresent_;
+    int64_t bestPts = 0;
+    for (const auto& a : arrivals_) {
+        if (a.host <= 0) continue;
+        // The frame that showed the answer: its own arrival for a real frame (same timestamp), for a generated
+        // one the real frame it was made towards (the smallest timestamp not before it).
+        if (answerMs_ >= 0 && answerPts_ > 0 && a.pts >= answerPts_ && (!bestPts || a.pts < bestPts)) { bestPts = a.pts; t.arrival = a.host; }
+        if (sent_ > 0 && a.host <= sent_ && a.host > t.lastArrivalBeforeSent) t.lastArrivalBeforeSent = a.host;
+    }
+    return t;
 }
 
 bool PushInputLatencyProbe::record(ID3D12GraphicsCommandList* list, const Frame& frame) {
@@ -78,6 +105,7 @@ bool PushInputLatencyProbe::record(ID3D12GraphicsCommandList* list, const Frame&
     slot->height = std::min<uint32_t>(frame.height ? frame.height : desc.Height, desc.Height);
     slot->layout = layout;
     slot->host100ns = now100ns();   // just before this frame's Present: when it is shown
+    slot->pts100ns = frame.pts100ns;
     slot->order = ++order_;
     slot->state = Slot::State::Pending;
     return true;
@@ -123,7 +151,7 @@ double PushInputLatencyProbe::poll() {
         lastRead_ = next->order;
         if (!open_ || answerMs_ >= 0) continue;
         if (!sent_ || next->host100ns < sent_) detector_.before(luma);
-        else if (detector_.answered(luma)) answerMs_ = double(next->host100ns - sent_) / 10000.0;
+        else if (detector_.answered(luma)) { answerMs_ = double(next->host100ns - sent_) / 10000.0; answerPresent_ = next->host100ns; answerPts_ = next->pts100ns; }
     }
 }
 

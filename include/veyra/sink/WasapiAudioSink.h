@@ -250,6 +250,11 @@ public:
     bool start(AudioFormat input = {},double requestedBufferMs=10.0,std::wstring_view excludedEndpoint={});
     AudioFormat outputFormat()const{std::lock_guard lock(endpointMutex_);return outputFormat_;}
     void setGain(float value){gain_.store(value);}
+    // VEYRA_EXP_RP_AUDIO_LOW_BUFFER, owner thread, before start(): shared mode with the smallest
+    // engine period the device reports (IAudioClient3). Any failure silently uses the normal
+    // Initialize; never exclusive mode. lowLatencyActive() says which one the open endpoint uses.
+    void requestLowLatencyPeriod(bool value){lowLatency_=value;}
+    bool lowLatencyActive()const{return lowLatencyActive_.load();}
 
     // Write actual PCM before starting the endpoint and its media clock.
     bool startAnchored(AudioPcmSource& pipeline, bool paused = false);
@@ -321,6 +326,7 @@ private:
     UINT32 bufferFrames_ = 0;
     uint32_t sampleRate_ = kAudioRate;
     double devicePeriodMs_=10;
+    bool lowLatency_=false;std::atomic<bool> lowLatencyActive_{false};
     UINT64 clockFrequency_ = 0;
     std::atomic<UINT64> anchorPos_{0};
     std::atomic<double> anchorPtsMs_{0.0};

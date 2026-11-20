@@ -18,11 +18,20 @@ namespace veyra::engine::latency {
 
 // Mean absolute luma difference inside the part of the picture below `top` (0..1).
 double regionDiff(const quality::Luma& a, const quality::Luma& b, float top = 0.55f);
+// Share (0..1) of grid cells below `top` whose luma changed by more than `cell`: finds a small change (a menu
+// highlight moving) that a mean over the whole picture would hide.
+double changedShare(const quality::Luma& a, const quality::Luma& b, float top = 0.0f, float cell = 0.1f);
 
 // Decides when the picture answered: the difference to the last frame before the press stands out
 // clearly from the frame-to-frame motion measured before it.
 class Detector {
 public:
+    // How the answer is recognised. Bottom (the default, the PS button's control centre): the mean difference
+    // below 55 % of the height. Anywhere (OPTIONS, D-pad; latency test v2): the mean difference over the whole
+    // picture, or enough changed cells anywhere (changedShare). reset() keeps the mode.
+    enum class Mode : uint8_t { Bottom, Anywhere };
+    void setMode(Mode mode) { mode_ = mode; }
+    Mode mode() const { return mode_; }
     void reset();
     void before(const quality::Luma& frame);           // frames before the press
     bool answered(const quality::Luma& frame) const;    // a frame after the press
@@ -30,7 +39,8 @@ public:
     bool ready() const { return base_.valid() && samples_ >= 2; }
 private:
     quality::Luma base_, previous_;
-    double noise_ = 0;
+    Mode mode_ = Mode::Bottom;
+    double noise_ = 0, shareNoise_ = 0;
     int samples_ = 0;
 };
 

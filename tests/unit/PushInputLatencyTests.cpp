@@ -39,6 +39,19 @@ int main() {
     check(latency::regionDiff(frame(0.1f, 0), frame(0.1f, 0, 0.6f), 0.55f) > 0.1, "difference is measured in the bottom part");
     check(latency::regionDiff(frame(0.1f, 0), frame(0.1f, 0, 0.6f), 0.9f) > latency::regionDiff(frame(0.1f, 0), frame(0.1f, 0, 0.6f), 0.0f),
           "a lower region concentrates on the answer");
+    // Latency test v2, OPTIONS / D-pad: a small highlight moving anywhere in a still menu is an answer.
+    {
+        latency::Detector menu; menu.setMode(latency::Detector::Mode::Anywhere);
+        menu.before(frame(0.30f, 0.0f)); menu.before(frame(0.30f, 0.0f)); menu.before(frame(0.30f, 0.0f));
+        quality::Luma moved = frame(0.30f, 0.0f);
+        for (uint32_t y = 20; y < 32; ++y) for (uint32_t x = 40; x < 60; ++x) moved.y[size_t(y) * quality::kGridW + x] = 0.9f;   // 240 cells, top left
+        check(!menu.answered(frame(0.30f, 0.0f)), "anywhere: an unchanged menu is not an answer");
+        check(menu.answered(moved), "anywhere: a highlight in the top half is an answer");
+        check(!d.answered(moved) || d.mode() == latency::Detector::Mode::Bottom, "the PS button's detector keeps its bottom region");
+        check(latency::changedShare(frame(0.3f, 0), moved) > 0.004 && latency::changedShare(frame(0.3f, 0), frame(0.3f, 0)) == 0, "changed share");
+        menu.reset();
+        check(menu.mode() == latency::Detector::Mode::Anywhere && !menu.ready(), "reset keeps the mode");
+    }
     const auto s = latency::summarize({80, 60, 100, 70}, 5);
     check(s.trials == 5 && s.answered == 4 && s.minMs == 60 && s.maxMs == 100 && s.medianMs == 75 && s.meanMs == 77.5, "summary");
     check(latency::summarize({}, 3).answered == 0, "no answers");

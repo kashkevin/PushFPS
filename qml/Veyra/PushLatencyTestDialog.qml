@@ -20,9 +20,17 @@ DialogLayer {
 
     property var st: ({})
     property int trials: 8
+    // Latency test v2 (docs/LATENCY_MEASUREMENT.md): the button pressed. "ps" is the original test;
+    // "options" and "dpad-right-left" answer faster than the PS5's control centre.
+    property string button: "ps"
     readonly property bool running: st.state === "running"
     readonly property bool streaming: veyra.sourceKind === "ps5"
-    function begin() { if (veyra.pushLatencyTestBegin(lt.trials)) { lt.st = veyra.pushLatencyTestStatus() || {}; poll.start() } }
+    // Seconds per press: open, answer, close and settle for PS / OPTIONS; press and settle for the D-pad.
+    readonly property real secondsPerPress: button === "dpad-right-left" ? 1 : 3
+    function begin() {
+        const ok = lt.button === "ps" ? veyra.pushLatencyTestBegin(lt.trials) : veyra.pushLatencyTestBeginWith(lt.trials, lt.button)
+        if (ok) { lt.st = veyra.pushLatencyTestStatus() || {}; poll.start() }
+    }
     Timer { id: poll; interval: 200; repeat: true; onTriggered: { lt.st = veyra.pushLatencyTestStatus() || {}; if (lt.st.state !== "running") stop() } }
     onShownChanged: if (!shown && running) { veyra.pushLatencyTestCancel(); poll.stop() }
 
@@ -34,6 +42,7 @@ DialogLayer {
     }
 
     function ms(v) { return Math.round(Number(v || 0)) + " ms" }
+    function ms2(v) { return Number(v || 0).toFixed(1) + " ms" }
     DialogGroup {
         VRow {
             visible: !lt.streaming
@@ -43,7 +52,11 @@ DialogLayer {
         VRow {
             visible: lt.streaming && !lt.running && lt.st.state !== "done"
             label: qsTr("开始前")
-            hint: qsTr("进入游戏画面，放下手柄。测试约 %1 秒，会打开和关闭 PS5 的控制中心 %2 次").arg(lt.trials * 3).arg(lt.trials)
+            hint: lt.button === "ps"
+                  ? qsTr("进入游戏画面，放下手柄。测试约 %1 秒，会打开和关闭 PS5 的控制中心 %2 次").arg(lt.trials * 3).arg(lt.trials)
+                  : lt.button === "options"
+                    ? qsTr("进入游戏画面，放下手柄。测试约 %1 秒，会按 OPTIONS 键打开和关闭游戏菜单 %2 次").arg(Math.round(lt.trials * lt.secondsPerPress)).arg(lt.trials)
+                    : qsTr("打开一个菜单（例如 PS5 主页），放下手柄。测试约 %1 秒，会按方向键右、左交替移动选中项 %2 次").arg(Math.round(lt.trials * lt.secondsPerPress)).arg(lt.trials)
         }
         VRow {
             visible: lt.running
@@ -76,14 +89,49 @@ DialogLayer {
             value: lt.ms(lt.st.pushfpsMs)
             hint: qsTr("画面到达电脑到交给显示器，与延迟显示相同")
         }
+        // Latency test v2: every press split at the network arrival of the frame that showed the answer.
+        VRow {
+            visible: lt.st.state === "done" && lt.st.split === true && Number(lt.st.consoleMs) >= 0
+            objectName: "latency-test-console"
+            label: qsTr("按键到画面到达电脑")
+            value: lt.ms2(lt.st.consoleMs)
+            hint: qsTr("中位数：PS5 的响应、编码和网络")
+        }
+        VRow {
+            visible: lt.st.state === "done" && lt.st.split === true && Number(lt.st.pcMs) >= 0
+            objectName: "latency-test-pc"
+            label: qsTr("画面到达到呈现")
+            value: lt.ms2(lt.st.pcMs)
+            hint: qsTr("中位数：每次按键的同一帧在这台电脑上的处理")
+        }
+        VRow {
+            visible: lt.st.state === "done" && lt.st.split === true && Number(lt.st.detectableMs) >= 0
+            objectName: "latency-test-detectable"
+            label: qsTr("可分辨的差异")
+            value: lt.ms2(lt.st.detectableMs)
+            hint: qsTr("两次同样次数的测试，差别至少这么大才能可靠地看出来。次数越多，这个值越小")
+        }
         VRow {
             visible: !lt.running
             label: qsTr("次数")
             VSeg {
                 objectName: "latency-test-trials"
-                options: [{ id: "5", label: "5" }, { id: "8", label: "8" }, { id: "12", label: "12" }]
+                options: [{ id: "5", label: "5" }, { id: "8", label: "8" }, { id: "12", label: "12" },
+                          { id: "50", label: "50" }, { id: "200", label: "200" }, { id: "500", label: "500" }]
                 current: String(lt.trials)
                 onPicked: id => lt.trials = Number(id)
+            }
+        }
+        VRow {
+            visible: !lt.running
+            label: qsTr("按键")
+            hint: qsTr("方向键和 OPTIONS 键的响应比控制中心快，更容易测出几毫秒的差别")
+            VSeg {
+                objectName: "latency-test-button"
+                options: [{ id: "ps", label: qsTr("PS 键") }, { id: "options", label: qsTr("OPTIONS 键") },
+                          { id: "dpad-right-left", label: qsTr("方向键 右/左") }]
+                current: lt.button
+                onPicked: id => lt.button = id
             }
         }
     }

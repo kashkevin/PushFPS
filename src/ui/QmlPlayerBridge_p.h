@@ -1008,6 +1008,8 @@ struct QmlPlayerBridge::Impl {
 uint32_t primaryGpuVendor();
 bool fsr4Possible();
 const DXGI_ADAPTER_DESC1* engineAdapterDesc();
+QVariantMap pushDecodeCapabilities();   // PushFPS: D3D12 video decode profiles of that adapter (Hardware.cpp)
+QVariantMap pushAdapterCapabilities(double refreshHz, int vrrState);   // PushFPS: capability model input + ceiling (Hardware.cpp)
 bool vfgHardwarePossible();
 unsigned normalizeFgMultiplier(unsigned value, engine::FrameGenerationBackend backend, unsigned cap);
 QString fgEffectId(engine::FrameGenerationBackend backend);

@@ -136,6 +136,23 @@ public:
     struct RefreshGrid { int64_t lastVblank100ns=0; double period100ns=0,latch100ns=0; };
     RefreshGrid refreshGrid()const;
     double displayRefreshHz()const{return displayRefreshHz_;}
+    // Slipstream statistics (VEYRA_EXP_RP_STATS=1, read once per swap-chain creation; nothing
+    // below is recorded without it). lastPresentId: DXGI present id of the last successful
+    // Present whose scanout can be dated, 0 otherwise. datedScanouts: the last presents the frame
+    // statistics dated (id, vblank time in host 100 ns), a fixed ring the caller may read twice.
+    struct DatedScanout { UINT id=0; int64_t scanout100ns=0; };
+    bool slipstreamStats()const{return slipstreamStats_;}
+    UINT lastPresentId()const{return lastPresentId_;}
+    const std::array<DatedScanout,16>& datedScanouts()const{return datedScanouts_;}
+    int presentSyncInterval()const{return desc_.vsync?1:0;}
+    bool presentTearing()const{return desc_.tearing&&!desc_.vsync&&tearingSupported_;}
+    // SetMaximumFrameLatency in force: 1 while pacing, 3 otherwise, -1 without a waitable chain
+    // (DXGI's default then applies).
+    int queueLatency()const{return latencyHandle_?(pacing_?1:3):-1;}
+    bool waitable()const{return latencyHandle_!=nullptr;}
+    int compositionMode()const{return compositionMode_;}
+    // One [slipstream-swapchain] line (STATS only): after creation and after each resize.
+    void logSwapchainFacts(const char* reason);
     // The owner re-reads the monitor after a move or mode change.
     void setDisplayRefreshHz(double hz){if(hz>=1.0)displayRefreshHz_=hz;}
     bool configurePacing(bool enabled,bool vsync,bool tearing);
@@ -228,6 +245,12 @@ private:
     double refreshQpc_=0,latchMs_=2;
     bool displayLatencyEnabled_=true;
     std::vector<double> displayLatencyMs_;
+    bool slipstreamStats_=false;
+    UINT lastPresentId_=0;
+    std::array<DatedScanout,16> datedScanouts_{};
+    unsigned datedScanoutNext_=0;
+    int compositionMode_=-1;
+    bool mediaResultLogged_=false;
 };
 
 } // namespace veyra::gfx

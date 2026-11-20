@@ -8,6 +8,7 @@
 #include <d3d12.h>
 #include <wrl/client.h>
 #include <array>
+#include <atomic>
 #include <mutex>
 
 namespace veyra::engine {
@@ -24,6 +25,17 @@ public:
     // Polled by the UI: reads finished copies. Returns press-to-picture in ms once seen, else -1.
     double poll();
     bool windowOpen() const { std::lock_guard lock(m_); return open_; }
+    // Latency test v2: how the answer is recognised (latency::Detector::Mode); kept across windows.
+    void setDetectorMode(latency::Detector::Mode mode);
+    // Latency test v2: the engine thread reports each real frame's network arrival (its presentation timestamp
+    // as the presenter sees it and the host time the frame arrived). Only kept while a window is open: a load
+    // of one atomic otherwise.
+    void noteArrival(int64_t pts100ns, int64_t arrivalHost100ns);
+    // The answered press, split: sent (markSent), network arrival of the frame that showed the answer (for a
+    // generated frame, the real frame after it), that frame's present (just before Present), the newest arrival
+    // before the press. 0 = unknown.
+    struct PressTiming { int64_t sent = 0, arrival = 0, present = 0, lastArrivalBeforeSent = 0; };
+    PressTiming timing() const;
 
     bool record(ID3D12GraphicsCommandList* list, const Frame& frame) override;
     void submitted(ID3D12Fence* fence, uint64_t value) override;
@@ -37,7 +49,7 @@ private:
         D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
         uint32_t width = 0, height = 0;
         quality::OutputLayout layout{};
-        int64_t host100ns = 0;
+        int64_t host100ns = 0, pts100ns = 0;
         uint64_t order = 0;
         enum class State { Free, Pending, InFlight } state = State::Free;
     };
@@ -45,6 +57,11 @@ private:
     bool open_ = false;
     int64_t sent_ = 0;
     double answerMs_ = -1;
+    int64_t answerPresent_ = 0, answerPts_ = 0;
+    struct Arrival { int64_t pts = 0, host = 0; };
+    std::array<Arrival, 128> arrivals_{};   // about 2 s of a 60 fps stream
+    size_t arrivalNext_ = 0;
+    std::atomic<bool> collecting_{false};
     uint64_t order_ = 0, lastRead_ = 0;
     latency::Detector detector_;
     std::array<Slot, 4> slots_;

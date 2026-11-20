@@ -54,7 +54,7 @@ struct SwsContext;
 struct NVSDK_NGX_Parameter;
 struct NVSDK_NGX_Handle;
 namespace veyra::guidance { class AmdOpticalFlow; class GpuDisOpticalFlow; }
-namespace veyra::pipeline { class VfgBackend; class VfxSrBackend; }
+namespace veyra::pipeline { class VfgBackend; class VfxSrBackend; class StreamChangeRunner; struct StreamChangeOutcome; }
 
 namespace veyra::gfx {
 class D3D12DeviceContext;
@@ -706,7 +706,7 @@ public:
     uint32_t flowHeight() const {return nvofH_;}
     uint32_t actualFlowPerf() const;
     diagnostics::FrameMetrics gpuMetrics(){gpuTimer_.collect(contextFence());return gpuTimer_.last();}
-    std::vector<diagnostics::GpuFrameTiming> takeGpuTimings(){gpuTimer_.collect(contextFence());return gpuTimer_.takeCompleted();}
+    std::vector<diagnostics::GpuFrameTiming> takeGpuTimings(){gpuTimer_.collect(contextFence());auto timings=gpuTimer_.takeCompleted();noteSrTimings(timings);return timings;}
     void recordGpuTimings(){gpuTimer_.recordCompleted();}
     ID3D12Fence* contextFence() const;
     ID3D12Resource* baseReference(unsigned slot=0)const{return baseReferences_[slot%2].Get();}
@@ -751,6 +751,19 @@ public:
     // could not be created (frame generation runs without it), 3 asked for but this frame generation
     // has no graph frames to lock (off, or XeSS generating inside its presenter).
     int hudLockState() const { if(!desc_.hudLock)return 0; if(hudLock_)return 1; if(!fgEnabled_||presentSinkFg())return 3; return 2; }
+    // PushFPS experiment VEYRA_EXP_RP_STREAM_DEDUP (pipeline/StreamChangePass.h): how much a
+    // hardware-decoded (D3D12VA, 8-bit NV12) picture differs from the one measured before it.
+    // Called by the engine before it decides whether to keep the frame; waits for the GPU until
+    // deadline100ns at the latest (pipeline::streamChangeDeadline on the engine's clock: 4 ms, and
+    // never past its next presentation; a deadline already passed: nothing is dispatched). The pass
+    // exists only when the switch was set at graph creation. An outcome without a valid `now`
+    // means: no number for this picture, keep the frame.
+    StreamChangeOutcome measureStreamChange(const AVFrame* frame,int64_t deadline100ns);
+    // Lets go of a decoder picture held for a measurement that has finished meanwhile. Called by
+    // the engine for frames it does not measure, so the picture is not held while measuring rests.
+    void settleStreamChange();
+    // measured / timed out / failed since this graph was created (for the engine's log line).
+    void streamChangeCounters(uint64_t& measured,uint64_t& timeouts,uint64_t& failures,double& waitMsMax,double& waitMsMean) const;
     // AMD FSR upscaling replaces the SR stage; it is a FidelityFX effect, not
     // an NGX feature, so it also works on non-NVIDIA adapters.
     // Double SR may run FSR in either pass; each pass is its own FidelityFX context.
@@ -859,6 +872,9 @@ public:
     engine::FailedBackend failedBackend() const { return failedBackend_; }
 
 private:
+    // PushFPS sprint 4: [slipstream-sr] statistics and VEYRA_EXP_SR_BUDGET_MS (EnhanceGraph.cpp; returns at once
+    // without VEYRA_EXP_RP_STATS=1 or the budget switch).
+    void noteSrTimings(const std::vector<diagnostics::GpuFrameTiming>& timings);
     engine::FailedBackend failedBackend_=engine::FailedBackend::None;
     bool createResources();
     bool initZeroAndDepthTextures();
@@ -1165,6 +1181,10 @@ private:
     std::unique_ptr<gfx::FsrSrBackend> fsrSrBackend_;
     std::unique_ptr<NisPass> nisPass_;  // PushFPS: NVIDIA Image Scaling SR
     std::unique_ptr<PushHudLock> hudLock_;  // PushFPS: Live HUD Lock
+    std::unique_ptr<StreamChangeRunner> streamChange_;  // PushFPS experiment: change of the decoded picture
+    std::shared_ptr<AVFrame> streamChangeFrame_;        // the decoder picture its last list reads
+    bool streamChangeFailed_=false;
+    bool initStreamChange();
     bool initHudLock();
     void composeHudLock(ID3D12GraphicsCommandList* list,unsigned generatedSlot,unsigned heldParity);
     // Double SR first passes on DLSS SR / FSR (the final pass keeps the members above).
