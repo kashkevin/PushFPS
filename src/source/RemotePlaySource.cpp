@@ -102,6 +102,7 @@ bool RemotePlaySource::connect(const RemotePlayConnectDesc& desc)
         veyra::log::error("remoteplay", "invalid queue limits");
         return false;
     }
+    inbox_->wakeOn(wake_);
     auto token = inbox_->begin(static_cast<remoteplay::HostTime>(origin100ns_));
     inbox_->streamProfile(request_.video);
     token_ = token; // Keep a second weak token; backend owns the moved copy.
