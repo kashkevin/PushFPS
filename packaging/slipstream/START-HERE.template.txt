@@ -1,0 +1,142 @@
+SLIPSTREAM TEST PACKAGE   @PACKAGE@
+==========================================================================================
+
+Development builds of the low-latency PS5 Remote Play work on PushFPS, for testing on your own PC.
+PushFPS is built on Veyra by Likely7 (GPL-3.0). This is not an official PushFPS release.
+
+WHAT HAS BEEN CHECKED, AND WHAT HAS NOT
+  The builds were compiled, installed and started on GitHub's Windows build machine (no graphics
+  card, no PS5, no screen to measure). On a real PC only package 6 has run, once: the first test
+  session on 19 November 2026 (PS5 over Wi-Fi, software counters). Everything added since then
+  (this package's experimental build, SmartLink included, and the new kit sessions) has never
+  run on a gaming PC, a graphics card or a PS5, and no latency has been measured with it.
+  The .cmd files here and the scripts behind them are run once on GitHub's Windows machine by
+  the workflow that made this package (job "verify" of the run named at the end of this file;
+  look there for its result). They have never run on a real PC either.
+  If anything fails, copy the text of the window and send it.
+
+IN THIS PACKAGE
+@BUILDS@
+  testkit\        the measuring kit and its tools (testkit\scripts\remoteplay\testkit)
+  docs\           SETUP.md (settings, every key), HARDWARE_TEST_PROCEDURE.md (measuring),
+                  SLIPSTREAM_STATUS.md (every feature: built, tested, or not yet), and more
+  SHA256SUMS.txt  SHA-256 of every file in this package. It travels inside the zip, so it only
+                  shows damage. If you got the zip another way than from the GitHub run, compare
+                  the zip's own SHA-256 with the artifact digest shown on that run's page.
+@MISSING@
+
+1. INSTALL                                   10 to 20 minutes, mostly one download of about 750 MB
+   Double-click  Install-Slipstream.cmd
+   It installs the builds above side by side, each with its own installer, into
+       %LOCALAPPDATA%\Programs\PushFPS-original          the original build, for comparison
+       %LOCALAPPDATA%\Programs\PushFPS-slipstream        the stable candidate
+       %LOCALAPPDATA%\Programs\PushFPS-slipstream-exp    the experimental build
+   No administrator rights, no shortcuts, nothing started. It prints what it did and can be run
+   again at any time. If you already use PushFPS, that install and its shortcuts are not touched.
+   Windows may warn about an unknown publisher (nothing here is code signed): "More info", then
+   "Run anyway".
+
+2. WHAT YOU DO (the kit does the rest)
+   a. Install (step 1 above).
+   b. Pair with the PS5 once, in any copy (docs\SETUP.md, section 3). The pairing is kept by Windows for
+      your user account and shared by every copy.
+   c. Start the game on the PS5 and stand in the same quiet place for every run (GTA: standing still
+      outside). Type a few words about the place when the kit asks.
+   d. Start ONE command (normally: NOT "Run as administrator"). FIRST, this sprint's main question
+      (is the video window composed by Windows or flipped directly?), from a Command Prompt in this
+      folder:   Run-First-Test.cmd -Session presentation      about 32 minutes, no clicks
+      (experimental build only, 4 arms, 2 rounds of one 12-press PS-button test, all automatic).
+      Then the audio pair:   Run-First-Test.cmd -Session audio      about 16 minutes, no clicks
+      (s-base against s-audio-smooth: do the clicks= of the audio stream stay flat?).
+      A plain double-click on Run-First-Test.cmd runs the original against the stable candidate
+      (section 3).
+   Every copy, the original included, is started with the kit's own test profile in its own settings
+   folder: low-latency queue ON and NVIDIA low latency ON, display sync V-Sync, smooth pacing, full
+   screen on connect, reconnect to the last console at start. This is NOT how you normally use the
+   original copy (in your first run it had the low-latency queue off): the test compares the builds
+   with the same settings. Your own PushFPS settings are never read or changed. The kit checks
+   in every run's log that the profile took effect, and refuses to compare two runs whose settings
+   differ (it names the setting and the fix).
+
+   WHAT IS STILL MANUAL, honestly, per build
+   original and stable candidate (no automation in these builds):
+     - the first start of each copy: connect to the PS5 once by hand; later starts reconnect by
+       themselves (the test profile's "reconnect at start");
+     - in each start: PS5 streaming dialog, latency test, 12 presses (the most these builds accept),
+       as many times as the kit says on screen; the kit closes PushFPS itself after the last one;
+     - Frame generation OFF in the interface the first time (it stays off in the kit's profile).
+   experimental build (-Session presentation, audio, switches, quality, dedup-probe, network): nothing; it connects, settles, runs
+     the tests and closes itself. If it cannot (no console, a step fails), the kit says so and shows
+     the steps to do by hand.
+
+3. MEASURE                                          about 72 minutes, most of it hands off
+   Run-First-Test.cmd checks the PC first (copies installed, no PushFPS running, network, refresh rate)
+   and names a one-line fix for anything wrong. Then the original against the stable candidate,
+   interleaved. At the end: RESULT.txt on screen and one zip to send back. Interrupted? Start it again:
+   it offers to continue the unfinished session.
+   Wi-Fi is allowed: the test runs, and every table and verdict then says "Wi-Fi: diagnostic only, not
+   a wired-LAN latency conclusion".
+   For frame times as well (optional): download the console program PresentMon-<version>-x64.exe from
+   the GitHub page "Releases - GameTechDev/PresentMon" (github.com/GameTechDev/PresentMon/releases)
+   and put it next to this file. The kit does not download or ship it (PresentMon is MIT licensed,
+   Copyright Intel Corporation; the licence text is in docs\HARDWARE_TEST_PROCEDURE.md). It is used only
+   when Intel signed it, and only if you start with  Run-First-Test.cmd -PresentMonPrompt  (then Windows
+   asks once per run to let PresentMon, only PresentMon, read frame times), or with no prompt at all if an
+   administrator has put your account into the group "Performance Log Users". -Session presentation
+   never asks: without that group it says "PresentMon not used" and still collects the app's own lines.
+   Later:
+     Run-Full-Test.cmd                         the same, then a 10-minute stability run and the
+                                               reliability checks, with breaks (about 105 minutes)
+     Run-First-Test.cmd -Session versus        stable candidate against the experimental build
+     Run-First-Test.cmd -Session switches      one switch per arm inside the experimental build, no clicks
+     Run-First-Test.cmd -Session quality       super resolution cost, frame generation, quality test, no clicks
+     Run-First-Test.cmd -Session dedup-probe   optional diagnostic, needs a game running at 30 FPS
+     Run-First-Test.cmd -Session network       SmartLink (Wi-Fi or cable): 4 arms, each twice, 3 minutes
+                                               per run, no clicks (about 40 minutes).
+                                               PLAY NORMALLY the whole time; a still menu only tells about
+                                               a still menu. On Wi-Fi the result is a Wi-Fi diagnostic.
+                                               This only screens for LARGE effects: with 2 runs per arm
+                                               the result often says "cannot tell ... would need about N
+                                               runs per arm", which is not "no difference".
+     Run-First-Test.cmd -Session network -Arms n-observe,n-apply -Rounds 6
+                                               a real verdict on one question: 2 arms, 6 runs each
+                                               (about 60 minutes)
+     Run-First-Test.cmd -Session network -NetworkWithBuilds
+                                               the same plus the original and the stable copy (about 60 min)
+     Run-First-Test.cmd -Session network -WifiStreamingMode
+                                               only if you want to try asking the Wi-Fi adapter not to
+                                               scan while streaming (untested here; never by default)
+   Steps and what each table means: docs\HARDWARE_TEST_PROCEDURE.md.
+   The stable candidate in daily use: %LOCALAPPDATA%\Programs\PushFPS-slipstream\PushFPS.exe with
+   mode Ultra Low Latency (Install-Slipstream wrote slipstream.ini; nothing to edit) and Frame
+   generation OFF; compare with %LOCALAPPDATA%\Programs\PushFPS-original\PushFPS.exe.
+
+4. GOING BACK
+   Rollback-Slipstream.cmd    switches slipstream.ini off (renames it, deletes nothing): the stable
+                              candidate then behaves as a build without settings. Rename the file
+                              back to slipstream.ini to use it again.
+   Start the original         PushFPS-original\PushFPS.exe is always installed beside the others
+                              and never reads slipstream.ini.
+   Uninstall-Slipstream.cmd   removes the three folders above after you type YES. Each copy's own
+                              settings and logs are inside its folder and go with it.
+   Collect-Diagnostics.cmd    if something goes wrong: makes one zip of logs and PC facts with
+                              names, addresses and ids removed (docs\RELIABILITY.md, section 5).
+                              Read it before sending; it has never run on a real PC.
+   None of these touches an official PushFPS install, its shortcuts or settings, your PS5 pairing
+   (kept by Windows for your user account, shared by every copy), or your test results.
+
+5. THE IN-APP UPDATER
+   A development build would be offered the official PushFPS release as an "update", and one click
+   could install it over the test copy. Install-Slipstream stops that in all three copies, and
+   builds made from a branch with the guard have the updater off in the program itself (their
+   version ends in "-slipstream"). In these copies "check for updates" therefore answers that
+   nothing newer exists. If a copy shows a plain 3.x.y version in Settings, About, it was replaced:
+   run Install-Slipstream.cmd -Force.
+
+6. PRIVACY
+   This package holds programs, scripts and documents only: no account, no console registration,
+   no settings, no logs, no passwords or keys. What the programs keep on your PC and what the kit
+   puts into the zip you send back is listed in docs\SETUP.md ("What is stored where").
+
+WHERE THE BUILDS CAME FROM
+@SOURCES@
