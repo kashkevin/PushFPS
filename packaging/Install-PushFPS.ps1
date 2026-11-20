@@ -8,7 +8,7 @@
 
   Usage (normally just double-click Install-PushFPS.cmd):
     Install-PushFPS.ps1 [-Gpu Auto|NVIDIA|AMD] [-InstallDir <folder>] [-NoShortcuts] [-NoLaunch]
-                        [-ExperimentalExtras Ask|Yes|No]
+                        [-ExperimentalExtras Ask|Yes|No] [-NeuralRuntime Ask|Yes|No]
     Install-PushFPS.ps1 -Uninstall [-InstallDir <folder>]
 
   Works with Windows PowerShell 5.1 and PowerShell 7.
@@ -24,6 +24,11 @@ param(
     # Ask (default): a question when run in a console window; No when there is no one to ask.
     [ValidateSet('Ask', 'Yes', 'No')]
     [string]$ExperimentalExtras = 'Ask',
+    # NVIDIA's own signed neural-rendering runtime that Veyra's NVIDIA package carries (experimental, optional;
+    # see below). It is never kept without an explicit yes. Ask (default): a question when run in a console
+    # window; No when there is no one to ask.
+    [ValidateSet('Ask', 'Yes', 'No')]
+    [string]$NeuralRuntime = 'Ask',
     [switch]$Uninstall,
     # Signed in-app updates (src/ui/UpdateChecker.cpp): the running PushFPS that started this
     # installer; it quits right after, and the copy waits until it has (at most a minute).
@@ -208,6 +213,56 @@ try {
         $skipped += "$($x.Rel) ($($x.Why); install with -ExperimentalExtras Yes)"
     }
     foreach ($item in $skipped) { Info "Not installed: $item" }
+
+    # The experimental neural layer's runtime ("AI picture enhancement"): NVIDIA's own signed nvngx_dlssnr.dll
+    # in Veyra's NVIDIA package. NVIDIA has published no DLSS 5 SDK and no terms covering this file's use by
+    # other programs, so it is never kept by default: only on an explicit yes (the question below, or
+    # -NeuralRuntime Yes), and then only if it is the file this release has a record of (Authenticode signature
+    # valid, signed by NVIDIA Corporation, SHA-256 as recorded). No, and Ask with no one to ask, remove it.
+    # A separate question from the extras above, which stay as they are. PushFPS checks the installed file again
+    # before it uses it; Settings > Components and licenses can add it (from a file you have) or remove it later.
+    # docs/NEURAL_RENDERING_RUNTIME.md
+    $neuralRel = 'runtime\experimental\nr-original'
+    $neuralSha256 = 'E16BCF15E16E13F527491CDF7845B2FE6521A738D8F7C9C721866A8496E1FC8E'   # nvngx_dlssnr.dll 310.8.0.0
+    $neuralSrc = Join-Path (Join-Path $runtimeRoot $neuralRel) 'nvngx_dlssnr.dll'
+    $neuralInstalled = Join-Path $InstallDir $neuralRel
+    if (Test-Path $neuralSrc) {
+        $neuralChoice = $NeuralRuntime
+        if ($neuralChoice -eq 'Ask') {
+            if ([Console]::IsInputRedirected) { $neuralChoice = 'No' }
+            else {
+                Step 'Optional: NVIDIA''s neural-rendering runtime (experimental)'
+                Info 'This is NVIDIA''s neural-rendering model, applied here to video ("AI picture enhancement").'
+                Info 'It is experimental and needs an RTX 50 card with driver 616.64 or newer. The file is an'
+                Info 'NVIDIA-signed original, but NVIDIA has published no terms covering its use by other'
+                Info 'programs: your decision. Everything else works without it; Settings can add or remove it later.'
+                $answer = Read-Host '    Install NVIDIA''s neural-rendering runtime? [y/N]'
+                if ($answer -match '^(y|yes|j|ja)$') { $neuralChoice = 'Yes' } else { $neuralChoice = 'No' }
+            }
+        }
+        $neuralProblem = ''
+        if ($neuralChoice -eq 'Yes') {
+            $neuralSig = Get-AuthenticodeSignature -FilePath $neuralSrc
+            $neuralSigner = ''
+            if ($neuralSig.SignerCertificate) {
+                $neuralSigner = $neuralSig.SignerCertificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false)
+            }
+            if ($neuralSig.Status -ne 'Valid') { $neuralProblem = "its signature is $($neuralSig.Status)" }
+            elseif ($neuralSigner -ne 'NVIDIA Corporation') { $neuralProblem = 'it is not signed by NVIDIA Corporation' }
+            elseif ((Get-Sha256 $neuralSrc) -ine $neuralSha256) { $neuralProblem = 'it is not the file this release has a record of' }
+        }
+        if ($neuralChoice -eq 'Yes' -and -not $neuralProblem) {
+            Info 'Installing NVIDIA''s neural-rendering runtime by your choice (NVIDIA-signed original, SHA-256 as recorded)'
+        } else {
+            Remove-Item (Join-Path $runtimeRoot $neuralRel) -Recurse -Force
+            Remove-Item $neuralInstalled -Recurse -Force -ErrorAction SilentlyContinue
+            if ($neuralProblem) { $neuralReason = "refused: $neuralProblem" }
+            else { $neuralReason = 'optional: install with -NeuralRuntime Yes, or later in Settings > Components and licenses' }
+            $neuralNote = "$neuralRel (NVIDIA's neural-rendering runtime, experimental; $neuralReason)"
+            $skipped += $neuralNote
+            Info "Not installed: $neuralNote"
+        }
+    }
 
     Step "Installing to $InstallDir"
     if ($WaitForPid -gt 0) {

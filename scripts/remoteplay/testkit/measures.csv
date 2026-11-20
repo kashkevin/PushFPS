@@ -1,0 +1,168 @@
+# What RESULT.txt section MEASURED VALUES shows per arm (kit version 5). Read by run-tests.ps1 (Get-MeasuredTables) and by
+# tools/remoteplay_latency_bench/report.py (measured_tables): one table, two readers, so the kit and the report cannot differ.
+# Adding a value to a session's page is ONE line here; adding an arm to a session is one line in arms.csv.
+# group      the line of the arm the value is shown on (several rows share a line; a group no run logged shows 'not logged')
+# sessions   kit sessions (-Session) that show the group, separated by |; * = every session
+# label      the words before the value
+# component  the log component ([name] in the app's line) or 'samples' (the kit's samples.csv, field = column; median, p01, max only)
+# filter     key=value[&key=value] the line must hold (empty = every line of the component)
+# phase      all | start | steady: start = lines within 3 s of the run's first line of that component, steady = the rest
+# field      the number (or word, for stat word) after field= in the line; a value of exactly -1 means "unknown" and is skipped
+# stat       median | p01 (1st percentile, linear between ranks) | max | last (median over runs of each run's last value) |
+#            word (most common text) | rate-min / rate-s (a running counter: its rises per minute / second; a fall = restart) |
+#            slope-min (per run (last - first) / minutes, median over runs) | first-s (seconds from the run's first [frame-rate]
+#            line to its first matching line, median over the runs that have one) | first-lt:X (the same, to the first line whose
+#            value is under X) | share-ge:X / share-lt:X (% of values >= X / < X)
+# digits     decimals shown; skipFirst / skipLast: matching lines left out at the start / end of every run; unit: after the value
+# compare    1 = the value of each run is compared with the arm's pair (arms.csv compare) by the run-to-run spread rule
+group,sessions,label,component,filter,phase,field,stat,digits,skipFirst,skipLast,unit,compare
+screen first 3 s,*,present to screen P50,display-latency,,start,presentToScanoutP50Ms,median,2,0,0,ms,0
+screen first 3 s,*,highest second P50,display-latency,,start,presentToScanoutP50Ms,max,2,0,0,ms,0
+screen first 3 s,*,dated frames/s,display-latency,,start,samples,median,0,0,0,,0
+screen steady,*,present to screen P50,display-latency,,steady,presentToScanoutP50Ms,median,2,0,0,ms,1
+screen steady,*,P95,display-latency,,steady,presentToScanoutP95Ms,median,2,0,0,ms,1
+screen steady,*,dated frames/s,display-latency,,steady,samples,median,0,0,0,,0
+screen steady,*,seconds with P50 of 4 ms or more,display-latency,,steady,presentToScanoutP50Ms,share-ge:4,1,0,0,%,1
+screen steady,*,first second with P50 under 3 ms after,display-latency,,all,presentToScanoutP50Ms,first-lt:3,1,0,0,s,1
+screen steady,*,variable refresh requested and active after,display-vrr,requested=true&active=true,all,,first-s,1,0,0,s,0
+audio,*,delay,remoteplay-audio,,all,delayMs,median,1,0,0,ms,1
+audio,*,delay at end,remoteplay-audio,,all,delayMs,last,1,0,0,ms,1
+audio,*,target at end,remoteplay-audio,,all,targetMs,last,1,0,0,ms,0
+audio,*,hard resets,remoteplay-audio,,all,hardResets,rate-min,2,0,0,/min,1
+audio,*,pops,remoteplay-audio,,all,pops,rate-min,2,0,0,/min,1
+audio,*,underruns,remoteplay-audio,,all,underruns,rate-min,2,0,0,/min,1
+audio,*,clicks,remoteplay-audio,,all,clicks,rate-min,2,0,0,/min,1
+audio,*,underrun starts,remoteplay-audio,,all,underrunStarts,rate-min,2,0,0,/min,1
+audio,*,video clock lag at end,remoteplay-clock,,all,arrivalMinusPtsMs,last,1,0,0,ms,0
+audio,*,video clock lag growth,remoteplay-clock,,all,arrivalMinusPtsMs,slope-min,1,0,0,ms/min,1
+audio own clock,audiofix,own target,remoteplay-audio,ownClock=1,all,ownTargetMs,median,1,0,0,ms,0
+audio own clock,audiofix,own median picture delay,remoteplay-audio,ownClock=1,all,ownMedianMs,median,1,0,0,ms,0
+audio own clock,audiofix,frames whose arrival was found per second,remoteplay-audio,ownClock=1,all,ownFrames,rate-s,1,0,0,,0
+audio own clock,audiofix,readings rejected at end,remoteplay-audio,ownClock=1,all,ownRejected,last,0,0,0,,0
+audio own clock,audiofix,audio queue P95,remoteplay-audio,,all,queueP95,median,1,0,0,ms,1
+window,pacing,region kind,slipstream-present,,all,regionKind,word,0,0,0,,0
+window,pacing,region rectangles max,slipstream-present,,all,regionRects,max,0,0,0,,1
+window,pacing,one-rectangle region,slipstream-present,,all,rectRegion,word,0,0,0,,0
+window,pacing,interface items in the picture max,slipstream-present,,all,inPicture,max,0,0,0,,0
+window,pacing,items,slipstream-present,,all,items,word,0,0,0,,0
+window,pacing,flip blockers,slipstream-present,,all,flipBlockers,word,0,0,0,,0
+scan-out audit,input|visual|neural|framegen|audiofix|pacing|builds,presents dated,slipstream-scanout,,all,namedPct,median,1,0,0,%,1
+scan-out audit,input|visual|neural|framegen|audiofix|pacing|builds,readings per 5 s,slipstream-scanout,,all,samples,median,0,0,0,,0
+scan-out audit,input|visual|neural|framegen|audiofix|pacing|builds,readings that named no new present,slipstream-scanout,,all,unchanged,median,0,0,0,,0
+scan-out audit,input|visual|neural|framegen|audiofix|pacing|builds,readings refused max,slipstream-scanout,,all,failed,max,0,0,0,,0
+scan-out audit,input|visual|neural|framegen|audiofix|pacing|builds,refused as disjoint max,slipstream-scanout,,all,disjoint,max,0,0,0,,0
+scan-out audit,input|visual|neural|framegen|audiofix|pacing|builds,counters unusable max,slipstream-scanout,,all,gapRejected,max,0,0,0,,0
+scan-out audit,input|visual|neural|framegen|audiofix|pacing|builds,presents per change of the statistics P50,slipstream-scanout,,all,stepP50,median,1,0,0,,1
+scan-out audit,input|visual|neural|framegen|audiofix|pacing|builds,statistics age P50,slipstream-scanout,,all,statsAgeMsP50,median,1,0,0,ms,1
+scan-out audit,input|visual|neural|framegen|audiofix|pacing|builds,shown but undated per 5 s,slipstream-scanout,,all,passedVsync,median,0,0,0,,0
+scan-out audit,input|visual|neural|framegen|audiofix|pacing|builds,may have been replaced max,slipstream-scanout,,all,passedSync0,max,0,0,0,,0
+scan-out audit,input|visual|neural|framegen|audiofix|pacing|builds,old replaced count per 5 s,slipstream-scanout,,all,refreshShort,median,0,0,0,,0
+in-app latency,input|visual|neural|framegen|audiofix|pacing|builds,arrival to scanout P50,slipstream-latency,,all,arrivalToScanoutP50,median,2,0,0,ms,1
+in-app latency,input|visual|neural|framegen|audiofix|pacing|builds,P95,slipstream-latency,,all,arrivalToScanoutP95,median,2,0,0,ms,1
+in-app latency,input|visual|neural|framegen|audiofix|pacing|builds,P99,slipstream-latency,,all,arrivalToScanoutP99,median,2,0,0,ms,1
+in-app latency,input|visual|neural|framegen|audiofix|pacing|builds,worst 5 s P99,slipstream-latency,,all,arrivalToScanoutP99,max,2,0,0,ms,0
+in-app latency,input|visual|neural|framegen|audiofix|pacing|builds,pickup to present call P95,slipstream-latency,,all,pickupToPresentCallP95,median,2,0,0,ms,1
+frame pacing,input|visual|neural|framegen|audiofix|pacing|builds,shown gap P95,slipstream-delivery,,all,shownGapP95,median,2,0,0,ms,1
+frame pacing,input|visual|neural|framegen|audiofix|pacing|builds,shown gap max,slipstream-delivery,,all,shownGapMax,max,2,0,0,ms,0
+frame pacing,input|visual|neural|framegen|audiofix|pacing|builds,arrival gap P95,slipstream-delivery,,all,gapP95,median,2,0,0,ms,1
+frame pacing,input|visual|neural|framegen|audiofix|pacing|builds,seconds under 57 submitted,frame-rate,,all,presentSubmitFps,share-lt:57,1,3,2,%,1
+frames,input|visual|neural|framegen|audiofix|pacing|builds,submitted FPS,frame-rate,,all,presentSubmitFps,median,1,3,2,,1
+frames,input|visual|neural|framegen|audiofix|pacing|builds,1 % low of the per-second rate,frame-rate,,all,presentSubmitFps,p01,1,3,2,,1
+gpu,input|visual|neural|framegen|audiofix|pacing|builds,whole GPU,samples,,all,gpuPercent,median,0,0,0,%,1
+gpu,input|visual|neural|framegen|audiofix|pacing|builds,PushFPS GPU 3D,samples,,all,appGpu3dPercent,median,0,0,0,%,1
+gpu,input|visual|neural|framegen|audiofix|pacing|builds,video memory (app),frame-rate,,all,vramMiB,median,0,0,0,MiB,1
+gpu,visual|neural,video memory (neural line),slipstream-nr,,all,vramMiB,median,0,0,0,MiB,0
+pipeline,visual|neural|framegen,applied,slipstream-pipeline,,all,applied,last,0,0,0,,0
+pipeline,visual|neural|framegen,refused,slipstream-pipeline,,all,refused,last,0,0,0,,0
+pipeline,visual|neural|framegen,detail,slipstream-pipeline,,all,detail,word,0,0,0,,0
+neural runtime,visual|neural,selected,nr-runtime-status,,all,selected,word,0,0,0,,0
+neural runtime,visual|neural,selected available,nr-runtime-status,,all,selectedAvailable,last,0,0,0,,0
+neural runtime,visual|neural,reason,nr-runtime-status,,all,reason,word,0,0,0,,0
+neural runtime,visual|neural,internal size,slipstream-nr,,all,internal,word,0,0,0,,0
+neural runtime,visual|neural,output,slipstream-nr,,all,output,word,0,0,0,,0
+processing,visual|neural|framegen,graph P50,slipstream-nr,,all,graphMsP50,median,2,0,0,ms,1
+processing,visual|neural|framegen,graph P95,slipstream-nr,,all,graphMsP95,median,2,0,0,ms,1
+processing,visual|neural|framegen,graph worst 5 s P95,slipstream-nr,,all,graphMsP95,max,2,0,0,ms,0
+processing,visual|neural|framegen,neural P50,slipstream-nr,,all,nrMsP50,median,2,0,0,ms,0
+processing,visual|neural|framegen,neural P95,slipstream-nr,,all,nrMsP95,median,2,0,0,ms,1
+processing,visual|neural|framegen,upscaler P50,slipstream-nr,,all,srMsP50,median,2,0,0,ms,0
+processing,visual|neural|framegen,upscaler P95,slipstream-nr,,all,srMsP95,median,2,0,0,ms,1
+processing,visual|neural|framegen,frame generation P50,slipstream-nr,,all,fgMsP50,median,2,0,0,ms,0
+processing,visual|neural|framegen,frame generation P95,slipstream-nr,,all,fgMsP95,median,2,0,0,ms,1
+processing,visual,clean-up P50,slipstream-clean,,all,gpuMsP50,median,2,0,0,ms,0
+processing,visual,clean-up P95,slipstream-clean,,all,gpuMsP95,median,2,0,0,ms,1
+processing,visual|neural|framegen,copies between AI stages per frame,slipstream-nr,,all,copyCount,median,0,0,0,,0
+quality raw,visual,blockiness,slipstream-quality,stage=raw,all,blockiness,median,3,0,0,,0
+quality raw,visual,banding,slipstream-quality,stage=raw,all,banding,median,3,0,0,,0
+quality raw,visual,ringing,slipstream-quality,stage=raw,all,ringing,median,3,0,0,,0
+quality raw,visual,detail,slipstream-quality,stage=raw,all,detail,median,3,0,0,,0
+quality raw,visual,HUD delta,slipstream-quality,stage=raw,all,hudDelta,median,3,0,0,,0
+quality raw,visual,flicker,slipstream-quality,stage=raw,all,flicker,median,3,0,0,,0
+quality raw,visual,size,slipstream-quality,stage=raw,all,size,word,0,0,0,,0
+quality output,visual,blockiness,slipstream-quality,stage=output,all,blockiness,median,3,0,0,,0
+quality output,visual,banding,slipstream-quality,stage=output,all,banding,median,3,0,0,,0
+quality output,visual,ringing,slipstream-quality,stage=output,all,ringing,median,3,0,0,,0
+quality output,visual,detail,slipstream-quality,stage=output,all,detail,median,3,0,0,,0
+quality output,visual,HUD delta,slipstream-quality,stage=output,all,hudDelta,median,3,0,0,,0
+quality output,visual,flicker,slipstream-quality,stage=output,all,flicker,median,3,0,0,,0
+quality output,visual,size,slipstream-quality,stage=output,all,size,word,0,0,0,,0
+frame generation,framegen|visual,real (stream) frames presented per second,frame-flow,,all,realPresented,rate-s,1,0,0,,1
+frame generation,framegen|visual,generated frames presented per second,frame-flow,,all,generatedPresented,rate-s,1,0,0,,1
+frame generation,framegen|visual,generated frames expired per second,frame-flow,,all,generatedExpiredAfterEval,rate-s,2,0,0,,1
+frame generation,framegen|visual,method output FPS,slipstream-fg,,all,outputFps,median,1,0,0,,0
+frame generation,framegen|visual,cost P95,slipstream-fg,,all,costP95,median,2,0,0,ms,1
+frame generation,framegen|visual,shown gap P95,slipstream-fg,,all,shownGapP95,median,2,0,0,ms,1
+frame generation,framegen|visual,shown gap max,slipstream-fg,,all,shownGapMax,max,2,0,0,ms,0
+frame generation,framegen|visual,pair delay,slipstream-fg,,all,pairDelayMs,median,2,0,0,ms,1
+mouse and keyboard,input,profile,slipstream-input,source=kbm,all,inputProfile,word,0,0,0,,0
+mouse and keyboard,input,mouse Hz,slipstream-input,source=kbm,all,mouseHz,median,0,0,0,,0
+mouse and keyboard,input,raw to translate P50,slipstream-input,source=kbm,all,rawToTranslateUsP50,median,1,0,0,us,1
+mouse and keyboard,input,raw to translate P95,slipstream-input,source=kbm,all,rawToTranslateUsP95,median,1,0,0,us,1
+mouse and keyboard,input,raw to translate P99,slipstream-input,source=kbm,all,rawToTranslateUsP99,median,1,0,0,us,1
+mouse and keyboard,input,translate P50,slipstream-input,source=kbm,all,translateUsP50,median,1,0,0,us,1
+mouse and keyboard,input,translate P95,slipstream-input,source=kbm,all,translateUsP95,median,1,0,0,us,1
+mouse and keyboard,input,translate P99,slipstream-input,source=kbm,all,translateUsP99,median,1,0,0,us,1
+mouse and keyboard,input,state to send P50,slipstream-input,source=kbm,all,stateToSendMsP50,median,2,0,0,ms,1
+mouse and keyboard,input,state to send P95,slipstream-input,source=kbm,all,stateToSendMsP95,median,2,0,0,ms,1
+mouse and keyboard,input,state to send P99,slipstream-input,source=kbm,all,stateToSendMsP99,median,2,0,0,ms,1
+mouse and keyboard,input,event to send P50,slipstream-input,source=kbm,all,eventToSendMsP50,median,2,0,0,ms,1
+mouse and keyboard,input,event to send P95,slipstream-input,source=kbm,all,eventToSendMsP95,median,2,0,0,ms,1
+mouse and keyboard,input,event to send P99,slipstream-input,source=kbm,all,eventToSendMsP99,median,2,0,0,ms,1
+mouse and keyboard,input,event to send max,slipstream-input,source=kbm,all,eventToSendMsMax,max,2,0,0,ms,0
+mouse and keyboard,input,queue age P95,slipstream-input,source=kbm,all,queueAgeMsP95,median,2,0,0,ms,1
+mouse and keyboard,input,queue depth max,slipstream-input,source=kbm,all,queueDepthMax,max,0,0,0,,0
+mouse and keyboard,input,send rate,slipstream-input,source=kbm,all,sendHz,median,0,0,0,Hz,1
+mouse and keyboard,input,send gap P50,slipstream-input,source=kbm,all,sendGapMsP50,median,2,0,0,ms,1
+mouse and keyboard,input,send gap P95,slipstream-input,source=kbm,all,sendGapMsP95,median,2,0,0,ms,1
+mouse and keyboard,input,send gap max,slipstream-input,source=kbm,all,sendGapMsMax,max,2,0,0,ms,0
+mouse and keyboard,input,smoothing,slipstream-input,source=kbm,all,smoothingMs,median,1,0,0,ms,0
+mouse and keyboard,input,saturated,slipstream-input,source=kbm,all,saturatedPct,median,1,0,0,%,0
+mouse and keyboard,input,fallback,slipstream-input,source=kbm,all,fallback,word,0,0,0,,0
+mouse and keyboard,input,stuck releases,slipstream-input,source=kbm,all,stuckReleases,max,0,0,0,,0
+DualSense,input,profile,slipstream-input,source=pad,all,inputProfile,word,0,0,0,,0
+DualSense,input,state to send P50,slipstream-input,source=pad,all,stateToSendMsP50,median,2,0,0,ms,1
+DualSense,input,state to send P95,slipstream-input,source=pad,all,stateToSendMsP95,median,2,0,0,ms,1
+DualSense,input,state to send P99,slipstream-input,source=pad,all,stateToSendMsP99,median,2,0,0,ms,1
+DualSense,input,event to send P50,slipstream-input,source=pad,all,eventToSendMsP50,median,2,0,0,ms,1
+DualSense,input,event to send P95,slipstream-input,source=pad,all,eventToSendMsP95,median,2,0,0,ms,1
+DualSense,input,event to send P99,slipstream-input,source=pad,all,eventToSendMsP99,median,2,0,0,ms,1
+DualSense,input,event to send max,slipstream-input,source=pad,all,eventToSendMsMax,max,2,0,0,ms,0
+DualSense,input,queue age P95,slipstream-input,source=pad,all,queueAgeMsP95,median,2,0,0,ms,1
+DualSense,input,queue depth max,slipstream-input,source=pad,all,queueDepthMax,max,0,0,0,,0
+DualSense,input,send rate,slipstream-input,source=pad,all,sendHz,median,0,0,0,Hz,1
+DualSense,input,send gap P50,slipstream-input,source=pad,all,sendGapMsP50,median,2,0,0,ms,1
+DualSense,input,send gap P95,slipstream-input,source=pad,all,sendGapMsP95,median,2,0,0,ms,1
+DualSense,input,send gap max,slipstream-input,source=pad,all,sendGapMsMax,max,2,0,0,ms,0
+interface poll,input,polls per line,slipstream-input-poll,,all,polls,median,0,0,0,,0
+interface poll,input,poll interval,slipstream-input-poll,,all,pollMs,median,0,0,0,ms,0
+interface poll,input,poll gap P50,slipstream-input-poll,,all,pollGapMsP50,median,2,0,0,ms,1
+interface poll,input,poll gap P95,slipstream-input-poll,,all,pollGapMsP95,median,2,0,0,ms,1
+interface poll,input,poll gap P99,slipstream-input-poll,,all,pollGapMsP99,median,2,0,0,ms,1
+interface poll,input,poll gap max,slipstream-input-poll,,all,pollGapMsMax,max,2,0,0,ms,0
+interface poll,input,late polls per line,slipstream-input-poll,,all,latePolls,median,0,0,0,,1
+interface poll,input,raw input backlog max,slipstream-input-poll,,all,rawBacklogMax,max,0,0,0,,0
+input scheduling,visual|neural|framegen|audiofix|pacing|builds,source,slipstream-input,,all,source,word,0,0,0,,0
+input scheduling,visual|neural|framegen|audiofix|pacing|builds,event to send P95,slipstream-input,,all,eventToSendMsP95,median,2,0,0,ms,1
+input scheduling,visual|neural|framegen|audiofix|pacing|builds,event to send P99,slipstream-input,,all,eventToSendMsP99,median,2,0,0,ms,1
+input scheduling,visual|neural|framegen|audiofix|pacing|builds,send gap P95,slipstream-input,,all,sendGapMsP95,median,2,0,0,ms,1
+input scheduling,visual|neural|framegen|audiofix|pacing|builds,queue age P95,slipstream-input,,all,queueAgeMsP95,median,2,0,0,ms,1

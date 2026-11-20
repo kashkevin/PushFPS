@@ -1,0 +1,15 @@
+# Camera measurements (input to photon). One row per press. Fill in, save as camera.csv in the evidence
+# folder, then run:  run-tests.ps1 -PackOnly <evidence folder>
+#
+# How to film: phone at 240 fps (slow motion), on a stand, with the controller button (or the mouse button) and
+# the screen in one picture. Press the PS button; the control centre sliding in is the answer. Play the clip
+# frame by frame and count the frames from the first one in which the button is fully down to the first one in
+# which the screen has changed. 30 presses or more per arm; discard nothing.
+#
+# arm            a kit arm (original, mod-all ...) or a camera-only arm: official-app (Sony's PS Remote Play
+#                program for Windows) or direct-ps5 (the PS5 plugged straight into the same monitor)
+# press          1, 2, 3 ... within the arm
+# frames         frames counted, as described above
+# camera_fps     the camera's real recording rate (240; some phones record 239.76 or 480)
+# note           optional (nothing personal)
+arm,press,frames,camera_fps,note

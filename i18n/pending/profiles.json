@@ -1,0 +1,327 @@
+{
+ "%1 放大到 %2×%3": {
+  "en": "%1 upscaling to %2×%3",
+  "zh-TW": "%1 放大到 %2×%3",
+  "ja": "%1 で %2×%3 にアップスケール"
+ },
+ "180 FPS（实验）": {
+  "en": "180 FPS (exp.)",
+  "zh-TW": "180 FPS（實驗）",
+  "ja": "180 FPS（実験的）"
+ },
+ "「%1」现在就是默认设置": {
+  "en": "“%1” is at its defaults",
+  "zh-TW": "「%1」現在就是預設設定",
+  "ja": "「%1」は既定の設定のままです"
+ },
+ "一次选好整条画面处理流程，不用逐项设置：清理串流压缩留下的色块和噪点、放大到 2560×1440、可选的神经增强，以及补帧目标。每个方案都可以单独修改，修改只记在那个方案里。多余的步骤会自动去掉，这台电脑不能运行的步骤会改用它能运行的方式，并在这里说明原因。选「不使用方案」恢复之前的设置": {
+  "en": "One choice for the whole picture pipeline instead of setting each part: removing the blocks and noise that stream compression leaves, upscaling to 2560×1440, the optional neural layer and a frame generation target. Each profile can be changed on its own, and a change is kept in that profile only. Redundant steps are dropped automatically, and a step this PC cannot run is replaced by one it can, with the reason shown here. Pick “No profile” to get your earlier settings back",
+  "zh-TW": "一次選好整條畫面處理流程，不用逐項設定：清理串流壓縮留下的色塊和雜訊、放大到 2560×1440、可選的神經增強，以及補幀目標。每個方案都可以單獨修改，修改只記在那個方案裡。多餘的步驟會自動去掉，這台電腦不能執行的步驟會改用它能執行的方式，並在這裡說明原因。選「不使用方案」恢復之前的設定",
+  "ja": "映像処理の流れ全体を一度に選べます。ストリーム圧縮によるブロックノイズやノイズの除去、2560×1440 へのアップスケール、任意のニューラル強化、フレーム生成の目標を個別に設定する必要はありません。各プロファイルは個別に変更でき、変更はそのプロファイルだけに保存されます。不要な処理は自動的に省かれ、この PC で実行できない処理は実行できる方式に置き換えられ、その理由がここに表示されます。「プロファイルなし」を選ぶと以前の設定に戻ります"
+ },
+ "不使用方案": {
+  "en": "No profile",
+  "zh-TW": "不使用方案",
+  "ja": "プロファイルなし"
+ },
+ "不做任何画面处理": {
+  "en": "no picture processing",
+  "zh-TW": "不做任何畫面處理",
+  "ja": "映像処理なし"
+ },
+ "不处理：不清理、不放大、不做神经增强、不补帧。显卡负担最低，不增加延迟": {
+  "en": "The stream as it is: no clean-up, no upscaling, no neural layer, no frame generation. Lowest GPU load, no added delay",
+  "zh-TW": "不處理：不清理、不放大、不做神經增強、不補幀。顯示卡負擔最低，不增加延遲",
+  "ja": "処理なし：クリーンアップ、アップスケール、ニューラル強化、フレーム生成を行いません。GPU 負荷は最小で、遅延は増えません"
+ },
+ "使用中": {
+  "en": "In use",
+  "zh-TW": "使用中",
+  "ja": "使用中"
+ },
+ "保守": {
+  "en": "Conservative",
+  "zh-TW": "保守",
+  "ja": "控えめ"
+ },
+ "保持原样": {
+  "en": "Keep",
+  "zh-TW": "保持原樣",
+  "ja": "そのまま"
+ },
+ "保持自己的设置，什么都不改": {
+  "en": "Keeps your own settings; changes nothing",
+  "zh-TW": "保持自己的設定，什麼都不改",
+  "ja": "自分の設定のままにし、何も変更しません"
+ },
+ "倍率已降低：输出不超过这个方案的目标帧率": {
+  "en": "The multiplier was lowered: the output stays at or under this profile's target frame rate",
+  "zh-TW": "倍率已降低：輸出不超過這個方案的目標影格率",
+  "ja": "倍率を下げました。出力はこのプロファイルの目標フレームレートを超えません"
+ },
+ "关闭所有画面处理，显卡只排队一帧，画面一到就显示。补帧保持你原来的设置。延迟最低": {
+  "en": "All picture processing off, a one-frame queue, each picture shown as soon as it arrives. Frame generation stays as you set it. Lowest delay",
+  "zh-TW": "關閉所有畫面處理，顯示卡只排隊一幀，畫面一到就顯示。補幀保持你原來的設定。延遲最低",
+  "ja": "映像処理をすべてオフにし、キューは 1 フレームのみ、届いた映像をすぐに表示します。フレーム生成は元の設定のままです。遅延は最小です"
+ },
+ "关闭：这个方案不做神经增强": {
+  "en": "Off: this profile has no neural layer",
+  "zh-TW": "關閉：這個方案不做神經增強",
+  "ja": "オフ：このプロファイルではニューラル強化を行いません"
+ },
+ "原始画面": {
+  "en": "Original",
+  "zh-TW": "原始畫面",
+  "ja": "オリジナル"
+ },
+ "只记在「%1」里": {
+  "en": "Kept in “%1” only",
+  "zh-TW": "只記在「%1」裡",
+  "ja": "「%1」だけに保存されます"
+ },
+ "含实验功能，还没有在实机上验证": {
+  "en": "includes an experimental feature not yet verified on real hardware",
+  "zh-TW": "含實驗功能，還沒有在實機上驗證",
+  "ja": "実機で未検証の実験的な機能を含みます"
+ },
+ "在「清晰 1440p」上再加一层保守的神经增强。显卡负担高，每帧处理时间更长": {
+  "en": "Clean 1440p plus a conservative neural layer. High GPU load and more processing time per frame",
+  "zh-TW": "在「清晰 1440p」上再加一層保守的神經增強。顯示卡負擔高，每幀處理時間更長",
+  "ja": "「クリーン 1440p」に控えめなニューラル強化を加えます。GPU 負荷が高く、1 フレームあたりの処理時間が長くなります"
+ },
+ "在放大之前去掉串流压缩留下的色块、蚊式噪点和色带的力度。0 为关闭。越高清理越多，过高会抹掉细小的纹理": {
+  "en": "How strongly the blocks, mosquito noise and banding that stream compression leaves are removed before upscaling. 0 is off. Higher removes more; too high wipes out fine texture",
+  "zh-TW": "在放大之前去掉串流壓縮留下的色塊、蚊式雜訊和色帶的力度。0 為關閉。越高清理越多，過高會抹掉細小的紋理",
+  "ja": "アップスケールの前に、ストリーム圧縮によるブロックノイズ、モスキートノイズ、バンディングを取り除く強さです。0 でオフ。高いほど多く除去しますが、高すぎると細かな質感が失われます"
+ },
+ "增强 1440p": {
+  "en": "Enhanced 1440p",
+  "zh-TW": "增強 1440p",
+  "ja": "エンハンスド 1440p"
+ },
+ "实测显卡处理时间不够用：放大已改用更省的方式": {
+  "en": "Measured GPU time is short: upscaling was changed to a cheaper way",
+  "zh-TW": "實測顯示卡處理時間不夠用：放大已改用更省的方式",
+  "ja": "計測した GPU 時間が足りないため、アップスケールをより軽い方式に変更しました"
+ },
+ "实测显卡处理时间不够用：这个方案不做神经增强": {
+  "en": "Measured GPU time is short: this profile runs without the neural layer",
+  "zh-TW": "實測顯示卡處理時間不夠用：這個方案不做神經增強",
+  "ja": "計測した GPU 時間が足りないため、このプロファイルではニューラル強化を行いません"
+ },
+ "实测显卡处理时间不够用：这个方案不放大": {
+  "en": "Measured GPU time is short: this profile runs without upscaling",
+  "zh-TW": "實測顯示卡處理時間不夠用：這個方案不放大",
+  "ja": "計測した GPU 時間が足りないため、このプロファイルではアップスケールを行いません"
+ },
+ "实测显卡处理时间不够用：这个方案不清理压缩痕迹": {
+  "en": "Measured GPU time is short: this profile runs without clean-up",
+  "zh-TW": "實測顯示卡處理時間不夠用：這個方案不清理壓縮痕跡",
+  "ja": "計測した GPU 時間が足りないため、このプロファイルでは圧縮ノイズの除去を行いません"
+ },
+ "实验功能，默认关闭。它把 NVIDIA 的神经渲染模型用在已经解码的视频画面上，没有游戏提供的运动向量、深度和遮罩，所以不是游戏内置的官方 DLSS 5，效果也不等同，也没有得到 NVIDIA 的认可。「保守」改动最小，最接近原画；觉得画面不像原作时请选更低的一档或关闭": {
+  "en": "Experimental and off by default. It applies NVIDIA's neural rendering model to the decoded video picture, without the motion vectors, depth and masks a game provides, so it is not NVIDIA's official game-integrated DLSS 5, is not equivalent to it and is not endorsed by NVIDIA. “Conservative” changes the least and stays closest to the original; if the picture no longer looks like the game, pick a lower step or turn it off",
+  "zh-TW": "實驗功能，預設關閉。它把 NVIDIA 的神經渲染模型用在已經解碼的視訊畫面上，沒有遊戲提供的運動向量、深度和遮罩，所以不是遊戲內建的官方 DLSS 5，效果也不等同，也沒有得到 NVIDIA 的認可。「保守」改動最小，最接近原畫；覺得畫面不像原作時請選更低的一檔或關閉",
+  "ja": "実験的な機能で、既定ではオフです。NVIDIA のニューラルレンダリングモデルをデコード済みの映像に適用しますが、ゲームが提供するモーションベクター、深度、マスクはありません。そのため、ゲームに組み込まれた NVIDIA 公式の DLSS 5 ではなく、同等の効果でもなく、NVIDIA が認めたものでもありません。「控えめ」は変更が最も少なく、元の映像に最も近くなります。映像が原作らしく見えないときは、より低い段階を選ぶかオフにしてください"
+ },
+ "实验目标：还没有在实机上验证": {
+  "en": "Experimental target: not yet verified on real hardware",
+  "zh-TW": "實驗目標：還沒有在實機上驗證",
+  "ja": "実験的な目標：実機では未検証です"
+ },
+ "屏幕只有 %1 行：放大目标已降到屏幕尺寸，不做多余的更大画面": {
+  "en": "The screen has %1 lines: the upscaling target was lowered to the screen's size, so no larger picture is made for nothing",
+  "zh-TW": "螢幕只有 %1 行：放大目標已降到螢幕尺寸，不做多餘的更大畫面",
+  "ja": "画面は %1 ラインです。アップスケールの目標を画面サイズに下げ、不要に大きな映像は作りません"
+ },
+ "已关闭双重超分：连续放大两次是多余的": {
+  "en": "Double super resolution was turned off: upscaling twice in a row is redundant",
+  "zh-TW": "已關閉雙重超分：連續放大兩次是多餘的",
+  "ja": "2段階超解像をオフにしました。続けて 2 回アップスケールするのは無駄です"
+ },
+ "已按你的修改调整": {
+  "en": "with your changes",
+  "zh-TW": "已依你的修改調整",
+  "ja": "変更を反映済み"
+ },
+ "已选了性能模式：补帧和显示方式由性能模式决定": {
+  "en": "A performance mode is chosen: it decides frame generation and presentation",
+  "zh-TW": "已選了效能模式：補幀和顯示方式由效能模式決定",
+  "ja": "パフォーマンスモードが選ばれているため、フレーム生成と表示方法はそのモードが決めます"
+ },
+ "当前补帧方式没有这个倍率，已改用它能提供的最高倍率": {
+  "en": "The current frame generation method does not offer this multiplier; its highest one is used instead",
+  "zh-TW": "目前補幀方式沒有這個倍率，已改用它能提供的最高倍率",
+  "ja": "現在のフレーム生成方式ではこの倍率を使えないため、使える最大の倍率にしました"
+ },
+ "当前设置和这个方案不一致（可能在别处改过）；再选一次方案可以重新应用": {
+  "en": "The current settings differ from this profile (perhaps changed elsewhere); pick the profile again to apply it once more",
+  "zh-TW": "目前設定和這個方案不一致（可能在別處改過）；再選一次方案可以重新套用",
+  "ja": "現在の設定がこのプロファイルと一致しません（別の場所で変更された可能性があります）。プロファイルを選び直すと再適用されます"
+ },
+ "恢复此方案的默认值": {
+  "en": "Reset this profile",
+  "zh-TW": "恢復此方案的預設值",
+  "ja": "このプロファイルをリセット"
+ },
+ "所选的放大方式不能在这台电脑上运行：改用 %1 放大": {
+  "en": "The chosen upscaler cannot run on this PC: %1 is used instead",
+  "zh-TW": "所選的放大方式不能在這台電腦上執行：改用 %1 放大",
+  "ja": "選択したアップスケーラーはこの PC で実行できないため、代わりに %1 を使用します"
+ },
+ "把 1080p 的串流画面放大到屏幕的尺寸。DLSS 需要 NVIDIA RTX 显卡；FSR 和 NIS 在任何支持 DirectX 12 的显卡上都能运行。目标高于屏幕尺寸时会先算出更大的画面再缩小，更耗显卡": {
+  "en": "Enlarges the 1080p stream to the screen's size. DLSS needs an NVIDIA RTX graphics card; FSR and NIS run on any DirectX 12 graphics card. A target above the screen's size makes a larger picture first and shrinks it, which costs more GPU",
+  "zh-TW": "把 1080p 的串流畫面放大到螢幕的尺寸。DLSS 需要 NVIDIA RTX 顯示卡；FSR 和 NIS 在任何支援 DirectX 12 的顯示卡上都能執行。目標高於螢幕尺寸時會先算出更大的畫面再縮小，更耗顯示卡",
+  "ja": "1080p のストリーム映像を画面のサイズに拡大します。DLSS には NVIDIA RTX グラフィックスカードが必要です。FSR と NIS は DirectX 12 対応のグラフィックスカードならどれでも動作します。目標が画面サイズより大きい場合は、より大きな映像を作ってから縮小するため GPU 負荷が増えます"
+ },
+ "把「%1」恢复成它原来的设置；其他方案不受影响": {
+  "en": "Puts “%1” back to its own defaults; other profiles are not affected",
+  "zh-TW": "把「%1」恢復成它原來的設定；其他方案不受影響",
+  "ja": "「%1」を元の既定値に戻します。ほかのプロファイルには影響しません"
+ },
+ "按这个目标和屏幕没有可以生成的帧，所以不补帧": {
+  "en": "With this target and this screen there is nothing to generate, so no frames are generated",
+  "zh-TW": "依這個目標和螢幕沒有可以生成的幀，所以不補幀",
+  "ja": "この目標と画面では生成するフレームがないため、フレーム生成は行いません"
+ },
+ "放大": {
+  "en": "Upscaling",
+  "zh-TW": "放大",
+  "ja": "アップスケール"
+ },
+ "放大没有打开：程序没有接受这个设置": {
+  "en": "Upscaling was not turned on: the app did not accept this setting",
+  "zh-TW": "放大沒有開啟：程式沒有接受這個設定",
+  "ja": "アップスケールをオンにできませんでした。アプリがこの設定を受け付けませんでした"
+ },
+ "方案只定目标帧率，补帧方式保持你原来选的；倍率取不超过目标和屏幕刷新率的最大值，不会为了数字好看而加倍率，也不会打开去除重复画面。「保持原样」不改动补帧。180 FPS 是实验目标：生成的帧越多，每张真实画面显示得越晚": {
+  "en": "A profile only sets a target frame rate; the frame generation method stays the one you chose. The multiplier is the largest that stays at or under the target and the screen's refresh rate: it is never raised to show a bigger number, and duplicate removal is never turned on. “Keep as is” leaves frame generation alone. 180 FPS is an experimental target: the more frames are generated, the later each real picture is shown",
+  "zh-TW": "方案只定目標影格率，補幀方式保持你原來選的；倍率取不超過目標和螢幕更新率的最大值，不會為了數字好看而加倍率，也不會開啟去除重複畫面。「保持原樣」不改動補幀。180 FPS 是實驗目標：生成的幀越多，每張真實畫面顯示得越晚",
+  "ja": "プロファイルは目標フレームレートだけを決め、フレーム生成方式は選択済みのものを使います。倍率は目標と画面のリフレッシュレートを超えない最大の値で、数字を良く見せるために上げることはなく、重複フレームの除去をオンにすることもありません。「そのまま」はフレーム生成を変更しません。180 FPS は実験的な目標です。生成するフレームが多いほど、実際の各フレームの表示は遅くなります"
+ },
+ "显存不够用：这个方案不做神经增强": {
+  "en": "Not enough video memory: this profile runs without the neural layer",
+  "zh-TW": "顯示記憶體不夠用：這個方案不做神經增強",
+  "ja": "ビデオメモリが足りないため、このプロファイルではニューラル強化を行いません"
+ },
+ "最高画质": {
+  "en": "Maximum Fidelity",
+  "zh-TW": "最高畫質",
+  "ja": "最高画質"
+ },
+ "没有使用方案：下面每一项都是你自己的设置。选一个方案，一次设好清理、放大、神经增强和补帧；选「不使用方案」恢复之前的设置": {
+  "en": "No profile in use: every row below is your own setting. Pick a profile to set clean-up, upscaling, the neural layer and frame generation in one go; pick “No profile” to get your earlier settings back",
+  "zh-TW": "沒有使用方案：下面每一項都是你自己的設定。選一個方案，一次設好清理、放大、神經增強和補幀；選「不使用方案」恢復之前的設定",
+  "ja": "プロファイルは使用していません。下の各項目は自分の設定です。プロファイルを選ぶと、クリーンアップ、アップスケール、ニューラル強化、フレーム生成を一度に設定します。「プロファイルなし」を選ぶと以前の設定に戻ります"
+ },
+ "清晰 1440p": {
+  "en": "Clean 1440p",
+  "zh-TW": "清晰 1440p",
+  "ja": "クリーン 1440p"
+ },
+ "清理压缩痕迹 %1%": {
+  "en": "clean-up %1%",
+  "zh-TW": "清理壓縮痕跡 %1%",
+  "ja": "圧縮ノイズ除去 %1%"
+ },
+ "清理压缩痕迹，再放大到 2560×1440，补帧目标 120 FPS。显卡负担中等；补帧会让每张真实画面晚一点显示": {
+  "en": "Removes compression artifacts, then upscales to 2560×1440; frame generation aims for 120 FPS. Moderate GPU load; frame generation shows each real picture a little later",
+  "zh-TW": "清理壓縮痕跡，再放大到 2560×1440，補幀目標 120 FPS。顯示卡負擔中等；補幀會讓每張真實畫面晚一點顯示",
+  "ja": "圧縮ノイズを取り除いてから 2560×1440 にアップスケールし、フレーム生成は 120 FPS を目標にします。GPU 負荷は中程度。フレーム生成により実際の各フレームの表示が少し遅れます"
+ },
+ "清理强度": {
+  "en": "Clean-up strength",
+  "zh-TW": "清理強度",
+  "ja": "クリーンアップの強さ"
+ },
+ "画质参考配置：放大到 4K 后按屏幕尺寸显示，补帧目标 120 FPS。显卡负担最高": {
+  "en": "The picture-quality reference: upscaling to 4K, shown at the screen's size; frame generation aims for 120 FPS. Highest GPU load",
+  "zh-TW": "畫質參考設定：放大到 4K 後依螢幕尺寸顯示，補幀目標 120 FPS。顯示卡負擔最高",
+  "ja": "画質の基準構成：4K にアップスケールして画面サイズで表示し、フレーム生成は 120 FPS を目標にします。GPU 負荷は最大です"
+ },
+ "画面已经是目标尺寸，不需要放大": {
+  "en": "The picture already has the target size: no upscaling needed",
+  "zh-TW": "畫面已經是目標尺寸，不需要放大",
+  "ja": "映像はすでに目標サイズのため、アップスケールは不要です"
+ },
+ "画面方案": {
+  "en": "Picture profile",
+  "zh-TW": "畫面方案",
+  "ja": "映像プロファイル"
+ },
+ "神经增强不能在这台电脑上运行，所以这个方案不做神经增强": {
+  "en": "The neural layer cannot run on this PC, so this profile runs without it",
+  "zh-TW": "神經增強不能在這台電腦上執行，所以這個方案不做神經增強",
+  "ja": "ニューラル強化はこの PC で実行できないため、このプロファイルでは行いません"
+ },
+ "神经增强没有打开：程序没有接受这个设置": {
+  "en": "The neural layer was not turned on: the app did not accept this setting",
+  "zh-TW": "神經增強沒有開啟：程式沒有接受這個設定",
+  "ja": "ニューラル強化をオンにできませんでした。アプリがこの設定を受け付けませんでした"
+ },
+ "神经增强的内部尺寸已降到 %1 行": {
+  "en": "The neural layer's internal size was lowered to %1 lines",
+  "zh-TW": "神經增強的內部尺寸已降到 %1 行",
+  "ja": "ニューラル強化の内部サイズを %1 ラインに下げました"
+ },
+ "神经增强的风格没有设置成功": {
+  "en": "The neural layer's look could not be set",
+  "zh-TW": "神經增強的風格沒有設定成功",
+  "ja": "ニューラル強化のスタイルを設定できませんでした"
+ },
+ "神经增强（%1）": {
+  "en": "neural layer (%1)",
+  "zh-TW": "神經增強（%1）",
+  "ja": "ニューラル強化（%1）"
+ },
+ "神经增强（实验）": {
+  "en": "Neural layer (experimental)",
+  "zh-TW": "神經增強（實驗）",
+  "ja": "ニューラル強化（実験的）"
+ },
+ "补帧保持原样": {
+  "en": "frame generation as you set it",
+  "zh-TW": "補幀保持原樣",
+  "ja": "フレーム生成はそのまま"
+ },
+ "补帧目标": {
+  "en": "Frame generation target",
+  "zh-TW": "補幀目標",
+  "ja": "フレーム生成の目標"
+ },
+ "视频画面上的神经增强，不是游戏内置的官方 DLSS 5；更耗显卡": {
+  "en": "A neural layer applied to the video picture, not the official game-integrated DLSS 5; costs more GPU",
+  "zh-TW": "視訊畫面上的神經增強，不是遊戲內建的官方 DLSS 5；更耗顯示卡",
+  "ja": "映像に適用するニューラル強化で、ゲームに組み込まれた公式の DLSS 5 ではありません。GPU 負荷が増えます"
+ },
+ "还不知道屏幕的尺寸，先按方案的目标尺寸设置": {
+  "en": "The screen's size is not known yet: set for the profile's own target size for now",
+  "zh-TW": "還不知道螢幕的尺寸，先依方案的目標尺寸設定",
+  "ja": "画面のサイズがまだ分からないため、ひとまずプロファイルの目標サイズで設定します"
+ },
+ "还不知道画面或屏幕的尺寸，暂时不做处理": {
+  "en": "The size of the picture or the screen is not known yet: no processing for now",
+  "zh-TW": "還不知道畫面或螢幕的尺寸，暫時不做處理",
+  "ja": "映像または画面のサイズがまだ分からないため、ひとまず処理は行いません"
+ },
+ "这个版本没有清理压缩痕迹的功能，所以跳过这一步": {
+  "en": "This version has no compression clean-up, so that step is skipped",
+  "zh-TW": "這個版本沒有清理壓縮痕跡的功能，所以跳過這一步",
+  "ja": "このバージョンには圧縮ノイズ除去の機能がないため、この処理は省かれます"
+ },
+ "这台电脑不能运行所选的放大方式，也没有可以代替的，所以不放大": {
+  "en": "This PC cannot run the chosen upscaler or any stand-in for it, so there is no upscaling",
+  "zh-TW": "這台電腦不能執行所選的放大方式，也沒有可以代替的，所以不放大",
+  "ja": "この PC では選択したアップスケーラーも代わりの方式も実行できないため、アップスケールは行いません"
+ },
+ "选择方案": {
+  "en": "Choose a profile",
+  "zh-TW": "選擇方案",
+  "ja": "プロファイルを選ぶ"
+ },
+ "极低延迟": {
+  "en": "Ultra Low Latency",
+  "zh-TW": "極低延遲",
+  "ja": "超低遅延"
+ }
+}

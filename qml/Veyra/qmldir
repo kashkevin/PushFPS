@@ -106,3 +106,15 @@ PushLayoutDialog 1.0 PushLayoutDialog.qml
 PushFrameInputDialog 1.0 PushFrameInputDialog.qml
 PushQualityTestDialog 1.0 PushQualityTestDialog.qml
 PushLatencyTestDialog 1.0 PushLatencyTestDialog.qml
+PushModeRow 1.0 PushModeRow.qml
+PushSmartLinkRow 1.0 PushSmartLinkRow.qml
+PushModeDriver 1.0 PushModeDriver.qml
+PushProfileRow 1.0 PushProfileRow.qml
+PushStatsOverlay 1.0 PushStatsOverlay.qml
+PushWelcomeCard 1.0 PushWelcomeCard.qml
+PushCalibrationPanel 1.0 PushCalibrationPanel.qml
+PushCalibrationRun 1.0 PushCalibrationRun.qml
+PushNeuralRuntime 1.0 PushNeuralRuntime.qml
+PushKbmPage 1.0 PushKbmPage.qml
+PushKbmBindings 1.0 PushKbmBindings.qml
+PushKbmWizard 1.0 PushKbmWizard.qml

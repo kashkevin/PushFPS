@@ -1,0 +1,187 @@
+{
+ "NVIDIA 运行库 (nvngx_dlssnr.dll);;所有文件 (*)": {
+  "en": "NVIDIA runtime (nvngx_dlssnr.dll);;All files (*)",
+  "zh-TW": "NVIDIA 執行庫 (nvngx_dlssnr.dll);;所有檔案 (*)",
+  "ja": "NVIDIA ランタイム (nvngx_dlssnr.dll);;すべてのファイル (*)"
+ },
+ "nr-original 中的文件不是 NVIDIA 签名的原版，已拒绝使用": {
+  "en": "The file in nr-original is not an NVIDIA-signed original and was refused",
+  "zh-TW": "nr-original 中的檔案不是 NVIDIA 簽署的原版，已拒絕使用",
+  "ja": "nr-original のファイルは NVIDIA 署名のオリジナルではないため、使用を拒否しました"
+ },
+ "nr-original 中的文件未通过验证（%1），不会被使用": {
+  "en": "The file in nr-original did not pass verification (%1) and is not used",
+  "zh-TW": "nr-original 中的檔案未通過驗證（%1），不會被使用",
+  "ja": "nr-original のファイルは検証に合格しなかったため（%1）、使用されません"
+ },
+ "从已有文件安装…": {
+  "en": "Install from a file you have…",
+  "zh-TW": "從已有的檔案安裝…",
+  "ja": "手元のファイルからインストール…"
+ },
+ "保守": {
+  "en": "Conservative",
+  "zh-TW": "保守",
+  "ja": "控えめ"
+ },
+ "内容与已记录的 NVIDIA 原版文件不一致": {
+  "en": "its content differs from the recorded NVIDIA original of this version",
+  "zh-TW": "內容與已記錄的 NVIDIA 原版檔案不一致",
+  "ja": "内容が記録済みの NVIDIA オリジナルと一致しません"
+ },
+ "安装与移除": {
+  "en": "Install and remove",
+  "zh-TW": "安裝與移除",
+  "ja": "インストールと削除"
+ },
+ "已安装 NVIDIA 原版神经渲染运行库 %1": {
+  "en": "NVIDIA's original neural rendering runtime %1 is installed",
+  "zh-TW": "已安裝 NVIDIA 原版神經渲染執行庫 %1",
+  "ja": "NVIDIA オリジナルのニューラルレンダリング ランタイム %1 をインストールしました"
+ },
+ "已安装：%1 · NVIDIA 签名原版 · 已随本应用测试": {
+  "en": "Installed: %1 · NVIDIA-signed original · tested with this app",
+  "zh-TW": "已安裝：%1 · NVIDIA 簽署原版 · 已隨本應用程式測試",
+  "ja": "インストール済み：%1 · NVIDIA 署名オリジナル · このアプリでテスト済み"
+ },
+ "已安装：%1 · NVIDIA 签名原版 · 此版本未随本应用测试": {
+  "en": "Installed: %1 · NVIDIA-signed original · version not tested with this app",
+  "zh-TW": "已安裝：%1 · NVIDIA 簽署原版 · 此版本未隨本應用程式測試",
+  "ja": "インストール済み：%1 · NVIDIA 署名オリジナル · このバージョンはこのアプリで未テスト"
+ },
+ "已拒绝": {
+  "en": "Refused",
+  "zh-TW": "已拒絕",
+  "ja": "拒否"
+ },
+ "已移除神经渲染运行库": {
+  "en": "The neural rendering runtime was removed",
+  "zh-TW": "已移除神經渲染執行庫",
+  "ja": "ニューラルレンダリング ランタイムを削除しました"
+ },
+ "把 NVIDIA 的神经渲染模型用于解码后的视频画面，没有游戏的运动矢量、深度和遮罩。这不是 NVIDIA 集成在游戏里的 DLSS 5，也未获 NVIDIA 认可；HDR 画面下的色彩准确性尚未验证。只接受 NVIDIA 签名的原版文件，应用不会下载它。NVIDIA 没有公布涵盖其他程序使用此文件的条款：是否使用由你决定": {
+  "en": "Applies NVIDIA's neural rendering model to a decoded video stream, without the game's motion vectors, depth or masks. It is not NVIDIA's game-integrated DLSS 5 and is not endorsed by NVIDIA; colour accuracy on HDR pictures is unverified. Only an NVIDIA-signed original file is accepted, and the app never downloads it. NVIDIA has published no terms covering this file's use by other programs: using it is your decision",
+  "zh-TW": "把 NVIDIA 的神經渲染模型用於解碼後的視訊畫面，沒有遊戲的運動向量、深度和遮罩。這不是 NVIDIA 整合在遊戲裡的 DLSS 5，也未獲 NVIDIA 認可；HDR 畫面下的色彩準確性尚未驗證。只接受 NVIDIA 簽署的原版檔案，應用程式不會下載它。NVIDIA 沒有公布涵蓋其他程式使用此檔案的條款：是否使用由你決定",
+  "ja": "NVIDIA のニューラルレンダリング モデルを、ゲームのモーションベクター・深度・マスクなしで、デコード後の映像に適用します。NVIDIA がゲームに統合する DLSS 5 ではなく、NVIDIA の承認も受けていません。HDR 映像での色の正確さは未検証です。NVIDIA 署名のオリジナル ファイルのみ受け付け、アプリがダウンロードすることはありません。NVIDIA は、他のプログラムによるこのファイルの使用を対象とする条件を公開していません：使用するかどうかはあなたの判断です"
+ },
+ "文件在签名后被改动过": {
+  "en": "the file was changed after it was signed",
+  "zh-TW": "檔案在簽署後被改動過",
+  "ja": "署名後にファイルが変更されています"
+ },
+ "文件大小不对": {
+  "en": "the file size is wrong",
+  "zh-TW": "檔案大小不對",
+  "ja": "ファイル サイズが正しくありません"
+ },
+ "文件没有数字签名": {
+  "en": "the file has no digital signature",
+  "zh-TW": "檔案沒有數位簽章",
+  "ja": "ファイルにデジタル署名がありません"
+ },
+ "无法复制运行库文件": {
+  "en": "The runtime file could not be copied",
+  "zh-TW": "無法複製執行庫檔案",
+  "ja": "ランタイム ファイルをコピーできませんでした"
+ },
+ "无法打开所选文件": {
+  "en": "The chosen file could not be opened",
+  "zh-TW": "無法開啟所選檔案",
+  "ja": "選択したファイルを開けませんでした"
+ },
+ "无法检查证书是否被吊销": {
+  "en": "the certificate's revocation could not be checked",
+  "zh-TW": "無法檢查憑證是否被撤銷",
+  "ja": "証明書の失効を確認できませんでした"
+ },
+ "无法验证文件的签名": {
+  "en": "the file's signature could not be verified",
+  "zh-TW": "無法驗證檔案的簽章",
+  "ja": "ファイルの署名を検証できませんでした"
+ },
+ "无法验证运行库的签名": {
+  "en": "The runtime's signature could not be verified",
+  "zh-TW": "無法驗證執行庫的簽章",
+  "ja": "ランタイムの署名を検証できませんでした"
+ },
+ "显卡驱动过旧，无法运行此运行库": {
+  "en": "The graphics driver is too old for this runtime",
+  "zh-TW": "顯示卡驅動程式過舊，無法執行此執行庫",
+  "ja": "グラフィックス ドライバーが古く、このランタイムを実行できません"
+ },
+ "未安装 NVIDIA 原版运行库：在 设置 → 组件与许可 中从你已有的文件安装": {
+  "en": "NVIDIA's original runtime is not installed: install it from a file you have in Settings → Components and licenses",
+  "zh-TW": "未安裝 NVIDIA 原版執行庫：在 設定 → 元件與授權 中從你已有的檔案安裝",
+  "ja": "NVIDIA オリジナルのランタイムが未インストールです：設定 → コンポーネントとライセンス で手元のファイルからインストールしてください"
+ },
+ "未测试的版本": {
+  "en": "Untested version",
+  "zh-TW": "未測試的版本",
+  "ja": "未テストのバージョン"
+ },
+ "此安装不含这个运行库；请改选 NVIDIA 原版运行库": {
+  "en": "This install does not include this runtime; choose NVIDIA's original runtime instead",
+  "zh-TW": "此安裝不含這個執行庫；請改選 NVIDIA 原版執行庫",
+  "ja": "このインストールにはこのランタイムが含まれていません。NVIDIA オリジナルのランタイムを選んでください"
+ },
+ "此显卡不支持": {
+  "en": "Not supported on this graphics card",
+  "zh-TW": "此顯示卡不支援",
+  "ja": "このグラフィックス カードでは使用できません"
+ },
+ "没有安装：%1": {
+  "en": "Not installed: %1",
+  "zh-TW": "沒有安裝：%1",
+  "ja": "インストールしませんでした：%1"
+ },
+ "神经渲染运行库（实验）": {
+  "en": "Neural rendering runtime (experimental)",
+  "zh-TW": "神經渲染執行庫（實驗）",
+  "ja": "ニューラルレンダリング ランタイム（実験的）"
+ },
+ "移除": {
+  "en": "Remove",
+  "zh-TW": "移除",
+  "ja": "削除"
+ },
+ "签名者不是 NVIDIA Corporation": {
+  "en": "the signer is not NVIDIA Corporation",
+  "zh-TW": "簽署者不是 NVIDIA Corporation",
+  "ja": "署名者が NVIDIA Corporation ではありません"
+ },
+ "签名证书不受 Windows 信任": {
+  "en": "the signing certificate is not trusted by Windows",
+  "zh-TW": "簽署憑證不受 Windows 信任",
+  "ja": "署名証明書が Windows に信頼されていません"
+ },
+ "签名证书已被吊销": {
+  "en": "the signing certificate was revoked",
+  "zh-TW": "簽署憑證已被撤銷",
+  "ja": "署名証明書は失効しています"
+ },
+ "签名证书已过期": {
+  "en": "the signing certificate has expired",
+  "zh-TW": "簽署憑證已過期",
+  "ja": "署名証明書の有効期限が切れています"
+ },
+ "运行库正在使用中，请关闭画面后再试": {
+  "en": "The runtime is in use; close the picture and try again",
+  "zh-TW": "執行庫正在使用中，請關閉畫面後再試",
+  "ja": "ランタイムは使用中です。映像を閉じてからもう一度お試しください"
+ },
+ "这不是 NVIDIA 的 nvngx_dlssnr.dll": {
+  "en": "this is not NVIDIA's nvngx_dlssnr.dll",
+  "zh-TW": "這不是 NVIDIA 的 nvngx_dlssnr.dll",
+  "ja": "これは NVIDIA の nvngx_dlssnr.dll ではありません"
+ },
+ "选择你已有的 NVIDIA 原版 nvngx_dlssnr.dll": {
+  "en": "Choose the original NVIDIA nvngx_dlssnr.dll you have",
+  "zh-TW": "選擇你已有的 NVIDIA 原版 nvngx_dlssnr.dll",
+  "ja": "手元にある NVIDIA オリジナルの nvngx_dlssnr.dll を選択"
+ },
+ "（此版本未随本应用测试）": {
+  "en": " (version not tested with this app)",
+  "zh-TW": "（此版本未隨本應用程式測試）",
+  "ja": "（このバージョンはこのアプリで未テスト）"
+ }
+}

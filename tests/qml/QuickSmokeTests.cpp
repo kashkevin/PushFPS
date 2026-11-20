@@ -165,6 +165,21 @@ QtObject {
     }
     function pushQualityCancel() { qualityCancels++ }
     function pushQualityStatus() { return qualityState }
+    // PushFPS latency test (tst_push_latency_test.qml): what the dialog asked for; latencyState is the status it reads.
+    property var latencyCalls: []
+    property var latencyState: ({state: "idle"})
+    property int latencyOriginalBegins: 0   // calls of the original entry point (pushLatencyTestBegin)
+    function pushLatencyTestBegin(trials) { latencyOriginalBegins++; return pushLatencyTestBeginWith(trials, "ps") }
+    function pushLatencyTestBeginWith(trials, button) {
+        latencyCalls = latencyCalls.concat([{trials: trials, button: button}])
+        latencyState = ({state: "running", trial: 0, trials: trials})
+        return true
+    }
+    function pushLatencyTestCancel() { latencyState = ({state: "idle"}) }
+    function pushLatencyTestStatus() { return latencyState }
+    // PushFPS SmartLink row (tst_push_smartlink.qml): what pushSmartLink() reports (src/ui/bridge/PushSmartLink.cpp).
+    property var smartLinkState: ({available: true, active: false, mode: "off", profile: "unknown", advice: 0})
+    function pushSmartLink() { return smartLinkState }
     function pushSetExclusionRegions(regions, feather) {
         lastRegions = regions
         exclusionState = ({enabled: regions.length > 0, feather: feather, regions: regions})
@@ -180,6 +195,21 @@ QtObject {
     function pushAnrState() { return { installed: anrInstalled, folder: "C:/PushFPS/runtime/experimental/anr", name: "Apex Neural Rendering (ANR)", maker: "Apex Compute", url: "anr-url" } }
     function pushInstallAnr() { anrInstallCalls++; anrInstalled = true; return true }
     function pushOpenAnrFolder() { return true }
+    // PushFPS neural layer (PushNeural.cpp): runtime state, install / remove, named looks.
+    property var neuralRuntime: ({ installed: false, signedOriginal: false, tested: false, version: "none", gpuSupported: true, usable: false, blocker: "runtime-missing", text: "not installed" })
+    property var neuralRuntimeAfterInstall: ({ installed: true, signedOriginal: true, tested: true, version: "310.8.0.0", gpuSupported: true, usable: true, blocker: "none", text: "installed 310.8.0.0" })
+    property int neuralInstallCalls: 0
+    property int neuralRemoveCalls: 0
+    property string neuralLook: ""
+    function pushNeuralRuntimeState() { return neuralRuntime }
+    function pushInstallNeuralRuntime() { neuralInstallCalls++; neuralRuntime = neuralRuntimeAfterInstall; return neuralRuntime.signedOriginal === true }
+    function pushRemoveNeuralRuntime() { neuralRemoveCalls++; neuralRuntime = { installed: false, signedOriginal: false, tested: false, version: "none", gpuSupported: true, usable: false, blocker: "runtime-missing", text: "not installed" }; return true }
+    function pushNeuralLooks() { return [{ id: "conservative", label: "conservative", tone: 0.15, structure: 0.35 }, { id: "subtle", label: "subtle", tone: 0.4, structure: 0.5 },
+                                         { id: "balanced", label: "balanced", tone: 0.7, structure: 0.8 }, { id: "strong", label: "strong", tone: 1, structure: 1 }] }
+    function pushSetNeuralLook(name) {
+        for (const look of pushNeuralLooks()) if (look.id === name) { neuralLook = name; return true }
+        return false
+    }
     function pushLinkUrl(key) { return ["repo", "veyra", "anr", "anrReleases", "apex"].indexOf(key) >= 0 ? "link-" + key : "" }
     function pushOpenLink(key) { lastOpenedLink = key; return pushLinkUrl(key).length > 0 }
     function pushImportTextFile(title) { return importFileText }
@@ -333,7 +363,24 @@ QtObject {
     function nrAutoSelectionReason(index) { return "Auto is unavailable in this four-layer UI fixture" }
     function effectAvailability(id) { return effectCapabilities[id] || {available:true, reason:""} }
     function resetNrLayer(index) {}
+    // PushFPS keys the real validator (src/ui/bridge/Preferences.cpp setPreference) accepts; any other
+    // push* key is refused as there. The performance-mode and calibration JSON keys must hold a JSON object or
+    // array (older tests still clear other JSON keys with "", which the real validator refuses).
+    property var pushKeys: ["pushAlwaysOnTop","pushAutoFullscreen","pushBenchmark","pushCalibrationApplied","pushCalibrationKept","pushCalibrationRestore","pushClean","pushCleanHud","pushCleanParts","pushCompareLayout","pushCompareSeconds","pushConsole","pushDiscordWebhook","pushFlowHalf","pushFlowHalfProbe","pushGameFps","pushGamePresets","pushGsyncChecked","pushKbmWizardDone","pushLanProfile","pushLatencyOverlay","pushLowestLatency","pushMode","pushModeAuto","pushModeRestore","pushModeSwitches","pushOptimizeGoal","pushOptimizeRestore","pushOptimizeSkip","pushProfile","pushProfileRestore","pushProfileSettings","pushProfiles","pushSmartLink","pushSmoothPacing","pushSmoothPacing2","pushStatsOverlay","pushSunset","pushTheme","pushWelcomeChecked","pushWelcomeDone"]
+    property var pushJsonKeys: ["pushModeRestore","pushCalibrationRestore","pushCalibrationApplied","pushProfileRestore","pushProfileSettings"]
     function setPreference(key, value) {
+        if (String(key).indexOf("push") === 0) {
+            if (pushKeys.indexOf(key) < 0) return false
+            if (key === "pushSmartLink" && [0, 1, 2].indexOf(Number(value)) < 0) return false   // range {0, 2} as Preferences.cpp
+            if (key === "pushClean" && !(Number(value) >= 0 && Number(value) <= 100)) return false   // range {0, 100} as Preferences.cpp
+            if (key === "pushCleanParts" && !(Number(value) >= 0 && Number(value) <= 31)) return false   // range {0, 31} as Preferences.cpp
+            if (key === "pushProfile" && ["none","original","clean-1440","enhanced-1440","max-fidelity","ultra-low-latency"].indexOf(String(value)) < 0) return false
+            if (pushJsonKeys.indexOf(key) >= 0) {
+                let doc = null
+                try { doc = JSON.parse(String(value)) } catch (e) { return false }
+                if (doc === null || typeof doc !== "object") return false
+            }
+        }
         const copy = Object.assign({}, preferences)
         copy[key] = value
         preferences = copy
