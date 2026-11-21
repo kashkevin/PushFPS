@@ -7,9 +7,11 @@
 #include "../QmlPlayerBridge_p.h"
 #include "veyra/engine/PushArchivePaths.h"
 #include "veyra/engine/PushBenchmarkProbe.h"
+#include "veyra/engine/PushCadence.h"
 #include "veyra/Brand.h"
 #include "veyra/RuntimePaths.h"
 #include "veyra/ngx/AnrProvider.h"
+#include <chrono>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QDirIterator>
@@ -46,6 +48,7 @@
 #include "veyra/gfx/D3D12DeviceContext.h"
 
 namespace veyra::ui {
+void pushSlipstreamLiveStats(QVariantMap& m);   // PushSlipstream.cpp: VEYRA_EXP_RP_GOVERNOR keys, none without it
 namespace {
 QVariant optionalNumber(const std::optional<double>& v) { return v && std::isfinite(*v) ? QVariant(*v) : QVariant(); }
 // Discord's upload limit without server boosts or Nitro (2024 onwards).
@@ -69,6 +72,21 @@ QVariantMap QmlPlayerBridge::pushLiveStats() const {
     m["settled"] = s.running && !facadeApplying && !s.applying && s.desired.revision == s.applied.revision &&
                    flow.latest.frame.settingsRevision == s.applied.revision;
     m["submitFps"] = optionalNumber(s.submissionFps);
+    // What reaches the screen and how evenly, INFERRED from our Present calls and the sync rule (engine::PushLiveCadence, published by the presenter once a
+    // second). Not known with display sync Automatic, while the VRR state is unknown (evenness only), when
+    // the XeSS SDK presents its own frames, or when nothing was presented in the last 3 s.
+    {
+        const auto live = engine::pushLiveCadenceBoard().read();
+        const double nowMs = double(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()) / 1e6;
+        const bool xessSdk = s.fgActive && s.applied.frameGenerationBackend == engine::FrameGenerationBackend::XeSS && flow.xessSdkSubmitFps > 0;
+        const bool usable = s.running && !xessSdk && live.fresh(nowMs);
+        m["shownFpsKnown"] = usable && live.shownKnown;
+        m["shownFps"] = usable && live.shownKnown ? QVariant(live.shownFps) : QVariant();
+        m["vrrActive"] = usable ? live.vrr : -1;
+        m["unevenKnown"] = usable && live.unevenKnown;
+        m["unevenPct"] = usable && live.unevenKnown ? QVariant(live.unevenPct) : QVariant();
+        m["uneven"] = usable && live.uneven();
+    }
     m["submitLowFps"] = optionalNumber(s.submissionLow1Fps);
     m["sourceFps"] = s.fps;
     m["contentFps"] = s.contentFps;
@@ -100,6 +118,42 @@ QVariantMap QmlPlayerBridge::pushLiveStats() const {
     m["outputWidth"] = int(s.metrics.resolution.output.width);
     m["outputHeight"] = int(s.metrics.resolution.output.height);
     m["hdr"] = s.sourceHdr;
+    // Statistics overlay (PushStatsOverlay.qml) and the performance modes: numbers the engine already has,
+    // copied as they are. A key that is absent or null means "not measured" and is shown as that.
+    m["realPresentFps"] = flow.realPresentFps;
+    m["generatedPresentFps"] = flow.generatedPresentFps;
+    m["remotePlay"] = s.remotePlay;
+    if (s.remotePlay && s.remoteRatesReady) {
+        m["streamReceivedFps"] = s.remoteReceivedFps;
+        m["streamDecodedFps"] = s.remoteDecodedFps;
+    }
+    // VEYRA_EXP_RP_STREAM_DEDUP: what the console sends and how many of those pictures are new, per 10 s.
+    const auto& cadence = s.streamCadence;
+    m["cadenceActive"] = cadence.active;
+    if (cadence.active) {
+        m["cadenceState"] = cadence.state;
+        m["cadenceStreamFps"] = cadence.streamFps;
+        m["cadenceSourceFps"] = cadence.sourceFps;
+        m["cadenceRealPresentedFps"] = cadence.realPresentedFps;
+        m["cadenceGeneratedPresentedFps"] = cadence.generatedPresentedFps;
+        m["cadencePresentedFps"] = cadence.presentedFps;
+    }
+    // VEYRA_EXP_RP_HEALTH: the newest five-second connection health snapshot. No addresses.
+    const auto& health = s.remoteHealth;
+    m["healthValid"] = s.remotePlay && health.valid;
+    if (s.remotePlay && health.valid) {
+        m["healthGrade"] = QString::fromLatin1(remoteplay::healthGradeName(health.grade));
+        m["healthLossPercent"] = health.lossPercent;
+        m["healthJitterMs"] = health.frameJitterMs;
+        m["healthJitterPeakMs"] = health.frameJitterPeakMs;
+        m["healthRecoveryEvents"] = QVariant::fromValue(qulonglong(health.recoveryEvents()));
+        m["healthFrameDrops"] = QVariant::fromValue(qulonglong(health.networkFrameDrops));
+        m["healthRttMs"] = optionalNumber(health.rttMs);
+        m["routeKnown"] = health.route.addressKnown;
+        m["routeDirectLan"] = health.route.directLan();
+        m["routeLink"] = QString::fromLatin1(health.route.linkName());
+    }
+    pushSlipstreamLiveStats(m);
     return m;
 }
 
@@ -673,6 +727,8 @@ void QmlPlayerBridge::pushFlowBudgetWatch() {
     const auto now = std::chrono::steady_clock::now();
     if (now - w.last < std::chrono::seconds(1)) return;
     w.last = now;
+    // Experiments VEYRA_EXP_RP_GOVERNOR / VEYRA_EXP_RP_GPU_BUDGET (PushSlipstream.cpp); nothing without them.
+    const bool gpuBudgetApplies = pushSlipstreamWatch();
     const auto& s = impl_->snapshot;
     // The cadence notice (same second tick): the game is set to 30 FPS, the capture runs at 60 and
     // automatic duplicate removal still sees a new picture in every sample. Some capture cards add
@@ -691,7 +747,8 @@ void QmlPlayerBridge::pushFlowBudgetWatch() {
         }
     }
     const auto reset = [&] { w.starved = 0; w.settledSeconds = 0; };
-    if (!s.running || !s.fgActive || s.pushFlowPrecision.empty() || fgBackendName() != QLatin1String("pushflow")) { reset(); return; }
+    // VEYRA_EXP_RP_GPU_BUDGET=apply steps the tier itself: never both.
+    if (gpuBudgetApplies || !s.running || !s.fgActive || s.pushFlowPrecision.empty() || fgBackendName() != QLatin1String("pushflow")) { reset(); return; }
     // "Optimise for my PC" measures every tier itself: never change one under it.
     const QString optimizing = impl_->prefs.value(QStringLiteral("pushOptimizeRestore")).toString();
     if (engine::pushBenchmarkProbe().active() || impl_->engine.qualityTest().running || (!optimizing.isEmpty() && optimizing != QLatin1String("{}"))) { reset(); return; }

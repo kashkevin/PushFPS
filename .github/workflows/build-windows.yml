@@ -203,13 +203,13 @@ jobs:
         run: |
           git config --global core.autocrlf false
           git config --global advice.detachedHead false
-          # Chiaki-ng: a clean pinned checkout, and a worktree with Veyra's two reviewed patches.
+          # Chiaki-ng: a clean pinned checkout, and a worktree with scripts/remoteplay/patches 0001-0010 applied in order.
           git clone -q https://github.com/streetpea/chiaki-ng.git chiaki-clean
           git -C chiaki-clean checkout -q $env:CHIAKI_COMMIT
           git -C chiaki-clean submodule update -q --init --recursive
           git -C chiaki-clean worktree add -q --detach "$env:DEPS\chiaki-stage" $env:CHIAKI_COMMIT
           git -C chiaki-stage submodule update -q --init --recursive
-          foreach ($p in '0001-chiaki-msvc-vla-compat.patch', '0002-chiaki-video-metadata.patch') {
+          foreach ($p in '0001-chiaki-msvc-vla-compat.patch', '0002-chiaki-video-metadata.patch', '0003-chiaki-feedback-history.patch', '0004-chiaki-transport-tuning.patch', '0005-chiaki-reorder-queue-drop.patch', '0006-chiaki-takion-send-buffer-teardown.patch', '0007-chiaki-http-header-bounds.patch', '0008-chiaki-login-pin-log.patch', '0009-chiaki-send-buffer-size-switch.patch', '0010-chiaki-send-buffer-counters.patch') {
             git -C chiaki-stage apply "$env:GITHUB_WORKSPACE\scripts\remoteplay\patches\$p"
             if ($LASTEXITCODE -ne 0) { Write-Host "::error::$p does not apply"; exit 1 }
           }
@@ -281,6 +281,13 @@ jobs:
           $ffmpeg = "$env:DEPS\vcpkg\installed\x64-windows"
           $stream = "$env:DEPS\stream-installed\x64-windows-static"
           $env:PKG_CONFIG_PATH = "$stream\lib\pkgconfig"
+          # Slipstream development builds never use the in-app updater: it would offer to replace them with
+          # the official release (include/veyra/ui/UpdatePolicy.h). That is every build of a slipstream/**
+          # branch, and every build outside the official repository, tagged or not. Official builds: unchanged.
+          $slipstream = 'OFF'
+          if ($env:GITHUB_REF_NAME -like 'slipstream/*' -or $env:GITHUB_HEAD_REF -like 'slipstream/*') { $slipstream = 'ON' }
+          elseif ($env:GITHUB_REPOSITORY -ne 'DosukaSOL/PushFPS') { $slipstream = 'ON' }
+          Write-Host "SLIPSTREAM_BUILD=$slipstream"
           cmake -S . -B $env:BUILD -G Ninja -DCMAKE_BUILD_TYPE=Release `
             "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR;$ffmpeg;$stream" `
             -DVEYRA_BUILD_QML_UI=ON -DVEYRA_ENABLE_EXPERIMENTAL_DLSSNR=ON -DVEYRA_ENABLE_D3D12_DEBUG=OFF `
@@ -289,7 +296,7 @@ jobs:
             "-DVEYRA_MOONLIGHT_SOURCE_DIR=$env:DEPS\moonlight-common-c" `
             "-DPROTOC=$stream\tools\protobuf\protoc.exe" "-DPKG_CONFIG_EXECUTABLE=$stream\tools\pkgconf\pkgconf.exe" `
             -DOPENSSL_USE_STATIC_LIBS=ON -DOPENSSL_MSVC_STATIC_RT=ON `
-            "-DVEYRA_DISPLAY_VERSION=$env:PUSHFPS_VERSION" `
+            "-DVEYRA_DISPLAY_VERSION=$env:PUSHFPS_VERSION" "-DSLIPSTREAM_BUILD=$slipstream" `
             "-DVEYRA_FFMPEG_ROOT=$ffmpeg" `
             "-DVEYRA_DLSS_SDK_ROOT=$env:DEPS\dlss" `
             "-DVEYRA_NVENC_HEADERS_ROOT=$env:DEPS\nv-codec-headers" `
@@ -332,6 +339,38 @@ jobs:
             if ($LASTEXITCODE -ne 0) { $failed++ }
           }
           if ($failed) { exit 1 }
+
+      # PS5 controller input on SDL's virtual gamepad (no console needed): held triggers, focus loss and return, stuck
+      # buttons. The target existed but no workflow built it; its result is reported and does not stop the build yet.
+      - name: Controller input on a virtual gamepad
+        continue-on-error: true
+        run: |
+          $log = "$env:RUNNER_TEMP\boundary-build.log"
+          cmake --build $env:BUILD --target veyra_remoteplay_boundary_tests --parallel 2>&1 | Tee-Object -FilePath $log | Out-Null
+          $buildCode = $LASTEXITCODE
+          if ($buildCode -ne 0) {
+            Write-Host "::error::boundary tests: build exit $buildCode"
+            Get-Content $log | Where-Object { $_ -match 'error' } | Select-Object -First 8 | ForEach-Object { Write-Host "::error::boundary tests build: $($_.Trim())" }
+            Get-Content $log | Select-Object -Last 6 | ForEach-Object { Write-Host "::notice::boundary build tail: $($_.Trim())" }
+            exit 1
+          }
+          $exe = Get-ChildItem $env:BUILD -Recurse -Filter 'veyra_remoteplay_boundary_tests.exe' | Select-Object -First 1
+          if (-not $exe) { Write-Host '::error::boundary tests: exe not found after the build'; exit 1 }
+          # The same DLL folders as the unit tests (FFmpeg and the dynamic vcpkg libraries, Qt), and the exe's own.
+          $env:PATH = "$($exe.DirectoryName);$env:DEPS\vcpkg\installed\x64-windows\bin;$env:QT_ROOT_DIR\bin;$env:PATH"
+          $out = @(& $exe.FullName --virtual 2>&1 | ForEach-Object { "$_" })
+          $code = $LASTEXITCODE
+          $out | Out-Host
+          if ($code -ne 0) {
+            Write-Host "::error::boundary tests --virtual: exit $code ($($out.Count) output lines; -1073741515 = a DLL is missing)"
+            if ($code -eq -1073741515) {
+              $dumpbin = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio" -Recurse -Filter dumpbin.exe -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match 'Hostx64\\x64' } | Select-Object -First 1
+              if ($dumpbin) { & $dumpbin.FullName /dependents $exe.FullName | Where-Object { $_ -match '\.dll' } | ForEach-Object { $d = $_.Trim(); $found = (Get-Command $d -ErrorAction SilentlyContinue) -ne $null; Write-Host "::notice::boundary tests needs $d (found on PATH: $found)" } }
+            }
+            $out | Select-Object -Last 12 | ForEach-Object { Write-Host "::notice::boundary run: $_" }
+            exit 1
+          }
+          Write-Host "::notice::controller input on a virtual gamepad: passed ($($out.Count) output lines)"
 
       - name: NVIDIA Image Scaling on D3D12 (WARP when there is no GPU)
         run: |
@@ -445,7 +484,7 @@ jobs:
           $env:QML_DISABLE_DISK_CACHE = '1'
           Push-Location $stage
           $failed = 0
-          foreach ($t in 'tst_push_quick_setup', 'tst_push_picture_sound', 'tst_push_nis', 'tst_push_optimize', 'tst_push_presets', 'tst_push_appearance', 'tst_push_hud', 'tst_push_plug_and_play', 'tst_push_intro', 'tst_push_stream', 'tst_push_ps5_pairing', 'tst_push_compare', 'tst_push_studio', 'tst_push_watch', 'tst_push_layout', 'tst_push_frame_input') {
+          foreach ($t in 'tst_push_quick_setup', 'tst_push_picture_sound', 'tst_push_nis', 'tst_push_optimize', 'tst_push_presets', 'tst_push_appearance', 'tst_push_hud', 'tst_push_plug_and_play', 'tst_push_intro', 'tst_push_stream', 'tst_push_ps5_pairing', 'tst_push_compare', 'tst_push_studio', 'tst_push_watch', 'tst_push_layout', 'tst_push_frame_input', 'tst_push_slipstream', 'tst_push_calibration', 'tst_push_latency_test', 'tst_push_smartlink', 'tst_push_profiles', 'tst_push_kbm') {
             & .\veyra_qml_quick_tests.exe -platform offscreen -input "qml-tests\$t.qml" -o "$t.txt,txt" 2>&1 | Out-Host
             $code = $LASTEXITCODE
             Get-Content "$t.txt" -ErrorAction SilentlyContinue | Out-Host

@@ -5,6 +5,7 @@
 // protocol; this class owns FFmpeg decoder state and decoded-frame lifetime.
 #include "veyra/source/IFrameSource.h"
 #include "veyra/remoteplay/ChiakiBackend.h"
+#include "veyra/remoteplay/DecodeFallback.h"
 #include "veyra/remoteplay/SessionInbox.h"
 #include "veyra/remoteplay/Timeline.h"
 #include "veyra/sink/AudioPcmSource.h"
@@ -36,6 +37,10 @@ struct RemotePlayConnectDesc {
     // Set by the engine; shared ownership keeps the exact presentation adapter
     // alive until the decoder owner has stopped, including failed connects.
     std::shared_ptr<ID3D12Device> decodeDevice;
+    // Experiment VEYRA_EXP_RP_DECODE_KEEP_HW (DecodeFallback.h), set by the session owner: in decode mode
+    // Automatic, a failure after hardware decoding worked on this connection is a stream error (keyframe),
+    // not a reason to decode in software. False: exp/rc5's first-failure fallback.
+    bool keepHardwareOnStreamError=false;
 };
 
 class RemotePlaySource final : public IFrameSource {
@@ -59,6 +64,8 @@ public:
     remoteplay::SessionInbox::Snapshot sessionSnapshot() const;
     std::shared_ptr<const remoteplay::SessionInbox> telemetryInbox()const{return inbox_;}
     void recoverVideo(){flushDecoder();if(token_)inbox_->decodeFailed(token_->generation());}
+    // Applied to the inbox of this and every later connect(); see SessionInbox::wakeOn.
+    void wakeOn(std::shared_ptr<remoteplay::WakeSignal> signal){wake_=std::move(signal);inbox_->wakeOn(wake_);}
 
     const SourceInfo& info() const override { return info_; }
     SourceReadStatus read(pipeline::FramePacket& out, const AVFrame** decodedFrame) override;
@@ -115,7 +122,9 @@ private:
     RemotePlayConnectDesc::DecodeMode decodeMode_=RemotePlayConnectDesc::DecodeMode::Automatic;
     std::shared_ptr<ID3D12Device> decodeDevice_;
     bool hardwareFallback_=false;
+    remoteplay::HardwareDecodeFallback decodeFallback_; // decides hardwareFallback_ after a failure
     bool discardMedia_=false;
+    std::shared_ptr<remoteplay::WakeSignal> wake_;
 };
 
 class RemotePlayAudioSource final : public sink::AudioPcmSource {
