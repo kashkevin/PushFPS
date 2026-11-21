@@ -1,0 +1,38 @@
+# The text of "WHAT HAS BEEN CHECKED, AND WHAT HAS NOT" in START-HERE.txt (placeholder @CHECKED@ of the template).
+# The packager (packaging/slipstream/slipstream_package.py) copies every line that does not start with '#'.
+# WHO FILLS THIS IN: whoever makes the package, AFTER the Windows build, the automatic tests and the reviews of the
+# code in it are known, and before the package workflow runs. Replace each line in <angle brackets> with the fact
+# (run number, counts, what failed). The packager refuses to make a package while a line in <angle brackets> is left,
+# so that no package ships with a blank. Plain ASCII, lines of at most 100 characters, two spaces of indent.
+# Rule: say what was compiled, run and tested and on which machine; anything that only passed checks on GitHub's
+# Windows machine has NOT run on a gaming PC. Never write "validated" or a latency figure here.
+  Experimental build: build-windows number 53 (run 44874996812), 21 November 2026: 8C plus one fix
+  from your field report (the neural runtime check refused the verified NVIDIA file). Compiled by
+  MSVC with warnings as errors; this build uploads its program only when every test step in it
+  passed. Source archived as archive/11af5a8d. Packaged at your request without waiting for the
+  separate remoteplay-checks run.
+  On GitHub's Windows machine (software renderer, no graphics card, no PS5): the unit tests, the
+  controller test on a virtual gamepad, the GPU tests (clean-up in SDR and HDR, NIS, comparison
+  clips, HUD), going-live, MP4 finishing, the strict QML tests, the install test (with the neural
+  runtime answered no and yes, signature and SHA-256 checked), remoteplay-checks number 116 (for
+  8C; 8C1 adds only the runtime-check fix and its test, 869 core tests passed on Linux) (Linux and
+  MSVC core tests, sanitizers, the kit's dry runs of every session) and checks number 126: all
+  passed. The neural layer itself never ran there: no NVIDIA graphics card.
+  Independent reviews (a reviewer who did not write the code): every part was reviewed on its own
+  and accepted, some after fixes; the merged 8A, 8B and 8C releases were each accepted with fixes.
+  The 8C review found a merge error that would not have compiled; it was fixed before the build
+  named above. The rest was package text, all changed before packaging. Three small neural items
+  stay open (see docs, SLIPSTREAM_STATUS.md).
+  The builds were compiled, installed and started on GitHub's Windows build machine (no graphics
+  card, no PS5, no screen to measure). On a real PC only these have run: package 6 once (19 November
+  2026, PS5 over Wi-Fi, software counters) and package 7 twice (20 November 2026, PS5 over Wi-Fi:
+  the presentation and audio sessions, about 12 minutes, software counters). EVERYTHING new in this
+  package (the list of what is in this package above, and every new kit session)
+  has never run on a gaming PC, a graphics card or a PS5. No latency and no picture quality has
+  been measured with any of it. Everything new is off until you choose it, except what is listed
+  under ON WITHOUT A CHOICE above (if anything is).
+  The .cmd files here and the scripts behind them are run once on GitHub's Windows machine by the
+  workflow that made this package (job "verify" of the run named at the end of this file; look
+  there for its result). Every session of the kit also runs there on made-up logs: that shows the
+  scripts work, not that the numbers mean anything. None of this has run on a real PC either.
+  If anything fails, copy the text of the window and send it.
