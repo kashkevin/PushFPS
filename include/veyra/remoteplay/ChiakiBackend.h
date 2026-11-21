@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #pragma once
 #include "SessionInbox.h"
+#include "TransportTuning.h"
 #include <array>
 #include <chrono>
+#include <cstddef>
 #include <memory>
 #include <stop_token>
 #include <string>
+#include <utility>
 
 namespace veyra::remoteplay {
 // No serialization/ostream support: never put registration/session keys into
@@ -21,6 +24,22 @@ struct PairingCredentials {
     std::array<std::uint8_t,16> sessionKey{};
     ~PairingCredentials();
 };
+// Inline (portable) so the Linux tests run the real wiping code (tests/remoteplay/DeviceLossResumeTests.inc).
+namespace credentials_detail {
+inline void wipe(void* ptr,std::size_t n) noexcept {
+    auto* p=static_cast<volatile unsigned char*>(ptr);
+    while(n--) *p++=0;
+}
+}
+inline PairingCredentials::PairingCredentials(PairingCredentials&& other) noexcept { *this=std::move(other); }
+inline PairingCredentials& PairingCredentials::operator=(PairingCredentials&& other) noexcept {
+    if(this==&other) return *this;
+    registrationKey=other.registrationKey;sessionKey=other.sessionKey;accountId=other.accountId;
+    credentials_detail::wipe(other.registrationKey.data(),other.registrationKey.size());
+    credentials_detail::wipe(other.sessionKey.data(),other.sessionKey.size());credentials_detail::wipe(other.accountId.data(),other.accountId.size());
+    return *this;
+}
+inline PairingCredentials::~PairingCredentials(){credentials_detail::wipe(registrationKey.data(),registrationKey.size());credentials_detail::wipe(sessionKey.data(),sessionKey.size());credentials_detail::wipe(accountId.data(),accountId.size());}
 struct BackendResult {
     bool ok=false;
     int code=0;
@@ -44,8 +63,24 @@ struct NativeSnapshot {
     bool startupRetryAllowed=false; // Only transient RP_IN_USE, never an auth rejection.
     int64_t serverTargetBitrate=-1; // Raw upstream field; diagnostic opt-in only.
     uint64_t qualityReports=0;
+    uint64_t audioConcealed=0; // Opus frames concealed by Chiaki's audio receiver (packet-loss concealment).
 };
 BackendResult initializeChiaki();
+// Experimental transport profile (chiaki patch 0004; see TransportTuning.h).
+// Process-wide in the library, read when the next session connects: call on
+// the session owner before ChiakiBackend::start(). A default TransportTuning
+// asks for the library's own values. Also restarts the library's counters, and
+// with threadPriority raises the Takion and feedback sender threads of
+// sessions started afterwards. Never called when no VEYRA_EXP_RP_* transport
+// switch is set, so the library then runs exactly as unpatched.
+void configureTransport(const TransportTuning&);
+// Any thread; plain atomic reads, no lock.
+TransportCounters readTransportCounters() noexcept;
+// Experiment VEYRA_EXP_RP_REORDER_ADAPTIVE: the AV reorder wait of the running
+// connection, taken by the Takion thread the next time it looks at its video
+// queue (one atomic store here, no lock). 0 = what the connection started
+// with. configureTransport() clears it. Never called without the switch.
+void setLiveReorderTimeout(std::uint32_t microseconds) noexcept;
 class ChiakiBackend {
 public:
     ChiakiBackend();
