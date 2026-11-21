@@ -9,6 +9,7 @@
 #include <QStringList>
 #include <functional>
 #include "veyra/Brand.h"
+#include "veyra/ui/UpdatePolicy.h"
 
 namespace veyra::ui {
 // UI-only, bounded asynchronous metadata request; never touches the engine.
@@ -44,6 +45,11 @@ public:
     void setInstallDirForTests(QString dir) { installDir_ = std::move(dir); }
     void setLaunchInstallerForTests(std::function<bool(const QString&, const QStringList&)> launch) { launch_ = std::move(launch); }
     void setAllowHttpForTests(bool allow) { allowHttp_ = allow; }
+    // Slipstream (UpdatePolicy.h): with any policy but Enabled this object never asks the release
+    // server, never offers a release and never installs one. Enabled, the default, is every official
+    // build. Set once, right after construction (QmlPlayerBridge).
+    void setPolicy(UpdatePolicy policy) { policy_ = policy; }
+    UpdatePolicy policy() const { return policy_; }
 signals:
     void checkingChanged();
     void releaseChanged();
@@ -56,6 +62,8 @@ signals:
     void installFinished(const QString& result);   // "started" or the failure reason
 private:
     QVersionNumber localVersion() const;
+    bool refusedByPolicy() const;
+    UpdatePolicy policy_ = UpdatePolicy::Enabled;
     void finish();
     void setInstall(const QString& state, double progress = 0);
     void failInstall(const QString& reason);

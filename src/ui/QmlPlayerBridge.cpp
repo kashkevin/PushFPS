@@ -3,7 +3,9 @@
 #include <QCoreApplication>
 #include <QTimer>
 #include "veyra/pushflow/PushFlowBackend.h"
+#include "veyra/engine/PushHardwareProfiles.h"
 #include "veyra/engine/PushStreamOverlay.h"
+#include "veyra/engine/PushDeviceLossResume.h"
 #include "veyra/engine/MicrophoneCapture.h"
 #include "veyra/ui/NvidiaVrrProfileController.h"
 
@@ -73,6 +75,16 @@ QmlPlayerBridge::QmlPlayerBridge(engine::EngineController& engine, std::filesyst
     connect(this, &QmlPlayerBridge::preferencesChanged, vrrProfile, &NvidiaVrrProfileController::changed);
     auto* checker = new UpdateChecker(version(), this);
     updates_ = checker;
+    // Slipstream: a development build (CMake SLIPSTREAM_BUILD) or VEYRA_EXP_RP_NO_UPDATE never asks for,
+    // offers or installs the official project's releases; an official build is unchanged (UpdatePolicy.h).
+#ifdef VEYRA_SLIPSTREAM_BUILD
+    constexpr bool slipstreamBuild = true;
+#else
+    constexpr bool slipstreamBuild = false;
+#endif
+    const QByteArray noUpdate = qgetenv("VEYRA_EXP_RP_NO_UPDATE");
+    checker->setPolicy(updatePolicy(slipstreamBuild, qEnvironmentVariableIsSet("VEYRA_EXP_RP_NO_UPDATE"),
+                                    std::string_view(noUpdate.constData(), static_cast<std::size_t>(noUpdate.size()))));
     connect(checker, &UpdateChecker::notice, this, &QmlPlayerBridge::notice);
     // PushFPS signed updates: the verified installer is running; it waits for this process to exit.
     connect(checker, &UpdateChecker::quitForUpdate, this, [] {
@@ -187,6 +199,8 @@ QmlPlayerBridge::QmlPlayerBridge(engine::EngineController& engine, std::filesyst
     engine::setPushLiveCanvas(pushCanvas(0));   // PushFPS layout (Recording.cpp)
     applyPreference(QStringLiteral("nisSharpness"));
     applyPreference(QStringLiteral("pushFlowHalf"));
+    applyPreference(QStringLiteral("pushLanProfile"));   // PushFPS LAN profile -> the switch the next PS5 connection reads (PushSlipstream.cpp)
+    applyPreference(QStringLiteral("pushSmartLink"));   // PushFPS SmartLink -> VEYRA_EXP_RP_SMARTLINK for the next PS5 connection (PushSmartLink.cpp)
     applyPreference(QStringLiteral("magewellLowLatency"));
     const bool presetsLoaded = impl_->facade.importLegacyStores();
     const auto presetNotice = uiText(impl_->facade.error());
@@ -417,10 +431,18 @@ QmlPlayerBridge::QmlPlayerBridge(engine::EngineController& engine, std::filesyst
         if (settings().frameGenerationBackend == engine::FrameGenerationBackend::PushFlow) {
             const auto caps = effectCapabilities();
             QString chosen;
-            for (const char* name : {"vfg", "dlss", "fsr4", "fsr3", "xess", "anr", "amdfrc"}) {
-                if (!caps.value(QLatin1String(name)).toMap().value("available").toBool()) continue;
-                setFgBackendName(QLatin1String(name));
-                if (settings().frameGenerationBackend != engine::FrameGenerationBackend::PushFlow) { chosen = QLatin1String(name); break; }
+            // VEYRA_EXP_PUSHFLOW_CRASH_ORDER=1 (read once): the non-experimental methods first, in the capability
+            // model's order, then the experimental ones (engine::kPushCrashGuardOrder, tested in HardwareProfileTests.inc).
+            static const bool modelOrder = [] { wchar_t v[4]{}; return GetEnvironmentVariableW(L"VEYRA_EXP_PUSHFLOW_CRASH_ORDER", v, 4) == 1 && v[0] == L'1'; }();
+            QStringList order{QStringLiteral("vfg"), QStringLiteral("dlss"), QStringLiteral("fsr4"), QStringLiteral("fsr3"), QStringLiteral("xess"), QStringLiteral("anr"), QStringLiteral("amdfrc")};
+            if (modelOrder) {
+                order.clear();
+                for (const auto method : engine::kPushCrashGuardOrder) order << fgEffectId(static_cast<engine::FrameGenerationBackend>(method));
+            }
+            for (const QString& name : order) {
+                if (!caps.value(name).toMap().value("available").toBool()) continue;
+                setFgBackendName(name);
+                if (settings().frameGenerationBackend != engine::FrameGenerationBackend::PushFlow) { chosen = name; break; }
             }
             if (chosen.isEmpty()) setFgEnabled(false);
             veyra::log::warn("pushflow", std::format("PushFPS stopped inside PushFlow last time; switched to {}", chosen.isEmpty() ? std::string("frame generation off") : chosen.toStdString()));
@@ -459,6 +481,7 @@ QmlPlayerBridge::QmlPlayerBridge(engine::EngineController& engine, std::filesyst
         const bool wasRunning = impl_->snapshot.running;
         const bool wasImage = impl_->snapshot.image;
         const bool wasFailed = impl_->snapshot.failed;
+        const bool wasResumePending = impl_->snapshot.deviceLossResumePending;
         const bool wasEngineHung = impl_->snapshot.status == engine::kEngineHangStatus;
         const bool wasFullscreenUnsafe = impl_->snapshot.vramFullscreenUnsafe;
         const auto wasTransport = impl_->snapshot.transport;
@@ -466,6 +489,7 @@ QmlPlayerBridge::QmlPlayerBridge(engine::EngineController& engine, std::filesyst
         const auto oldSourceAspect=sourceAspect();
         if(impl_->poll()){emit settingsChanged();emitChainChanged();}
         pushFlowBudgetWatch();
+        pushAutorunTick();   // PushFPS: test automation switches and [slipstream-config] (PushAutorun.cpp)
         if(wasSession!=impl_->snapshot.sessionId||oldSourceAspect!=sourceAspect())emit compareChanged();
         // Live recording state: the recorder owns the files, this side shows them.
         {
@@ -596,7 +620,7 @@ QmlPlayerBridge::QmlPlayerBridge(engine::EngineController& engine, std::filesyst
             // A live source that fails says why, and the user is taken back to the
             // start page: the reason used to land only in the (closed) PS5 panel,
             // leaving a black cinema strip that looked like a minimised window.
-            if (had && !wasFailed && s.failed && (s.capture || s.remotePlay)) {
+            if (had && engine::pushLiveFailureShownNow(wasFailed, wasResumePending, s.failed, s.deviceLossResumePending) && (s.capture || s.remotePlay)) {
                 const QString why = veyra::ui::i18n::text(s.status);
                 veyra::log::warn("ui-live-failed", std::format("remote={} status={}", s.remotePlay, utf8Of(s.status).toStdString()));
                 QString text = why.isEmpty() ? (s.remotePlay ? tr("PS5 串流没有连上") : tr("采集没有开始")) : why;
