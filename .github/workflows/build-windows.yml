@@ -14,7 +14,7 @@ name: build-windows
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'slipstream/**']
     tags: ['v*']
     paths-ignore: ['**/*.md', 'docs/**', 'assets/**', 'website/**', '.github/workflows/checks.yml', '.github/workflows/screenshots.yml',
                    '.github/workflows/pages.yml', '.github/workflows/deps-probe.yml', '.github/workflows/upstream-inspect.yml']
@@ -311,8 +311,15 @@ jobs:
 
       - name: Build PushFPS.exe
         run: |
-          cmake --build $env:BUILD --target veyra_qml_ui --parallel
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build $env:BUILD --target veyra_qml_ui --parallel 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\slipstream-build.log"
+          $buildCode = $LASTEXITCODE
+          if ($buildCode -ne 0) {
+            Select-String -Path "$env:RUNNER_TEMP\slipstream-build.log" -Pattern ' error [A-Z]+[0-9]+', 'fatal error' | Select-Object -First 8 | ForEach-Object { $t = $_.Line.Trim(); if ($t.Length -gt 400) { $t = $t.Substring($t.Length - 400) }; Write-Host "::error::$t" }
+            # GitHub shows at most ten annotations per step: the first sixty error lines also go out as two combined notices.
+            $all = @(Select-String -Path "$env:RUNNER_TEMP\slipstream-build.log" -Pattern ' error [A-Z]+[0-9]+', 'fatal error' | Select-Object -First 60 | ForEach-Object { $t = $_.Line.Trim(); if ($t.Length -gt 300) { $t = $t.Substring($t.Length - 300) }; $t })
+            for ($i = 0; $i -lt $all.Count; $i += 30) { Write-Host ("::notice::build errors {0}-{1} of {2}:%0A{3}" -f ($i + 1), [Math]::Min($i + 30, $all.Count), $all.Count, (($all[$i..([Math]::Min($i + 29, $all.Count - 1))]) -join '%0A')) }
+            exit $buildCode
+          }
           Get-Item "$env:BUILD\PushFPS.exe" | Format-List Name, Length, VersionInfo
 
       - name: Unit tests that need no GPU
@@ -386,9 +393,19 @@ jobs:
           $env:VEYRA_PUSH_GPU_DEBUG = '1'
           # PushFlow runs on the release's own runtime (RIFE through DirectML, on WARP here).
           $env:VEYRA_PUSHFLOW_TEST_RUNTIME = "$env:DEPS\pushflow\runtime"
-          & $exe.FullName 2>&1 | Out-Host
+          & $exe.FullName 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\slipstream-gpu-tests.log" | Out-Host
           $code = $LASTEXITCODE
           Write-Host "veyra_push_gpu_tests exit $code"
+          if ($code -ne 0) { Select-String -Path "$env:RUNNER_TEMP\slipstream-gpu-tests.log" -Pattern '^FAIL' | Select-Object -First 8 | ForEach-Object { Write-Host "::error::gpu test: $($_.Line.Trim())" } }
+          # Evidence for the intermittent failure of this step (run #15): repeat the stream-change test; never fails the build.
+          if ($code -eq 0) {
+            & $exe.FullName --only stream-change --repeat 25 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\slipstream-gpu-repeat.log" | Out-Null
+            $rc = $LASTEXITCODE
+            $fails = @(Select-String -Path "$env:RUNNER_TEMP\slipstream-gpu-repeat.log" -Pattern '^FAIL')
+            Write-Host "::notice::stream-change x25 on the software renderer: exit $rc, FAIL lines $($fails.Count)"
+            $fails | Select-Object -First 5 | ForEach-Object { Write-Host "::warning::repeat: $($_.Line.Trim())" }
+            Select-String -Path "$env:RUNNER_TEMP\slipstream-gpu-repeat.log" -Pattern '^SUMMARY' | Select-Object -Last 1 | ForEach-Object { Write-Host "::notice::$($_.Line.Trim())" }
+          }
           if ($code -ne 0) { exit 1 }
           # PushFlowBench (shipped next to PushFPS.exe): a short smoke run on WARP; the JSON goes in the log.
           # (--compare-shapes and --compare-sync add the dynamic-shape and waiting variants: run 44202258035,
