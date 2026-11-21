@@ -14,7 +14,7 @@ name: build-windows
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'slipstream/**']
     tags: ['v*']
     paths-ignore: ['**/*.md', 'docs/**', 'assets/**', 'website/**', '.github/workflows/checks.yml', '.github/workflows/screenshots.yml',
                    '.github/workflows/pages.yml', '.github/workflows/deps-probe.yml', '.github/workflows/upstream-inspect.yml']
@@ -311,12 +311,22 @@ jobs:
 
       - name: Build PushFPS.exe
         run: |
-          cmake --build $env:BUILD --target veyra_qml_ui --parallel
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build $env:BUILD --target veyra_qml_ui --parallel 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\slipstream-build.log"
+          $buildCode = $LASTEXITCODE
+          if ($buildCode -ne 0) {
+            Select-String -Path "$env:RUNNER_TEMP\slipstream-build.log" -Pattern ' error [A-Z]+[0-9]+', 'fatal error' | Select-Object -First 8 | ForEach-Object { $t = $_.Line.Trim(); if ($t.Length -gt 400) { $t = $t.Substring($t.Length - 400) }; Write-Host "::error::$t" }
+            # GitHub shows at most ten annotations per step: the first sixty error lines also go out as two combined notices.
+            $all = @(Select-String -Path "$env:RUNNER_TEMP\slipstream-build.log" -Pattern ' error [A-Z]+[0-9]+', 'fatal error' | Select-Object -First 60 | ForEach-Object { $t = $_.Line.Trim(); if ($t.Length -gt 300) { $t = $t.Substring($t.Length - 300) }; $t })
+            for ($i = 0; $i -lt $all.Count; $i += 30) { Write-Host ("::notice::build errors {0}-{1} of {2}:%0A{3}" -f ($i + 1), [Math]::Min($i + 30, $all.Count), $all.Count, (($all[$i..([Math]::Min($i + 29, $all.Count - 1))]) -join '%0A')) }
+            exit $buildCode
+          }
           Get-Item "$env:BUILD\PushFPS.exe" | Format-List Name, Length, VersionInfo
 
       - name: Unit tests that need no GPU
+        id: trial0
+        continue-on-error: true
         run: |
+          trap { Write-Host ("::error::Unit tests that need no GPU: {0} (line {1})" -f $_.Exception.Message, $_.InvocationInfo.ScriptLineNumber); exit 1 }
           cmake --build $env:BUILD --target veyra_update_checker_tests veyra_update_verify_tests veyra_ui_i18n_tests --parallel
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:PATH = "$env:QT_ROOT_DIR\bin;$env:PATH"
@@ -328,7 +338,7 @@ jobs:
             $code = $LASTEXITCODE
             if (Test-Path "$t.txt") { Get-Content "$t.txt" | Out-Host }
             Write-Host "$t exit $code"
-            if ($code -ne 0) { $failed++ }
+            if ($code -ne 0) { $failed++; $f1 = (Get-Content "$t.txt" -ErrorAction SilentlyContinue | Select-String -Context 0,2 'FAIL!' | Select-Object -First 2 | ForEach-Object { ($_.Line + ' ' + ($_.Context.PostContext -join ' ')).Trim() }) -join ' || '; Write-Host "::error::qml $t : $f1" }
           }
           foreach ($t in 'veyra_sound_profile_tests', 'veyra_push_audio_mix_tests', 'veyra_push_studio_sources_tests', 'veyra_push_benchmark_tests', 'veyra_push_hud_tests', 'veyra_push_adaptive_fg_tests', 'veyra_push_pacing_repair_tests', 'veyra_push_archive_paths_tests', 'veyra_frame_input_tests', 'veyra_push_quality_tests', 'veyra_push_input_latency_tests', 'veyra_vrr_profile_tests') {
             cmake --build $env:BUILD --target $t --parallel
@@ -343,6 +353,7 @@ jobs:
       # PS5 controller input on SDL's virtual gamepad (no console needed): held triggers, focus loss and return, stuck
       # buttons. The target existed but no workflow built it; its result is reported and does not stop the build yet.
       - name: Controller input on a virtual gamepad
+        id: trial9
         continue-on-error: true
         run: |
           $log = "$env:RUNNER_TEMP\boundary-build.log"
@@ -373,7 +384,10 @@ jobs:
           Write-Host "::notice::controller input on a virtual gamepad: passed ($($out.Count) output lines)"
 
       - name: NVIDIA Image Scaling on D3D12 (WARP when there is no GPU)
+        id: trial1
+        continue-on-error: true
         run: |
+          trap { Write-Host ("::error::NVIDIA Image Scaling on D3D12: {0} (line {1})" -f $_.Exception.Message, $_.InvocationInfo.ScriptLineNumber); exit 1 }
           cmake --build $env:BUILD --target veyra_nis_gpu_tests --parallel
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $exe = Get-ChildItem $env:BUILD -Recurse -Filter 'veyra_nis_gpu_tests.exe' | Select-Object -First 1
@@ -391,7 +405,10 @@ jobs:
           if ($code -ne 0) { exit 1 }
 
       - name: PushFPS comparison clips and HUD sampling on D3D12 (WARP when there is no GPU)
+        id: trial2
+        continue-on-error: true
         run: |
+          trap { Write-Host ("::error::PushFPS comparison clips and HUD samplin: {0} (line {1})" -f $_.Exception.Message, $_.InvocationInfo.ScriptLineNumber); exit 1 }
           cmake --build $env:BUILD --target veyra_push_gpu_tests --parallel
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $exe = Get-ChildItem $env:BUILD -Recurse -Filter 'veyra_push_gpu_tests.exe' | Select-Object -First 1
@@ -400,9 +417,19 @@ jobs:
           $env:VEYRA_PUSH_GPU_DEBUG = '1'
           # PushFlow runs on the release's own runtime (RIFE through DirectML, on WARP here).
           $env:VEYRA_PUSHFLOW_TEST_RUNTIME = "$env:DEPS\pushflow\runtime"
-          & $exe.FullName 2>&1 | Out-Host
+          & $exe.FullName 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\slipstream-gpu-tests.log" | Out-Host
           $code = $LASTEXITCODE
           Write-Host "veyra_push_gpu_tests exit $code"
+          if ($code -ne 0) { Select-String -Path "$env:RUNNER_TEMP\slipstream-gpu-tests.log" -Pattern '^FAIL' | Select-Object -First 8 | ForEach-Object { Write-Host "::error::gpu test: $($_.Line.Trim())" } }
+          # Evidence for the intermittent failure of this step (run #15): repeat the stream-change test; never fails the build.
+          if ($code -eq 0) {
+            & $exe.FullName --only stream-change --repeat 25 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\slipstream-gpu-repeat.log" | Out-Null
+            $rc = $LASTEXITCODE
+            $fails = @(Select-String -Path "$env:RUNNER_TEMP\slipstream-gpu-repeat.log" -Pattern '^FAIL')
+            Write-Host "::notice::stream-change x25 on the software renderer: exit $rc, FAIL lines $($fails.Count)"
+            $fails | Select-Object -First 5 | ForEach-Object { Write-Host "::warning::repeat: $($_.Line.Trim())" }
+            Select-String -Path "$env:RUNNER_TEMP\slipstream-gpu-repeat.log" -Pattern '^SUMMARY' | Select-Object -Last 1 | ForEach-Object { Write-Host "::notice::$($_.Line.Trim())" }
+          }
           if ($code -ne 0) { exit 1 }
           # PushFlowBench (shipped next to PushFPS.exe): a short smoke run on WARP; the JSON goes in the log.
           # (--compare-shapes and --compare-sync add the dynamic-shape and waiting variants: run 44202258035,
@@ -441,6 +468,8 @@ jobs:
       # Going live: two outputs at once (RTMP + RTMPS through Schannel) to a local MediaMTX, read back,
       # server restart, a closed port, key redaction. Proves the FFmpeg build has rtmp/rtmps.
       - name: Going-live tests (local RTMP/RTMPS server)
+        id: trial3
+        continue-on-error: true
         shell: bash
         run: |
           set -e
@@ -453,7 +482,10 @@ jobs:
 
       # Finished recordings are rewritten as standard MP4 (Vegas Pro and other editors refuse fragmented files).
       - name: Recording MP4 finishing test
+        id: trial4
+        continue-on-error: true
         run: |
+          trap { Write-Host ("::error::Recording MP4 finishing test: {0} (line {1})" -f $_.Exception.Message, $_.InvocationInfo.ScriptLineNumber); exit 1 }
           cmake --build $env:BUILD --target veyra_mp4_finalize_tests --parallel
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $exe = Get-ChildItem $env:BUILD -Recurse -Filter 'veyra_mp4_finalize_tests.exe' | Select-Object -First 1
@@ -465,7 +497,10 @@ jobs:
           if ($code -ne 0) { exit 1 }
 
       - name: QML component tests (PushFPS quick setup)
+        id: trial5
+        continue-on-error: true
         run: |
+          trap { Write-Host ("::error::QML component tests (PushFPS quick setup: {0} (line {1})" -f $_.Exception.Message, $_.InvocationInfo.ScriptLineNumber); exit 1 }
           cmake --build $env:BUILD --target veyra_qml_quick_tests veyra_qml_easing_tests --parallel
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $stage = Join-Path $env:RUNNER_TEMP 'qml-tests-stage'
@@ -496,7 +531,10 @@ jobs:
           if ($failed) { exit 1 }
 
       - name: QML component tests (whole Veyra suite)
+        id: trial6
+        continue-on-error: true
         run: |
+          trap { Write-Host ("::error::QML component tests (whole Veyra suite): {0} (line {1})" -f $_.Exception.Message, $_.InvocationInfo.ScriptLineNumber); exit 1 }
           $stage = Join-Path $env:RUNNER_TEMP 'qml-tests-stage'
           $env:PATH = "$env:QT_ROOT_DIR\bin;$env:PATH"
           $env:QML_IMPORT_PATH = "$env:QT_ROOT_DIR\qml"
@@ -515,14 +553,17 @@ jobs:
             $out = Get-Content $res -ErrorAction SilentlyContinue
             $totals = ($out | Select-String '^Totals:' | Select-Object -Last 1).Line
             Write-Host ("{0,-34} exit {1}  {2}" -f $f.Name, $code, $totals)
-            if ($code -ne 0) { $failed++; $out | Select-String -Context 0,3 'FAIL!' | Select-Object -First 15 | Out-Host }
+            if ($code -ne 0) { $failed++; $out | Select-String -Context 0,3 'FAIL!' | Select-Object -First 15 | Out-Host; $f1 = ($out | Select-String 'FAIL!' | Select-Object -First 2 | ForEach-Object { $_.Line.Trim() }) -join ' || '; Write-Host "::error::qml suite $($f.Name) : $f1" }
           }
           Pop-Location
           Write-Host "files with failures: $failed"
           if ($failed) { exit 1 }
 
       - name: Imports must match the upstream runtime package
+        id: trial7
+        continue-on-error: true
         run: |
+          trap { Write-Host ("::error::Imports must match the upstream runtime : {0} (line {1})" -f $_.Exception.Message, $_.InvocationInfo.ScriptLineNumber); exit 1 }
           python -m pip install --quiet pefile
           @'
           import pefile, sys
@@ -565,8 +606,11 @@ jobs:
           Get-ChildItem dist | Format-Table Name, Length
 
       - name: Install test (download Veyra runtime, add PushFPS, start it)
+        id: trial8
+        continue-on-error: true
         timeout-minutes: 30
         run: |
+          trap { Write-Host ("::error::Install test: {0} (line {1})" -f $_.Exception.Message, $_.InvocationInfo.ScriptLineNumber); exit 1 }
           $zip = (Get-ChildItem dist/PushFPS-*.zip)[0].FullName
           Expand-Archive $zip -DestinationPath D:\pf-zip
           & D:\pf-zip\Install-PushFPS.ps1 -Gpu NVIDIA -InstallDir D:\pf-install -NoShortcuts -NoLaunch -ExperimentalExtras No -NeuralRuntime No
@@ -659,6 +703,19 @@ jobs:
       # Veyra's patches applied (AGPL-3.0 with the OpenSSL exception), moonlight-common-c with ENet
       # and nanors (GPL-3.0 / MIT), and the vcpkg recipes of the static libraries (OpenSSL, Opus,
       # SDL3, libdatachannel and the rest, MPL-2.0 / BSD / MIT / zlib) at the pinned vcpkg commit.
+      - name: Trial outcomes of the test steps
+        if: always()
+        run: |
+          if ('${{ steps.trial0.outcome }}' -eq 'failure') { Write-Host '::error::trial: step failed: Unit tests that need no GPU' }
+          if ('${{ steps.trial1.outcome }}' -eq 'failure') { Write-Host '::error::trial: step failed: NVIDIA Image Scaling on D3D12' }
+          if ('${{ steps.trial2.outcome }}' -eq 'failure') { Write-Host '::error::trial: step failed: PushFPS comparison clips and HUD sampling on D3D12' }
+          if ('${{ steps.trial3.outcome }}' -eq 'failure') { Write-Host '::error::trial: step failed: Going-live tests' }
+          if ('${{ steps.trial4.outcome }}' -eq 'failure') { Write-Host '::error::trial: step failed: Recording MP4 finishing test' }
+          if ('${{ steps.trial5.outcome }}' -eq 'failure') { Write-Host '::error::trial: step failed: QML component tests (PushFPS quick setup)' }
+          if ('${{ steps.trial6.outcome }}' -eq 'failure') { Write-Host '::error::trial: step failed: QML component tests (whole Veyra suite)' }
+          if ('${{ steps.trial7.outcome }}' -eq 'failure') { Write-Host '::error::trial: step failed: Imports must match the upstream runtime package' }
+          if ('${{ steps.trial8.outcome }}' -eq 'failure') { Write-Host '::error::trial: step failed: Install test' }
+          if ('${{ steps.trial9.outcome }}' -eq 'failure') { Write-Host '::error::trial: step failed: Controller input on a virtual gamepad' }
       - name: Streaming source archive
         run: |
           $src = Join-Path $env:RUNNER_TEMP "PushFPS-$env:PUSHFPS_VERSION-streaming-source"
