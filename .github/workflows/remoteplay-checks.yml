@@ -1,0 +1,251 @@
+# Fast Windows checks for the PS5 Remote Play low-latency work (a few minutes, no dependencies).
+#
+# build-windows.yml takes about two hours and does not build the Remote Play tests. This workflow
+# gives quick MSVC feedback first:
+#   1. the portable core tests (tests/remoteplay/CoreTests.cpp) compiled by MSVC and run;
+#   2. the new headers compiled with the same strict flags as veyra_sources (/W4 /WX /permissive-);
+#   3. every PowerShell script under scripts/remoteplay parsed, and the hardware detection run once;
+#   4. the report tooling's tests (tools/remoteplay_latency_bench/test_*.py, Python standard library);
+#   5. the hardware test kit and the diagnostics tool run dry (scripts/remoteplay/testkit/ci/check-dry-run.ps1:
+#      no PushFPS, no PS5, made-up log lines) under Windows PowerShell 5.1 in every mode: latency arms,
+#      soak, soak ended by its kill-switch, impairment, reliability checks, a bitrate refusal, stable against
+#      experimental as a full session, a resumed session, diagnostics. Every zip is
+#      searched for the private values the dry runs plant, the reliability verdicts are compared with
+#      what the made-up timeline must give, and report.py, reliability.py, soak.py and baseline.py run
+#      on the kit's zip.
+# A pass here does not establish that PushFPS.exe builds, decodes video, reaches a PS5 or is faster.
+name: remoteplay-checks
+
+on:
+  push:
+    paths:
+      - 'include/veyra/remoteplay/**'
+      - 'include/veyra/engine/PushPerformanceMode.h'
+      - 'include/veyra/engine/SlipstreamSettings.h'
+      - 'include/veyra/ui/UpdatePolicy.h'
+      - 'tools/remoteplay_latency_bench/**'
+      - 'src/remoteplay/**'
+      - 'tests/remoteplay/**'
+      - 'scripts/remoteplay/**'
+      - 'include/veyra/**'
+      - 'src/**'
+      - 'qml/**'
+      - 'shaders/**'
+      - 'tests/**'
+      - 'packaging/**'
+      - 'i18n/**'
+      - '.github/workflows/remoteplay-checks.yml'
+  pull_request:
+    paths:
+      - 'include/veyra/remoteplay/**'
+      - 'include/veyra/engine/PushPerformanceMode.h'
+      - 'include/veyra/engine/SlipstreamSettings.h'
+      - 'include/veyra/ui/UpdatePolicy.h'
+      - 'tools/remoteplay_latency_bench/**'
+      - 'src/remoteplay/**'
+      - 'tests/remoteplay/**'
+      - 'scripts/remoteplay/**'
+      - 'include/veyra/**'
+      - 'src/**'
+      - 'qml/**'
+      - 'shaders/**'
+      - 'tests/**'
+      - 'packaging/**'
+      - 'i18n/**'
+      - '.github/workflows/remoteplay-checks.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: windows-2022
+    timeout-minutes: 45   # the kit dry runs alone take about a quarter of an hour since every session runs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Portable core tests (MSVC)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force out | Out-Null
+          $sources = 'src\remoteplay\Validation.cpp', 'src\remoteplay\AnnexB.cpp', 'src\remoteplay\Timeline.cpp',
+                     'src\remoteplay\VideoIngress.cpp', 'src\remoteplay\SessionInbox.cpp', 'tests\remoteplay\CoreTests.cpp'
+          $log = cl /nologo /std:c++20 /EHsc /O2 /bigobj /utf-8 /W4 /permissive- /DNOMINMAX /DUNICODE /D_UNICODE /Iinclude /Foout\ /Feout\core_tests.exe @sources 2>&1 | ForEach-Object { "$_" }
+          $code = $LASTEXITCODE
+          $log | Write-Host
+          if ($code -ne 0) {
+            # Logs of this repository's runs cannot be read without signing in: repeat the compiler's error lines as annotations.
+            $log | Where-Object { $_ -match '(error|fatal error) [A-Z]+\d+' } | Select-Object -First 9 | ForEach-Object { Write-Host "::error::$_" }
+            Write-Host '::error::core tests did not compile with MSVC'; exit 1
+          }
+          $run = & out\core_tests.exe 2>&1 | ForEach-Object { "$_" }
+          $code = $LASTEXITCODE
+          $run | Write-Host
+          if ($code -ne 0) {
+            $run | Where-Object { $_ -match '^(FAIL|\[FAIL\]|not ok)' -or $_ -match 'FAILED|Assertion' } | Select-Object -First 9 | ForEach-Object { Write-Host "::error::core test: $_" }
+            $run | Select-Object -Last 2 | ForEach-Object { Write-Host "::notice::core tests ended with: $_" }
+            Write-Host '::error::core tests failed'; exit 1
+          }
+
+      - name: New headers under /W4 /WX /permissive-
+        if: always()
+        shell: pwsh
+        run: |
+          @('#include "veyra/remoteplay/WakeSignal.h"',
+            '#include "veyra/remoteplay/ControllerQueue.h"',
+            '#include "veyra/remoteplay/KeyboardMousePad.h"',
+            '#include "veyra/remoteplay/KbmCapture.h"',
+            '#include "veyra/remoteplay/KbmProfile.h"',
+            '#include "veyra/remoteplay/KbmCalibration.h"',
+            '#include "veyra/remoteplay/KbmCalibrationFile.h"',
+            '#include "veyra/remoteplay/KbmCalibrationRate.h"',
+            '#include "veyra/remoteplay/KbmCalibrationModel.h"',
+            '#include "veyra/remoteplay/StreamCadence.h"',
+            '#include "veyra/engine/PushPerformanceMode.h"',
+            '#include "veyra/engine/SlipstreamSettings.h"',
+            '#include "veyra/remoteplay/TransportTuning.h"',
+            '#include "veyra/remoteplay/ConnectionHealth.h"',
+            '#include "veyra/remoteplay/ReorderWindow.h"',
+            '#include "veyra/remoteplay/ReorderQueueModel.h"',
+            '#include "veyra/pipeline/StreamChange.h"',
+            '#include "veyra/engine/PushStreamDedup.h"',
+            '#include "veyra/ui/UpdatePolicy.h"',
+            '#include "veyra/engine/PushLatencyGovernor.h"',
+            '#include "veyra/engine/PushHardwareCapabilities.h"',
+            '#include "veyra/engine/PushGpuBudget.h"',
+            '#include "veyra/sink/AudioLatencyController.h"',
+            '#include "veyra/sink/AudioPathModel.h"',
+            '#include "veyra/engine/PushGovernorFeed.h"',
+            '#include "veyra/engine/PushHardwareProfiles.h"',
+            '#include "veyra/remoteplay/ReorderStudy.h"',
+            '#include "veyra/engine/PushGovernorControl.h"',
+            '#include "veyra/engine/PushCalibrationPlan.h"',
+            '#include "veyra/engine/PushLatencyStats.h"',
+            '#include "veyra/engine/PushAutorunPlan.h"',
+            '#include "veyra/engine/PushSrPlan.h"',
+            '#include "veyra/engine/PushPresentTiming.h"',
+            '#include "veyra/remoteplay/FrameDelivery.h"',
+            '#include "veyra/engine/PushDeviceLossResume.h"',
+            '#include "veyra/engine/PushGovernorStall.h"',
+            '#include "veyra/remoteplay/SmartLinkTypes.h"',
+            '#include "veyra/remoteplay/SmartLinkModel.h"',
+            '#include "veyra/remoteplay/SmartLinkPredictor.h"',
+            '#include "veyra/remoteplay/SmartLinkProfile.h"',
+            '#include "veyra/remoteplay/SmartLinkController.h"',
+            '#include "veyra/remoteplay/SmartLinkTrace.h"',
+            '#include "veyra/remoteplay/SmartLinkSim.h"',
+            '#include "veyra/remoteplay/SmartLinkShared.h"',
+            '#include "veyra/sink/AudioPopGuard.h"',
+            '#include "veyra/remoteplay/SmartLinkFeed.h"',
+            '#include "veyra/remoteplay/SmartLinkRunner.h"',
+            '#include "veyra/remoteplay/SmartLinkWifi.h"',
+            '#include "veyra/engine/PushHookHold.h"',
+            '#include "veyra/engine/PushClean.h"',
+            'int main() { return 0; }') | Set-Content -Encoding ascii out\headers.cpp
+          $log = cl /nologo /std:c++20 /EHsc /utf-8 /W4 /WX /permissive- /DNOMINMAX /DUNICODE /D_UNICODE /Iinclude /c /Foout\ out\headers.cpp 2>&1 | ForEach-Object { "$_" }
+          $code = $LASTEXITCODE
+          $log | Write-Host
+          if ($code -ne 0) {
+            # The job log needs a sign-in to read: repeat the compiler's own lines as annotations.
+            $log | Where-Object { $_ -match '(error|warning) C\d+' } | Select-Object -First 15 | ForEach-Object { Write-Host "::error::$_" }
+            Write-Host '::error::a new header is not clean under /W4 /WX'; exit 1
+          }
+
+      - name: PowerShell scripts parse
+        shell: pwsh
+        run: |
+          $bad = 0
+          foreach ($file in Get-ChildItem scripts\remoteplay -Filter *.ps1 -Recurse) {
+            $tokens = $null; $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              $bad++
+              foreach ($e in $errors) { Write-Host "::error file=$($file.FullName),line=$($e.Extent.StartLineNumber)::$($e.Message)" }
+            } else { Write-Host "ok  $($file.Name)" }
+          }
+          if ($bad -gt 0) { exit 1 }
+
+      - name: Hardware detection runs (Windows PowerShell 5.1, as on a user's PC)
+        shell: powershell
+        run: |
+          & scripts\remoteplay\detect-hardware.ps1 -OutFile out\hardware.json -ExpectRefreshHz 60
+          if (-not (Test-Path out\hardware.json)) { Write-Host '::error::detect-hardware.ps1 wrote no file'; exit 1 }
+          Get-Content out\hardware.json | ConvertFrom-Json | Out-Null
+
+      - name: Report tooling tests (Python standard library)
+        shell: pwsh
+        run: |
+          $failed = 0
+          foreach ($test in Get-ChildItem tools\remoteplay_latency_bench -Filter 'test_*.py' | Sort-Object Name) {
+            python -B $test.FullName
+            if ($LASTEXITCODE -ne 0) { $failed++; Write-Host "::error file=tools/remoteplay_latency_bench/$($test.Name)::$($test.Name) failed (see the log of this step)" }
+          }
+          if ($failed -gt 0) { exit 1 }
+
+      - name: Test kit and diagnostics dry runs (Windows PowerShell 5.1), their files, verdicts and redaction
+        shell: powershell
+        run: |
+          # check-dry-run.ps1 runs the kit dry in every mode (latency arms with -Health, -Soak, -Impairment,
+          # -Reliability, -ReliabilityGpuLoss, one arm at another bitrate that RESULT.txt must refuse), a soak ended by
+          # its kill-switch, -Versus -Full, a session continued with -Resume, and the diagnostics tool, each on
+          # made-up logs with planted private values. Every problem is one error annotation with the part's name
+          # (kit / kill-switch / versus-full / resume / sessions / diagnostics); the files that explain it are printed in the groups below it.
+          # Part 'sessions' (sprint 4): the kit's bootstrap against report.py (ci\bootstrap-golden.json), -Session switches with the
+          # new log lines, a lowQueue refusal and Wi-Fi labels, -Session quality, -Session dedup-probe, a build without the new lines.
+          $ErrorActionPreference = 'Continue'
+          & scripts\remoteplay\testkit\ci\check-dry-run.ps1 -OutRoot out
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            if (-not (Test-Path out\kit)) { Write-Host '::error::kit: check-dry-run.ps1 ended before the kit ran (see the log above)' }
+            exit 1
+          }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: remoteplay-checks
+          path: |
+            out/hardware.json
+            out/kit/*.zip
+            out/kit/report/
+            out/kit-stop/*.zip
+            out/kit-versus/*.zip
+            out/kit-resume/*.zip
+            out/kit-switches/*.zip
+            out/kit-switches/report/
+            out/kit-quality/*.zip
+            out/kit-probe/*.zip
+            out/kit-old-build/*.zip
+            out/diagnostics/*.zip
+          if-no-files-found: ignore
+
+  # The same portable core tests under g++ (what the developers' own verification runs), so a branch can be checked
+  # here instead of on a small development machine: -O2 build and run, sanitizers, and the strict-warnings pass.
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Portable core tests (g++ -O2), strict warnings, sanitizers
+        run: |
+          core="src/remoteplay/Validation.cpp src/remoteplay/AnnexB.cpp src/remoteplay/Timeline.cpp src/remoteplay/VideoIngress.cpp src/remoteplay/SessionInbox.cpp"
+          report() { # tag, log file, pattern
+            grep -E "$3" "$2" | head -9 | while IFS= read -r line; do echo "::error::$1: ${line:0:900}"; done
+          }
+          g++ --version | head -1
+          ( g++ -std=c++20 -fsyntax-only -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror -Iinclude tests/remoteplay/CoreTests.cpp > strict.log 2>&1; echo $? > strict.code ) &
+          ( g++ -std=c++20 -pthread -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -Iinclude $core tests/remoteplay/CoreTests.cpp -o core_asan > asan-build.log 2>&1; echo $? > asan.code ) &
+          failed=0
+          if g++ -std=c++20 -pthread -O2 -Iinclude $core tests/remoteplay/CoreTests.cpp -o core_plain > build.log 2>&1; then
+            if ./core_plain > run.log 2>&1 && tail -1 run.log | grep -q 'FAIL 0$'; then echo "plain: $(tail -1 run.log)"
+            else report 'core test' run.log '^FAIL'; echo "::error::core tests failed under g++: $(grep -E '^TOTAL ' run.log | tail -1)"; failed=1; fi
+          else report 'g++' build.log 'error'; echo '::error::core tests did not compile with g++'; failed=1; fi
+          wait
+          if [ "$(cat strict.code)" != 0 ]; then report 'g++ strict' strict.log 'error|warning'; echo '::error::strict warnings pass failed (-Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)'; failed=1; else echo 'strict warnings: ok'; fi
+          if [ "$(cat asan.code)" != 0 ]; then report 'g++ asan build' asan-build.log 'error'; failed=1
+          elif ! ./core_asan > asan.log 2>&1 || grep -qE 'ERROR: AddressSanitizer|runtime error:' asan.log || ! grep -E '^TOTAL ' asan.log | tail -1 | grep -q 'FAIL 0$'; then
+            report 'sanitizer' asan.log 'ERROR: AddressSanitizer|runtime error:|^FAIL|SUMMARY'; echo '::error::core tests failed under AddressSanitizer / UndefinedBehaviorSanitizer'; failed=1
+          else echo "asan+ubsan: $(grep -E '^TOTAL ' asan.log | tail -1)"; fi
+          exit $failed
