@@ -345,8 +345,12 @@ VPage {
             Text {
                 visible: veyra.hasSource
                 text: {
-                    const out = Number(studio.stats.submitFps || 0), game = Number(studio.stats.contentFps || 0)
-                    return (game > 0 ? qsTr("游戏 %1 FPS").arg(Math.round(game)) + " → " : "") + (out > 0 ? qsTr("%1 FPS").arg(Math.round(out)) : "")
+                    // Shown FPS when known (PushLiveCadence), otherwise named as submitted.
+                    const shown = studio.stats.shownFpsKnown === true
+                    const out = Number((shown ? studio.stats.shownFps : studio.stats.submitFps) || 0), game = Number(studio.stats.contentFps || 0)
+                    return (game > 0 ? qsTr("游戏 %1 FPS").arg(Math.round(game)) + " → " : "")
+                        + (out > 0 ? (shown ? qsTr("显示 %1 FPS") : qsTr("提交 %1 FPS")).arg(Math.round(out)) : "")
+                        + (studio.stats.uneven === true ? qsTr(" · 不均匀") : "")
                 }
                 color: Theme.t3; font.family: Theme.fontMono; font.pixelSize: 11
             }

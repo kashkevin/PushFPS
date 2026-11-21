@@ -1,0 +1,36 @@
+# The text of "WHAT HAS BEEN CHECKED, AND WHAT HAS NOT" in START-HERE.txt (placeholder @CHECKED@ of the template).
+# The packager (packaging/slipstream/slipstream_package.py) copies every line that does not start with '#'.
+# WHO FILLS THIS IN: whoever makes the package, AFTER the Windows build, the automatic tests and the reviews of the
+# code in it are known, and before the package workflow runs. Replace each line in <angle brackets> with the fact
+# (run number, counts, what failed). The packager refuses to make a package while a line in <angle brackets> is left,
+# so that no package ships with a blank. Plain ASCII, lines of at most 100 characters, two spaces of indent.
+# Rule: say what was compiled, run and tested and on which machine; anything that only passed checks on GitHub's
+# Windows machine has NOT run on a gaming PC. Never write "validated" or a latency figure here.
+  Experimental build: build-windows number 59 (run 44899669488), 21 November 2026, compiled by
+  MSVC with warnings as errors and every check below passed; the source is archived as
+  archive/9c008f40.
+  On GitHub's Windows machine (software renderer, no graphics card, no PS5): the unit tests, the
+  controller test on a virtual gamepad, the GPU tests, going-live, MP4 finishing, the strict QML
+  tests (77 suites, including the new smoothness and network tests), the install test, remoteplay-
+  checks number 143 (Linux and MSVC core tests, sanitizers, the kit's dry runs of every session)
+  and checks number 156: all passed. 908 core tests pass on Linux. The network results in
+  docs\NETWORK_AUDIT.md come from a Linux simulation, not a PS5.
+  Independent reviews (a reviewer who did not write the code): smoothness, clarity and network
+  were each accepted after two or three review rounds (fixes included a slow recovery in
+  Smoothness Mode, the A-F clip starting at different points, and a loss counter that could hide
+  real loss); the merged Package 9 was reviewed line by line and accepted with text fixes, all
+  made before packaging. The kit change made after the build (fixed smoothness arms never inherit
+  Smoothness Mode) is a test script, not app code.
+  The builds were compiled, installed and started on GitHub's Windows build machine (no graphics
+  card, no PS5, no screen to measure). On a real PC only these have run: package 6 once (19 November
+  2026, PS5 over Wi-Fi, software counters) and package 7 twice (20 November 2026, PS5 over Wi-Fi:
+  the presentation and audio sessions, about 12 minutes, software counters). EVERYTHING new in this
+  package (the list of what is in this package above, and every new kit session)
+  has never run on a gaming PC, a graphics card or a PS5. No latency and no picture quality has
+  been measured with any of it. Everything new is off until you choose it, except what is listed
+  under ON WITHOUT A CHOICE above (if anything is).
+  The .cmd files here and the scripts behind them are run once on GitHub's Windows machine by the
+  workflow that made this package (job "verify" of the run named at the end of this file; look
+  there for its result). Every session of the kit also runs there on made-up logs: that shows the
+  scripts work, not that the numbers mean anything. None of this has run on a real PC either.
+  If anything fails, copy the text of the window and send it.

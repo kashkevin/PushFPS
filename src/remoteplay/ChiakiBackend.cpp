@@ -6,6 +6,24 @@
 #if !defined(CHIAKI_VEYRA_VIDEO_METADATA_API) || CHIAKI_VEYRA_VIDEO_METADATA_API != 1
 #error The reviewed Chiaki video metadata patch is required
 #endif
+#include <chiaki/takion.h>
+#if !defined(CHIAKI_VEYRA_TRANSPORT_API) || CHIAKI_VEYRA_TRANSPORT_API != 1
+#error The Chiaki transport tuning patch (0004) is required
+#endif
+#if !defined(CHIAKI_VEYRA_TRANSPORT_LIVE_REORDER_API) || CHIAKI_VEYRA_TRANSPORT_LIVE_REORDER_API != 1
+#error The Chiaki transport tuning patch (0004) with the live reorder wait is required
+#endif
+#if !defined(CHIAKI_VEYRA_TRANSPORT_FRAME_EVIDENCE_API) || CHIAKI_VEYRA_TRANSPORT_FRAME_EVIDENCE_API != 1
+#error The Chiaki transport tuning patch (0004) with the per-frame late-packet evidence is required
+#endif
+#if !defined(CHIAKI_VEYRA_TRANSPORT_CONSOLE_QUALITY_API) || CHIAKI_VEYRA_TRANSPORT_CONSOLE_QUALITY_API != 1
+#error The Chiaki transport tuning patch (0004) with the console quality counters is required
+#endif
+#if !defined(CHIAKI_VEYRA_TRANSPORT_OPTIONS_API) || CHIAKI_VEYRA_TRANSPORT_OPTIONS_API != 1
+#error The Chiaki transport tuning patch (0004) with the transport options is required
+#endif
+#include <chiaki/thread.h>
+#include <chiaki/time.h>
 #include <chiaki/opusdecoder.h>
 #include <chiaki/controller.h>
 #include <chiaki/orientation.h>
@@ -31,20 +49,97 @@ BackendResult result(ChiakiErrorCode code,const char* operation) {
     return {code==CHIAKI_ERR_SUCCESS,static_cast<int>(code),operation};
 }
 }
-PairingCredentials::PairingCredentials(PairingCredentials&& other) noexcept { *this=std::move(other); }
-PairingCredentials& PairingCredentials::operator=(PairingCredentials&& other) noexcept {
-    if(this==&other) return *this;
-    registrationKey=other.registrationKey;sessionKey=other.sessionKey;accountId=other.accountId;
-    wipe(other.registrationKey.data(),other.registrationKey.size());
-    wipe(other.sessionKey.data(),other.sessionKey.size());wipe(other.accountId.data(),other.accountId.size());
-    return *this;
-}
-PairingCredentials::~PairingCredentials(){wipe(registrationKey.data(),registrationKey.size());wipe(sessionKey.data(),sessionKey.size());wipe(accountId.data(),accountId.size());}
+// PairingCredentials' move and destructor (they wipe the secrets) are inline in ChiakiBackend.h.
 BackendResult initializeChiaki(){
     static std::once_flag flag;
     static ChiakiErrorCode code=CHIAKI_ERR_UNKNOWN;
     std::call_once(flag,[]{code=chiaki_lib_init();});
     return result(code,"chiaki_lib_init");
+}
+namespace {
+// VEYRA_EXP_RP_THREAD_PRIORITY. Chiaki calls its affinity hook at the start of
+// each of its threads, on that thread; the two that carry the stream (Takion:
+// receive, reorder, FEC, our video callback) and the pad (feedback sender) go
+// one step above normal. Installed once and only when the switch was ever on;
+// with it off the hook returns before doing anything.
+std::atomic<bool> boostThreads{false};
+std::atomic<std::uint32_t> threadsRaised{0},threadPriorityFailures{0};
+void threadHook(ChiakiThreadName name,void*) noexcept {
+    if(!boostThreads.load(std::memory_order_relaxed))return;
+    if(name!=CHIAKI_THREAD_NAME_TAKION&&name!=CHIAKI_THREAD_NAME_FEEDBACK)return;
+    if(SetThreadPriority(GetCurrentThread(),THREAD_PRIORITY_ABOVE_NORMAL))++threadsRaised;else ++threadPriorityFailures;
+}
+std::uint32_t stat32(ChiakiVeyraTransportStat stat) noexcept {
+    const auto value=chiaki_veyra_transport_stat_get(stat);
+    return value>0xffffffffull?0xffffffffu:static_cast<std::uint32_t>(value);
+}
+}
+void configureTransport(const TransportTuning& tuning){
+    chiaki_veyra_transport_set_tuning(tuning.reorderTimeoutUs,tuning.receiveBufferBytes); // also clears the options
+    // VEYRA_EXP_RP_REORDER_WRAP_FIX / VEYRA_EXP_RP_EARLY_LOSS only: never called without one of them.
+    if(tuning.wrapFix||tuning.earlyLoss)
+        chiaki_veyra_transport_set_options((tuning.wrapFix?CHIAKI_VEYRA_OPTION_REORDER_WRAP_FIX:0u)|(tuning.earlyLoss?CHIAKI_VEYRA_OPTION_EARLY_LOSS:0u));
+    chiaki_veyra_transport_stats_reset();
+    threadsRaised=0;threadPriorityFailures=0;
+    boostThreads=tuning.threadPriority;
+    if(tuning.threadPriority){
+        static std::once_flag installed;
+        std::call_once(installed,[]{chiaki_thread_set_affinity_cb(threadHook,nullptr);});
+    }
+}
+TransportCounters readTransportCounters() noexcept {
+    TransportCounters c;
+    // A counter that is a part of another is read before it: the library adds
+    // to the whole first (a timeout after its gap, a late arrival after its
+    // skip, a frame lost to a late packet after its FEC failure), so a poll
+    // between two library updates never sees the part larger than the whole
+    // (ReorderWindowController treats that as a fault).
+    c.lateFramesFailed=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_LATE_FRAMES_FAILED);
+    c.reorderLateArrivals=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_REORDER_LATE_ARRIVALS);
+    c.reorderTimeouts=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_REORDER_TIMEOUTS);
+    c.avPackets=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_AV_PACKETS);
+    c.videoPackets=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_VIDEO_PACKETS);
+    c.reorderGaps=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_REORDER_GAPS);
+    c.reorderSkipped=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_REORDER_SKIPPED);
+    c.reorderDropped=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_REORDER_DROPPED);
+    c.fecRecovered=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_FRAMES_FEC_RECOVERED);
+    c.fecFailed=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_FRAMES_FEC_FAILED);
+    c.corruptReports=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_CORRUPT_REPORTS);
+    c.corruptFrames=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_CORRUPT_FRAMES);
+    c.idrRequests=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_IDR_REQUESTS);
+    c.congestionReports=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_CONGESTION_REPORTS);
+    c.congestionReceived=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_CONGESTION_RECEIVED);
+    c.congestionLost=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_CONGESTION_LOST);
+    c.congestionLostReported=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_CONGESTION_LOST_REPORTED);
+    c.senkushaRttUs=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_SENKUSHA_RTT_US);
+    c.reorderTimeoutUs=stat32(CHIAKI_VEYRA_STAT_REORDER_TIMEOUT_US);
+    c.receiveBufferRequested=stat32(CHIAKI_VEYRA_STAT_RCVBUF_REQUESTED);
+    c.receiveBufferEffective=stat32(CHIAKI_VEYRA_STAT_RCVBUF_EFFECTIVE);
+    c.receiveBufferFallbacks=stat32(CHIAKI_VEYRA_STAT_RCVBUF_FALLBACKS);
+    c.threadsRaised=threadsRaised.load();c.threadPriorityFailures=threadPriorityFailures.load();
+    c.reorderOvershootUs=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_REORDER_OVERSHOOT_US);
+    static_assert(static_cast<int>(kReorderLatenessBuckets)==CHIAKI_VEYRA_REORDER_LATENESS_BUCKETS);
+    for(std::size_t i=0;i<kReorderLatenessBuckets;++i)
+        c.reorderLateness[i]=chiaki_veyra_transport_stat_get(static_cast<ChiakiVeyraTransportStat>(static_cast<int>(CHIAKI_VEYRA_STAT_REORDER_LATENESS_0)+static_cast<int>(i)));
+    c.consoleReports=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_CQ_REPORTS);
+    c.consoleTargetBitrate=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_CQ_TARGET_BITRATE);
+    c.consoleUpstreamBitrate=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_CQ_UPSTREAM_BITRATE);
+    c.consoleRttMilli=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_CQ_RTT_MICRO);
+    c.consoleUpstreamLossPpm=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_CQ_UPSTREAM_LOSS_PPM);
+    c.consoleLoss=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_CQ_LOSS);
+    c.consoleLastUs=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_CQ_LAST_US);
+    c.consoleMeasuredKbps=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_CQ_MEASURED_KBPS);
+    c.libraryNowUs=chiaki_time_now_monotonic_us();
+    c.earlyLossCuts=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_EARLY_LOSS_CUTS);
+    c.earlyLossWrong=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_EARLY_LOSS_WRONG);
+#if defined(CHIAKI_VEYRA_TRANSPORT_SEND_BUFFER_API) && CHIAKI_VEYRA_TRANSPORT_SEND_BUFFER_API == 1
+    c.sendBufferOverflows=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_SEND_BUFFER_OVERFLOWS);
+    c.sendBufferSize=chiaki_veyra_transport_stat_get(CHIAKI_VEYRA_STAT_SEND_BUFFER_SIZE);
+#endif
+    return c;
+}
+void setLiveReorderTimeout(std::uint32_t microseconds) noexcept {
+    chiaki_veyra_transport_set_av_reorder_timeout_live(microseconds);
 }
 struct ChiakiBackend::Impl {
     explicit Impl(SessionInbox::Token t):token(std::move(t)),owner(std::this_thread::get_id()){}
@@ -62,6 +157,9 @@ struct ChiakiBackend::Impl {
     std::atomic<uint64_t> callbackRejected=0,transportErrors=0,assemblyErrors=0;
     std::atomic<int64_t> serverTargetBitrate=-1;
     std::atomic<uint64_t> qualityReports=0;
+    // Opus frames Chiaki's audio receiver concealed (a NULL frame = Opus packet-loss concealment), counted
+    // by a forwarding sink in front of the Opus decoder's own (docs/AUDIO.md, round 3). Behaviour unchanged.
+    ChiakiAudioSink opusSink{};std::atomic<uint64_t> audioConcealed=0;
     // PS5 手柄控制: set before the session starts, read only by the callbacks.
     bool discardMedia=false;
     // Only the upstream audio/Opus callback thread reads/writes these fields.
@@ -141,6 +239,11 @@ struct ChiakiBackend::Impl {
     // no frame callback Chiaki's audio receiver returns before freeing each
     // buffered frame. Nothing is decoded.
     static void discardAudio(std::uint8_t*,std::size_t,void* user) noexcept {++static_cast<Impl*>(user)->audioCallbacks;}
+    static void countedAudioHeader(ChiakiAudioHeader* header,void* user) noexcept {auto& self=*static_cast<Impl*>(user);if(self.opusSink.header_cb)self.opusSink.header_cb(header,self.opusSink.user);}
+    static void countedAudioFrame(std::uint8_t* buf,std::size_t size,void* user) noexcept {
+        auto& self=*static_cast<Impl*>(user);if(!buf||!size)++self.audioConcealed;
+        if(self.opusSink.frame_cb)self.opusSink.frame_cb(buf,size,self.opusSink.user);
+    }
     static void opusSettings(std::uint32_t channels,std::uint32_t rate,void* user) noexcept {
         auto& self=*static_cast<Impl*>(user);
         // Sample position stays monotonic across repeated Opus headers within
@@ -205,7 +308,8 @@ BackendResult ChiakiBackend::start(const NativeConnectRequest& request,SessionIn
     else{
         chiaki_opus_decoder_init(&s.opus,&s.log);s.opusInitialized=true;
         chiaki_opus_decoder_set_cb(&s.opus,Impl::opusSettings,Impl::opusFrame,&s);
-        ChiakiAudioSink sink{};chiaki_opus_decoder_get_sink(&s.opus,&sink);chiaki_session_set_audio_sink(&s.session,&sink);
+        chiaki_opus_decoder_get_sink(&s.opus,&s.opusSink);
+        ChiakiAudioSink sink{};sink.user=&s;sink.header_cb=Impl::countedAudioHeader;sink.frame_cb=Impl::countedAudioFrame;chiaki_session_set_audio_sink(&s.session,&sink);
     }
     ChiakiAudioSink hapticSink{};hapticSink.user=&s;hapticSink.frame_cb=Impl::hapticsCallback;
     chiaki_session_set_haptics_sink(&s.session,&hapticSink);
@@ -290,7 +394,7 @@ NativeSnapshot ChiakiBackend::snapshot()const{
     auto& s=*p_;
     NativeSnapshot out{s.started.load(),s.connected.load(),s.warnings.load(),s.errors.load(),s.videoCallbacks.load(),s.audioCallbacks.load(),s.quitReason.load(),s.apiError.load()};
     out.callbackRejected=s.callbackRejected;out.transportErrors=s.transportErrors;out.assemblyErrors=s.assemblyErrors;
-    out.serverTargetBitrate=s.serverTargetBitrate;out.qualityReports=s.qualityReports;
+    out.serverTargetBitrate=s.serverTargetBitrate;out.qualityReports=s.qualityReports;out.audioConcealed=s.audioConcealed;
     // Upstream packet window may reset itself; do not label this cumulative UDP.
     if(s.initialized)chiaki_packet_stats_get(&s.session.stream_connection.packet_stats,false,&out.packetReceived,&out.packetLost);
     // After a stopped session the PS5 may briefly still report RP_IN_USE.
