@@ -30,6 +30,19 @@ then (latest change: see the date of the newest commit). The modifications, in s
 The complete, dated list of changes is the Git history of https://github.com/DosukaSOL/PushFPS, starting
 after Veyra's commit that PushFPS was forked from.
 
+## Slipstream development builds (GPL-3.0 section 5a)
+
+Builds whose version ends in `-slipstream` are **not PushFPS releases**. They are a further modified version
+of PushFPS, changed from PushFPS commit `ed317efb` (version 3.2.1) from **2026-11-18** onwards by the maintainer
+of https://github.com/kashkevin/PushFPS for low-latency PS5 Remote Play testing. The modifications, in short:
+event-driven hand-off between network, decoder and engine in the Remote Play path; controller input sent on
+change; keyboard and mouse as a controller with profiles and calibration; same-LAN transport experiments
+(Chiaki patches `scripts/remoteplay/patches/0003` and `0004`); connection health, audio, GPU budget and latency
+governor experiments; performance modes in the interface; a hardware test kit and package tooling; the in-app
+updater switched off in these builds. Every experiment is off unless switched on (`docs/PS5_REMOTE_PLAY_EXPERIMENTS.md`).
+The exact source of a build is the commit named in the package's `SOURCE.txt`; the files written for these
+changes are under the same license terms as the files written for PushFPS.
+
 ## License
 
 PushFPS is free software: you can redistribute it and/or modify it under the terms of the GNU General

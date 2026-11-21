@@ -667,6 +667,13 @@ VGroup {
         }
     }
 
+    // Performance modes (PushModeRow.qml): one choice that sets frame generation, duplicate removal and
+    // presentation from the table in engine/PushPerformanceMode.h. "Off" leaves every row below to the user.
+    PushModeRow { objectName: "pushfps-mode-rows" }
+    // SmartLink "Connection" (PushSmartLinkRow.qml), experimental: shown only for PS5 Remote Play in a Slipstream
+    // build. Off by default; the choice applies from the next PS5 connection.
+    PushSmartLinkRow { objectName: "pushfps-smartlink-rows" }
+
     VRow {
         objectName: "pushfps-game-fps-row"
         label: qsTr("游戏帧率")
@@ -934,6 +941,18 @@ VGroup {
                 checked: veyra.preferences.pushLatencyOverlay === true
                 onToggled: checked => veyra.setPreference("pushLatencyOverlay", checked)
             }
+        }
+    }
+
+    // Statistics overlay (PushStatsOverlay.qml): reads numbers the engine already has, once a second.
+    VRow {
+        objectName: "pushfps-stats-overlay-row"
+        label: qsTr("在画面上显示详细统计")
+        hint: qsTr("模式、来源和显示帧率、生成与真实的帧、处理延迟，PS5 串流还有连接质量、丢包、抖动和线路。只读取已有的数字，没有的显示「未测量」")
+        VSwitch {
+            objectName: "pushfps-stats-overlay"
+            checked: veyra.preferences.pushStatsOverlay === true
+            onToggled: checked => veyra.setPreference("pushStatsOverlay", checked)
         }
     }
 
