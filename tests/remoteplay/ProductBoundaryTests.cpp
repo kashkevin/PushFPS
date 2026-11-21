@@ -29,7 +29,7 @@ static void mailbox(){
     s.controller(down);auto up=down;up.touches[0].id=-1;s.controller(up);
     if(s.takeControllerLocked(now).touches[0].id!=1||s.takeControllerLocked(now).touches[0].id!=-1)throw std::runtime_error("input edges overwritten by decoder owner");
     for(int i=0;i<40;++i)s.controller(down);
-    if(s.pendingControllers_.size()>16||s.takeControllerLocked(now+2000000)!=remoteplay::ControllerState{})throw std::runtime_error("input queue bound or stale release");
+    if(s.controllers_.depth()>16||s.takeControllerLocked(now+2000000)!=remoteplay::ControllerState{})throw std::runtime_error("input queue bound or stale release");
     AVFrame* raw=av_frame_alloc();raw->width=16;raw->height=16;raw->format=AV_PIX_FMT_YUV420P;
     if(av_frame_get_buffer(raw,32)<0)throw std::bad_alloc();
     pipeline::FramePacket packet;SourceInfo info;info.width=16;info.height=16;
