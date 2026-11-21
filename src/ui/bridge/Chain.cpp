@@ -100,6 +100,7 @@ bool QmlPlayerBridge::setNrLayerParameter(int index,const QString& key,double va
                 impl_->chain.nodes[i].nr.runtime=static_cast<engine::NrRuntime>(int(value));
         const bool accepted=impl_->revalidate(true);
         if(!accepted){const auto error=impl_->validation.message;impl_->chain=before;impl_->revalidate();emit notice(uiText(error),true);}
+        else pushNeuralRuntimePicked();   // PushFPS: a runtime the user picked is never moved by the default (PushNeural.cpp)
         emit settingsChanged();emitChainChanged();return accepted;
     }
     auto& node=impl_->chain.nodes[index];const auto before=node;auto& n=node.nr;const bool wasValid=chainValid();
