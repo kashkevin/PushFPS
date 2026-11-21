@@ -62,6 +62,7 @@
 #include "veyra/ui/QmlDataDirectory.h"
 #include "veyra/ui/QmlDiskCache.h"
 #include "veyra/ui/QmlPlayerBridge.h"
+#include "veyra/ui/SlipstreamSettingsFile.h"
 #include "veyra/ui/StartupMusic.h"
 #include "veyra/ui/ThumbnailProvider.h"
 
@@ -289,8 +290,24 @@ qreal sceneInsetFraction(QQuickWindow* window) {
     return videoInsetFraction(root);
 }
 
+// Experiment VEYRA_EXP_PRESENT_TEST_UNCOVERED=1 (off unless set; read once): while the built-in PS5
+// latency test RUNS, its dialog is not cut out of the video window, so the window keeps its whole
+// rectangle (no clipping region) for the timed presses; the dialog is behind the picture until the test
+// ends and then shows again. The question it answers: does the dialog's hole in the video window's
+// region change present->scanout (docs/PRESENTATION_LATENCY.md section 6, arm "test-uncovered").
+bool testUncoveredSwitch() {
+    static const bool on = [] { wchar_t v[4]{}; return GetEnvironmentVariableW(L"VEYRA_EXP_PRESENT_TEST_UNCOVERED", v, 4) == 1 && v[0] == L'1'; }();
+    return on;
+}
+bool g_testUncoveredNow = false;
+
 void collectCovers(QQuickItem* item, QList<Cover>& out) {
     if (!item->isVisible() || item->opacity() <= 0.0) return;
+    if (testUncoveredSwitch() && item->objectName() == QLatin1String("pushfps-latency-test") &&
+        item->property("running").toBool()) {
+        g_testUncoveredNow = true;
+        return;
+    }
     // A cover is named "videoCover" or carries videoCover: true; the property lets a
     // dialog keep its own objectName for tests (an overridden name used to drop
     // the hole, leaving five dialogs behind the picture).
@@ -319,8 +336,13 @@ void syncVideoCovers(QQuickWindow* window, QQuickItem* host, qreal inset) {
     if (!window || !host || !g_video) return;
     if (g_videoProbe == VideoProbeMode::CoversOnly) inset = 0;
     QList<Cover> covers;
+    const bool wasUncovered = g_testUncoveredNow;
+    g_testUncoveredNow = false;
     collectCovers(window->contentItem()->parentItem() ? window->contentItem()->parentItem()
                                                       : window->contentItem(), covers);
+    if (g_testUncoveredNow != wasUncovered)
+        veyra::log::info("slipstream-present", std::format("testUncovered={} (VEYRA_EXP_PRESENT_TEST_UNCOVERED: the running latency test's dialog is {} the video window's region)",
+                                                           g_testUncoveredNow ? 1 : 0, g_testUncoveredNow ? "not cut out of" : "cut out of"));
     const qreal dpr = window->devicePixelRatio();
     const QPointF origin = host->mapToScene(QPointF(0, 0));
     // The region clips the native HWND, so its dimensions must come from that
@@ -503,6 +525,7 @@ static int runApplication(int argc, char** argv, QString& restartProgram, QStrin
     g_crashDumpDirectory = logPath.parent_path().wstring();
     veyra::engine::EngineWatchdog::setDumpDirectory(g_crashDumpDirectory);
     SetUnhandledExceptionFilter(crashFilter);
+    veyra::ui::applySlipstreamSettingsFile();   // slipstream.ini beside the exe -> VEYRA_EXP_RP_* / VEYRA_TEST_RP_* switches not already set
 
     // Interface scale (设置 → 界面缩放) has to be fixed before Qt starts, so the
     // preference file is read here, from the same data directory the bridge uses.

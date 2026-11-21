@@ -11,17 +11,21 @@
 #include "veyra/pipeline/Rdna3NrBackend.h"
 #include "veyra/pipeline/AmdNrProvider.h"
 #include "veyra/pipeline/VfgBackend.h"
+#include "veyra/pipeline/StreamChangePass.h"
 #include "veyra/engine/GraphDescription.h"
+#include "veyra/engine/PushStreamDedup.h"
 #include "veyra/engine/ColorLut.h"
 #include "veyra/engine/EffectChain.h"
 #include "veyra/diagnostics/CpuStallTrace.h"
 
 #include <algorithm>
+#include <atomic>
 #include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstring>
 #include <fstream>
+#include <mutex>
 #include <thread>
 
 #include "veyra/Log.h"
@@ -43,6 +47,7 @@
 #include "veyra/ngx/DlssNrRuntimeAdapter.h"
 #include "veyra/ngx/DlssSrBackend.h"
 #include "veyra/ngx/VideoSrBackend.h"
+#include "veyra/engine/PushSrPlan.h"
 #include "veyra/pipeline/VfxSrBackend.h"
 #include "veyra/ngx/TrueHdrBackend.h"
 #include "veyra/ngx/NgxCoreHost.h"
@@ -100,6 +105,27 @@ bool mixedDualSr(const EnhanceGraphDesc& d){
 }
 const char* srRuntimeName(uint32_t quality){
     return quality==0?"dlss":quality==engine::kVideoSrFsr?"fsr":quality==engine::kVideoSrNis?"nis":engine::vfxVideoSr(quality)?"video-effects":"ngx";
+}
+// PushFPS sprint 4 (stream "sr"): [slipstream-sr] statistics and the RTX Video SR level experiments
+// (engine/PushSrPlan.h, docs/SUPER_RESOLUTION.md). Each switch is read once. With none of them set and no
+// autorun request, the level passed to the SDK is the configured one and noteSrTimings returns at once.
+std::string srSwitchText(const wchar_t* name){
+    wchar_t value[16]{};
+    const DWORD length=GetEnvironmentVariableW(name,value,16);
+    std::string text;
+    if(length==0||length>=16)return text;
+    for(DWORD i=0;i<length;++i)text.push_back(value[i]>0&&value[i]<128?static_cast<char>(value[i]):'?');
+    return text;
+}
+bool srStatsSwitch(){static const bool on=srSwitchText(L"VEYRA_EXP_RP_STATS")=="1";return on;}
+uint32_t srFixedLevel(){static const uint32_t level=engine::pushSrLevelSwitch(srSwitchText(L"VEYRA_EXP_SR_QUALITY"));return level;}
+double srBudgetMs(){static const double ms=engine::pushSrBudgetSwitch(srSwitchText(L"VEYRA_EXP_SR_BUDGET_MS"));return ms;}
+// Written by noteSrTimings (VEYRA_EXP_SR_BUDGET_MS), read when the pass is recorded; 0 = the user's level.
+std::atomic<uint32_t>& srBudgetLevel(){static std::atomic<uint32_t> level{0};return level;}
+// The level evaluated by the single standard RTX Video SR pass (any other choice is returned unchanged).
+engine::PushSrLevel srLevelFor(uint32_t configured){
+    return engine::pushSrEffectiveLevel(configured,engine::pushSrLevelRequest().load(std::memory_order_relaxed),srFixedLevel(),
+        srBudgetLevel().load(std::memory_order_relaxed));
 }
 
 // N1 packed capture ingress helpers. Codes match pipeline::packedInputCode:
@@ -773,7 +799,8 @@ bool EnhanceGraph::initialize(const EnhanceGraphDesc& desc)
     const bool videoRestore=!desc.stillImage&&desc.videoSrQuality>=1&&desc.videoSrQuality<=4;
     srEnabled_ = desc.enableSr && (srcW_ != workW_ || srcH_ != workH_ || videoRestore || srPrescaleActive() || srResolveActive());
     lmxxfNr_ = context_.adapter().vendorId == 0x1002 || desc.nrRuntime == engine::NrRuntime::LmxxfAmd;
-    if(context_.adapter().vendorId==0x1002 && desc_.opticalFlowBackend==engine::OpticalFlowBackend::Nvidia)
+    // PushFPS: any non-NVIDIA adapter (AMD as before, now also Intel and unknown vendors) uses FidelityFX flow.
+    if(!context_.adapter().isNvidia && desc_.opticalFlowBackend==engine::OpticalFlowBackend::Nvidia)
         desc_.opticalFlowBackend=engine::OpticalFlowBackend::AmdFidelityFx;
     nrEnabled_ = desc.enableNr && !desc.noFeatures && (!desc.noNgx || lmxxfNr_);
     fgEnabled_ = desc.enableFg && !desc.noFeatures && !desc.stillImage &&
@@ -923,6 +950,7 @@ bool EnhanceGraph::initialize(const EnhanceGraphDesc& desc)
         if(firstTemporal&&!createSignedHdrRestore(firstSrHdrRestore_,desc_.firstSrWidth,desc_.firstSrHeight))return false;
     }
     if (!createComputePasses()) return false;
+    (void)initStreamChange();   // PushFPS experiment VEYRA_EXP_RP_STREAM_DEDUP; nothing unless the switch is set
 
     initialized_ = true;
     failedBackend_=engine::FailedBackend::None;
@@ -1564,6 +1592,81 @@ bool EnhanceGraph::initHudLock() {
     hudLock_=std::move(pass);
     return true;
 }
+// PushFPS experiment VEYRA_EXP_RP_STREAM_DEDUP: the change of a hardware-decoded picture against
+// the one measured before it, read back as result words (pipeline/StreamChangePass.h). The pass
+// and its stores are created with the graph when the switch is set (initStreamChange), never on a
+// live frame. The engine thread calls measureStreamChange before EnhanceGraph::process for the
+// same frame; the wait inside ends at deadline100ns at the latest. Unverified on Windows.
+bool EnhanceGraph::initStreamChange(){
+    wchar_t value[4]{};
+    const DWORD length=GetEnvironmentVariableW(L"VEYRA_EXP_RP_STREAM_DEDUP",value,4);
+    if(length==0||length>=4||!engine::PushStreamDedup::switchedOn(std::wstring_view(value,length)))return true;   // off: nothing exists
+    if(desc_.wideYuvInput()){
+        // 10-bit and HDR pictures are refused: the classifier's thresholds were chosen on 8-bit SDR only.
+        streamChangeFailed_=true;
+        veyra::log::warn("stream-change","10-bit / HDR input is not supported by VEYRA_EXP_RP_STREAM_DEDUP; decoded pictures are not numbered");
+        return true;
+    }
+    auto runner=std::make_unique<StreamChangeRunner>();
+    if(!runner->initialize(context_.device(),ring_.queue(),desc_.sourceWidth,desc_.sourceHeight)){
+        streamChangeFailed_=true;
+        veyra::log::warn("stream-change","the measurement pass could not be created; decoded pictures are not numbered");
+        return true;   // the graph works without it
+    }
+    streamChange_=std::move(runner);
+    return true;
+}
+void EnhanceGraph::settleStreamChange(){
+    // A decoder picture held for a measurement that timed out is let go as soon as its list has
+    // finished, also when no further picture is measured.
+    if(streamChangeFrame_&&(!streamChange_||!streamChange_->reading()))streamChangeFrame_.reset();
+}
+StreamChangeOutcome EnhanceGraph::measureStreamChange(const AVFrame* frame,int64_t deadline100ns){
+    StreamChangeOutcome outcome;
+    if(!initialized_||streamChangeFailed_||!streamChange_||!frame||frame->format!=AV_PIX_FMT_D3D12||frame->width<=0||frame->height<=0)return outcome;
+    auto* d3dFrame=reinterpret_cast<AVD3D12VAFrame*>(frame->data[0]);
+    if(d3dFrame==nullptr||d3dFrame->texture==nullptr)return outcome;
+    if(!streamChange_->ready()){
+        streamChangeFailed_=true;settleStreamChange();
+        veyra::log::warn("stream-change","the measurement stopped (see the line above); decoded pictures are not numbered until the graph is rebuilt");
+        return outcome;
+    }
+    if(d3dFrame->texture->GetDesc().Format!=DXGI_FORMAT_NV12){
+        // P010 / P016: 10-bit or HDR. Refused, said once.
+        streamChangeFailed_=true;settleStreamChange();
+        veyra::log::warn("stream-change","the decoder's pictures are not 8-bit NV12 (10-bit / HDR): not supported by VEYRA_EXP_RP_STREAM_DEDUP; decoded pictures are not numbered");
+        return outcome;
+    }
+    if(streamChangeWaitLeft(deadline100ns,StreamChangeRunner::now100ns())<=0){
+        // No time (a presentation is due): nothing is cloned, recorded or dispatched for this picture.
+        outcome=streamChange_->noTime();
+        settleStreamChange();
+        return outcome;
+    }
+    // The list reads the decoder's texture until its fence, and the caller's frame only covers this
+    // call. So a reference of our own is taken on every call, before anything is submitted, and it
+    // is kept whenever a list that reads this picture may still run (a wait that timed out, or an
+    // error after the list was submitted): a decoder surface is never released or reused under a
+    // list. It replaces the reference held before only then: a new list is recorded only after the
+    // earlier one was seen to finish. Held no longer than that: a surface kept back is one the
+    // decoder cannot reuse.
+    AVFrame* cloned=av_frame_clone(frame);
+    if(!cloned)return outcome;
+    std::shared_ptr<AVFrame> held(cloned,[](AVFrame* value){av_frame_free(&value);});
+    outcome=streamChange_->measure(ring_.queue(),d3dFrame->texture,static_cast<UINT>(d3dFrame->subresource_index),
+        uint32_t(frame->width),uint32_t(frame->height),d3dFrame->sync_ctx.fence,d3dFrame->sync_ctx.fence_value,deadline100ns);
+    if(outcome.reading)streamChangeFrame_=std::move(held);
+    else settleStreamChange();
+    return outcome;
+}
+void EnhanceGraph::streamChangeCounters(uint64_t& measured,uint64_t& timeouts,uint64_t& failures,double& waitMsMax,double& waitMsMean) const{
+    measured=timeouts=failures=0;waitMsMax=waitMsMean=0;
+    if(!streamChange_)return;
+    const auto& counters=streamChange_->counters();
+    measured=counters.measured;timeouts=counters.timeouts+counters.skipped+counters.notDispatched;failures=counters.failures;waitMsMax=counters.waitMsMax;
+    const uint64_t waited=counters.measured+counters.timeouts;
+    waitMsMean=waited?counters.waitMsSum/double(waited):0.0;
+}
 void EnhanceGraph::composeHudLock(ID3D12GraphicsCommandList* list,unsigned generatedSlot,unsigned heldParity){
     if(hudLock_&&!hudLock_->compose(list,tracker_,generatedSlot,heldParity))
         veyra::log::warn("hud-lock",std::format("compose skipped slot={} held={}",generatedSlot,heldParity));
@@ -2093,7 +2196,7 @@ bool EnhanceGraph::createAutoNrPool() {
     const bool admitted=nrEnabled_&&!srEnabled_&&!fgEnabled_&&!lmxxfNr_&&!desc_.hdrWorking()&&!desc_.stillImage&&
         !desc_.noFeatures&&!desc_.noNgx&&!desc_.runtimeNodeOrder&&!desc_.nrTemporal&&desc_.nrHoldStrength==0&&
         engine::currentNrRuntime(desc_.nrRuntime)==engine::NrRuntime::Ampere&&desc_.opticalFlowBackend==engine::OpticalFlowBackend::Nvidia&&
-        context_.adapter().deviceId==0x2f04&&context_.adapter().isNvidia&&index<nrInstances_.size()&&nrInstances_.size()+4<=8&&
+        (context_.adapter().deviceId==0x2f04||[]{wchar_t v[4]{};return GetEnvironmentVariableW(L"VEYRA_EXP_NR_AUTO_CAPABILITY",v,4)==1&&v[0]==L'1';}())&&context_.adapter().isNvidia&&index<nrInstances_.size()&&nrInstances_.size()+4<=8&&   // PushFPS: other cards only with the experiment switch =1 exactly (as the bridge); the measured headroom check below still decides
         workW_==1920&&workH_==1080&&desc_.nrLayersExtent[index]==Extent{1920,1080}&&
         std::none_of(nrInstances_.begin(),nrInstances_.end(),[](const auto& layer){return layer->temporalEnabled;});
     if(!admitted){failedBackend_=engine::FailedBackend::Nr;log::error("nr-auto-pool","experimental admission refused; product entry points do not request this pool");return false;}
@@ -2724,6 +2827,7 @@ bool EnhanceGraph::composeExclusion(ID3D12GraphicsCommandList* list,unsigned out
 
 bool EnhanceGraph::process(const AVFrame* frame, double ptsMs, bool reset, FrameOutputs& out, uint64_t sourceFrameId, const ColorDescription* color, const HardwareSurfaceInput* hardwareSurface, bool retainReferences, const FgAdmission& admitFg, unsigned previewMultiplier, bool pausedResidualRefresh, const std::function<void()>& previewCheckpoint)
 {
+    settleStreamChange();   // PushFPS experiment: a decoder picture held for a finished measurement is let go
     retainReferences=retainReferences||desc_.exclusion.enabled;
     reset=reset||nrAutoResetPending_;nrAutoResetPending_=false;
     frameFlowValid_=false;
@@ -3247,7 +3351,7 @@ bool EnhanceGraph::process(const AVFrame* frame, double ptsMs, bool reset, Frame
         blitPass_.bind(list,enc,gpuHandleOf(blitPass_,prescaled?21:desc_.nrBeforeSr||sourcePostOutput_?18:0).ptr,gpuHandleOf(blitPass_,16).ptr);list->Dispatch((srInW_+15)/16,(srInH_+15)/16,1);tracker_.uavBarrier(list,videoSrInput_.Get());
         tracker_.transition(list,videoSrInput_.Get(),D3D12_RESOURCE_STATE_COMMON);tracker_.transition(list,videoSrOutput_.Get(),D3D12_RESOURCE_STATE_COMMON);
         if(vfxSrBackend_){if(!runVfx(*vfxSrBackend_,videoSrInput_.Get(),videoSrOutput_.Get()))return false;}
-        else if(!videoSrBackend_->evaluate(list,videoSrInput_.Get(),videoSrOutput_.Get(),desc_.dualSr?desc_.dualSrQuality:desc_.videoSrQuality)){failedBackend_=engine::FailedBackend::Sr;return false;}
+        else if(!videoSrBackend_->evaluate(list,videoSrInput_.Get(),videoSrOutput_.Get(),desc_.dualSr?desc_.dualSrQuality:srLevelFor(desc_.videoSrQuality).level)){failedBackend_=engine::FailedBackend::Sr;return false;}
         tracker_.uavBarrier(list,videoSrOutput_.Get());tracker_.transition(list,videoSrOutput_.Get(),D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);tracker_.transition(list,workRgba_.Get(),D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         // HDR restore and the resolve take the base that was encoded.
         const UINT restoreSet=prescaled?7:desc_.nrBeforeSr||sourcePostOutput_?4:0;
@@ -4388,7 +4492,7 @@ bool EnhanceGraph::applySettings(const engine::EnhancementSettings& s){
     // but has this NGX-only stage explicitly disabled in the graph. Do not
     // reject unrelated live settings in that degraded, playable state.
     if(s.nr&&desc_.enableNr&&!nrCreated())return false;
-    const auto requestedFlow=context_.adapter().vendorId==0x1002&&s.opticalFlowBackend==engine::OpticalFlowBackend::Nvidia
+    const auto requestedFlow=!context_.adapter().isNvidia&&s.opticalFlowBackend==engine::OpticalFlowBackend::Nvidia
         ?engine::OpticalFlowBackend::AmdFidelityFx:s.opticalFlowBackend;
     const bool usesSharedFlow=dlaaRequested()||nvofStandalone_||(desc_.enableFg&&desc_.fgUsesFlow())||
         (srEnabled_&&desc_.srUsesFlow()&&temporalSrPass(desc_));
@@ -4543,10 +4647,68 @@ void EnhanceGraph::setNrEnabled(bool on)
 
 ID3D12Fence* EnhanceGraph::contextFence()const{return context_.fence();}
 uint32_t EnhanceGraph::actualFlowPerf()const{return nvof_?nvof_->caps().actualPerfLevel:0;}
+// PushFPS sprint 4 (stream "sr"): the SR stage's own GPU time from the timestamps the graph already takes
+// (GpuStage::Sr), one window per 5 s or per configuration, as [slipstream-sr] (VEYRA_EXP_RP_STATS=1), and the
+// same windows feed VEYRA_EXP_SR_BUDGET_MS. Called from takeGpuTimings (EngineController's collectTimings, the
+// engine thread). SR runs once per real frame (runSr), never on generated frames: generatedToo=0. Unverified
+// on Windows.
+void EnhanceGraph::noteSrTimings(const std::vector<diagnostics::GpuFrameTiming>& timings){
+    const bool stats=srStatsSwitch();
+    const double budgetMs=srBudgetMs();
+    if((!stats&&budgetMs<=0.0)||!srEnabled_)return;
+    struct SrStatsState{
+        std::mutex mutex;engine::PushSrWindow window;engine::PushSrStatsInfo info;bool haveInfo=false;
+        std::chrono::steady_clock::time_point start{};engine::PushSrBudget budget;
+    };
+    static SrStatsState state;
+    const bool dual=desc_.dualSr;
+    const uint32_t configured=dual?desc_.dualSrQuality:desc_.videoSrQuality;
+    const bool ngxSingle=!dual&&engine::ngxVideoSr(desc_.videoSrQuality);
+    const engine::PushSrLevel level=ngxSingle?srLevelFor(desc_.videoSrQuality):engine::PushSrLevel{configured,engine::PushSrLevelSource::User};
+    engine::PushSrStatsInfo info;
+    info.choice=int(desc_.videoSrQuality);
+    info.quality=ngxSingle?int(level.level):engine::rtxVideoSr(configured)?int(engine::videoSrTier(configured)):-1;
+    info.inW=srInW_;info.inH=srInH_;info.outW=srOutW_;info.outH=srOutH_;info.workW=workW_;info.workH=workH_;
+    info.generatedToo=false;info.hdr=desc_.hdrWorking();info.dual=dual;info.levelSource=level.source;info.budgetMs=budgetMs;
+    const auto now=std::chrono::steady_clock::now();
+    std::lock_guard lock(state.mutex);
+    if(state.budget.config().budgetMs!=budgetMs){engine::PushSrBudgetConfig c;c.budgetMs=budgetMs;state.budget=engine::PushSrBudget(c);}
+    if(!state.haveInfo){state.info=info;state.haveInfo=true;state.start=now;}
+    const auto flush=[&]{
+        const auto& w=state.window;
+        if(w.frames()){
+            if(stats)veyra::log::info("slipstream-sr",engine::pushSrStatsLine(w,state.info));
+            // The budget only steers the user's own standard RTX Video SR level, never an autorun hold or the fixed switch.
+            const bool steerable=budgetMs>0.0&&!state.info.dual&&state.info.choice>=1&&state.info.choice<=4&&
+                (state.info.levelSource==engine::PushSrLevelSource::User||state.info.levelSource==engine::PushSrLevelSource::Budget);
+            if(steerable){
+                const auto now100ns=std::chrono::duration_cast<std::chrono::duration<int64_t,std::ratio<1,10000000>>>(now.time_since_epoch()).count();
+                const double p95=w.percentile(95.0);
+                // The shared level follows the budget after every window (also when the user chose another level).
+                if(engine::pushSrBudgetObserve(state.budget,srBudgetLevel(),p95,w.frames(),uint32_t(state.info.choice),now100ns)){
+                    veyra::log::info("slipstream-sr",std::format("event=budget level={} user={} gpuP95={:.3f} budgetMs={:.2f} changes={}",
+                        state.budget.level()?state.budget.level():uint32_t(state.info.choice),state.info.choice,p95,budgetMs,state.budget.changes()));
+                }else if(state.budget.overAtFloor()&&stats){
+                    veyra::log::info("slipstream-sr",std::format("event=budget-floor level=1 gpuP95={:.3f} budgetMs={:.2f}",p95,budgetMs));
+                }
+            }
+        }
+        state.window.clear();state.start=now;
+    };
+    if(!state.info.equals(info)){flush();state.info=info;}
+    for(const auto& sample:timings){
+        const auto& sr=sample.gpu[size_t(GpuStage::Sr)];
+        if(sr.state==diagnostics::SampleState::Measured&&sr.milliseconds)state.window.add(*sr.milliseconds);
+    }
+    if(now-state.start>=std::chrono::seconds(5))flush();
+}
 bool EnhanceGraph::vfgFastReady() const { return vfgBackend_&&vfgBackend_->fastReady(); }
 bool EnhanceGraph::fgCreated() const
 {
-    return (vfgBackend_&&vfgBackend_->created()) || fsrActive() || amfFrcActive() || (fgBackend_ && fgBackend_->created());
+    // PushFlow too: at f306f570 it was missing here, so fgCandidates stayed 0 and a live PushFlow session
+    // presented no generated frame (PS Remote Play window, RTX 4090, 2026-11-18; the GPU tests drive
+    // PushFlowBackend directly, not through the graph).
+    return (vfgBackend_&&vfgBackend_->created()) || fsrActive() || amfFrcActive() || pushFlowActive() || (fgBackend_ && fgBackend_->created());
 }
 
 uint64_t EnhanceGraph::lastNvofSignal() const
@@ -4583,6 +4745,11 @@ ID3D12Resource* EnhanceGraph::generatedFrameResource(uint32_t slot) const
 // ---------------------------------------------------------------------------
 void EnhanceGraph::shutdown()
 {
+    // Its own list and fence: wait for it (bounded) before the decoder picture it reads is let go.
+    // A list still running after that wait keeps its GPU objects and its picture: both are left
+    // alone (leaked) instead of released under it.
+    if(streamChange_&&!streamChange_->shutdown()&&streamChangeFrame_)(void)new std::shared_ptr<AVFrame>(std::move(streamChangeFrame_));
+    streamChange_.reset();streamChangeFrame_.reset();streamChangeFailed_=false;
     pausedNrCacheValid_=pausedNrResidualOnly_=false;pausedNrFrame_=nullptr;
     lastAppliedSettings_.reset();pausedNrSettings_.reset();
     if (!initialized_ && !coreHost_ && !nrAdapter_ && !nvof_ && !srcRgba_) return;

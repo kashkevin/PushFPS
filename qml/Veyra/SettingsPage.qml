@@ -1564,6 +1564,8 @@ VPage {
                             }
                         }
                     }
+                    // PushFPS: the experimental neural layer's runtime (NVIDIA's signed original only).
+                    PushNeuralRuntime { }
                     Text {
                         Layout.fillWidth: true
                         text: qsTr("运行组件均为实验运行时，非 NVIDIA 官方合作或认证。详细哈希见 release-runtime-manifest.json。")
