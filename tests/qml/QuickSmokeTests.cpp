@@ -165,6 +165,21 @@ QtObject {
     }
     function pushQualityCancel() { qualityCancels++ }
     function pushQualityStatus() { return qualityState }
+    // PushFPS latency test (tst_push_latency_test.qml): what the dialog asked for; latencyState is the status it reads.
+    property var latencyCalls: []
+    property var latencyState: ({state: "idle"})
+    property int latencyOriginalBegins: 0   // calls of the original entry point (pushLatencyTestBegin)
+    function pushLatencyTestBegin(trials) { latencyOriginalBegins++; return pushLatencyTestBeginWith(trials, "ps") }
+    function pushLatencyTestBeginWith(trials, button) {
+        latencyCalls = latencyCalls.concat([{trials: trials, button: button}])
+        latencyState = ({state: "running", trial: 0, trials: trials})
+        return true
+    }
+    function pushLatencyTestCancel() { latencyState = ({state: "idle"}) }
+    function pushLatencyTestStatus() { return latencyState }
+    // PushFPS SmartLink row (tst_push_smartlink.qml): what pushSmartLink() reports (src/ui/bridge/PushSmartLink.cpp).
+    property var smartLinkState: ({available: true, active: false, mode: "off", profile: "unknown", advice: 0})
+    function pushSmartLink() { return smartLinkState }
     function pushSetExclusionRegions(regions, feather) {
         lastRegions = regions
         exclusionState = ({enabled: regions.length > 0, feather: feather, regions: regions})
@@ -224,7 +239,8 @@ QtObject {
     }
     function pushHasStreamKey(id) { return streamKeys[id] === true }
     function pushForgetStreamKey(id) { const k = Object.assign({}, streamKeys); delete k[id]; streamKeys = k }
-    function pushStartStream() {
+)qml"
+    R"qml(    function pushStartStream() {
         let list = []
         try { list = JSON.parse(String(preferences.streamTargets || "[]")) } catch (e) {}
         const on = list.filter(t => t.enabled !== false && streamKeys[t.id] === true)
@@ -333,7 +349,24 @@ QtObject {
     function nrAutoSelectionReason(index) { return "Auto is unavailable in this four-layer UI fixture" }
     function effectAvailability(id) { return effectCapabilities[id] || {available:true, reason:""} }
     function resetNrLayer(index) {}
+    // PushFPS keys the real validator (src/ui/bridge/Preferences.cpp setPreference) accepts; any other
+    // push* key is refused as there. The performance-mode and calibration JSON keys must hold a JSON object or
+    // array (older tests still clear other JSON keys with "", which the real validator refuses).
+    property var pushKeys: ["pushAlwaysOnTop","pushAutoFullscreen","pushBenchmark","pushCalibrationApplied","pushCalibrationKept","pushCalibrationRestore","pushClean","pushCleanHud","pushCleanParts","pushCompareLayout","pushCompareSeconds","pushConsole","pushDiscordWebhook","pushFlowHalf","pushFlowHalfProbe","pushGameFps","pushGamePresets","pushGsyncChecked","pushLanProfile","pushLatencyOverlay","pushLowestLatency","pushMode","pushModeAuto","pushModeRestore","pushModeSwitches","pushOptimizeGoal","pushOptimizeRestore","pushOptimizeSkip","pushProfile","pushProfileRestore","pushProfileSettings","pushProfiles","pushSmartLink","pushSmoothPacing","pushSmoothPacing2","pushStatsOverlay","pushSunset","pushTheme","pushWelcomeChecked","pushWelcomeDone"]
+    property var pushJsonKeys: ["pushModeRestore","pushCalibrationRestore","pushCalibrationApplied","pushProfileRestore","pushProfileSettings"]
     function setPreference(key, value) {
+        if (String(key).indexOf("push") === 0) {
+            if (pushKeys.indexOf(key) < 0) return false
+            if (key === "pushSmartLink" && [0, 1, 2].indexOf(Number(value)) < 0) return false   // range {0, 2} as Preferences.cpp
+            if (key === "pushClean" && !(Number(value) >= 0 && Number(value) <= 100)) return false   // range {0, 100} as Preferences.cpp
+            if (key === "pushCleanParts" && !(Number(value) >= 0 && Number(value) <= 31)) return false   // range {0, 31} as Preferences.cpp
+            if (key === "pushProfile" && ["none","original","clean-1440","enhanced-1440","max-fidelity","ultra-low-latency"].indexOf(String(value)) < 0) return false
+            if (pushJsonKeys.indexOf(key) >= 0) {
+                let doc = null
+                try { doc = JSON.parse(String(value)) } catch (e) { return false }
+                if (doc === null || typeof doc !== "object") return false
+            }
+        }
         const copy = Object.assign({}, preferences)
         copy[key] = value
         preferences = copy

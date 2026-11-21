@@ -13,6 +13,16 @@ set(VEYRA_DISPLAY_VERSION "${PROJECT_VERSION}" CACHE STRING "PushFPS version sho
 if(NOT VEYRA_DISPLAY_VERSION)
   set(VEYRA_DISPLAY_VERSION "${PROJECT_VERSION}" CACHE STRING "PushFPS version shown in the app and the EXE resource" FORCE)
 endif()
+# Slipstream: a development build of the low-latency work. It reports a version such as 2.1.5-pushfps.<run>
+# while the official project publishes 3.x releases, so its in-app updater would offer to replace it with
+# the official release. ON: the updater never checks, offers or installs (include/veyra/ui/UpdatePolicy.h)
+# and the version the program shows ends in "-slipstream" (window title and About; no new text to
+# translate). OFF, the default, changes nothing: that is every official build.
+option(SLIPSTREAM_BUILD "Slipstream development build: in-app updater off, version shown with -slipstream" OFF)
+set(VEYRA_SHOWN_VERSION "${VEYRA_DISPLAY_VERSION}")
+if(SLIPSTREAM_BUILD AND NOT VEYRA_SHOWN_VERSION MATCHES "slipstream")
+  string(APPEND VEYRA_SHOWN_VERSION "-slipstream")
+endif()
 
 # Match the compiler's actual bytes, including on localized Windows installs.
 # CMake's cached, decoded prefix can leave Ninja with zero header dependencies.
@@ -330,6 +340,8 @@ veyra_add_compute_shader(veyra_shader_push_compare_raw PushCompareRaw)
 veyra_add_compute_shader(veyra_shader_push_compare_overlay PushCompareOverlay)
 veyra_add_compute_shader(veyra_shader_push_layer_blend PushLayerBlend)
 veyra_add_compute_shader(veyra_shader_push_canvas_convert PushCanvasConvert)
+# PushFPS experiment VEYRA_EXP_RP_STREAM_DEDUP (pipeline/StreamChangePass.h); also a dependency of veyra_push_gpu_tests.
+veyra_add_compute_shader(veyra_shader_push_stream_change PushStreamChange)
 # PushFlow (PushFPS's own frame generation): network input packing and output unpacking.
 veyra_add_compute_shader(veyra_shader_push_flow_pack PushFlowPack)
 veyra_add_compute_shader(veyra_shader_push_flow_unpack PushFlowUnpack)
@@ -424,6 +436,7 @@ add_library(veyra_pipeline STATIC
   src/pipeline/AntiAliasPass.cpp
   src/pipeline/NisPass.cpp
   src/pipeline/PushHudLock.cpp
+  src/pipeline/PushCleanPass.cpp
   src/pushflow/PushFlowBackend.cpp
   src/pipeline/SmaaLookupTables.cpp
   src/pipeline/NrInstance.cpp
@@ -544,6 +557,10 @@ veyra_add_compute_shader(veyra_shader_nis_color NisColor)
 veyra_add_compute_shader_variant(veyra_shader_nis_scaler_sdr NisScaler NisScalerSdr NIS_HDR_MODE=0)
 veyra_add_compute_shader_variant(veyra_shader_nis_scaler_pq NisScaler NisScalerPq NIS_HDR_MODE=2)
 add_dependencies(veyra_pipeline veyra_shader_nis_color veyra_shader_nis_scaler_sdr veyra_shader_nis_scaler_pq)
+# PushFPS restoration (pipeline/PushCleanPass.h, engine/PushClean.h): one shader, SDR (sRGB) and HDR (PQ) variants.
+veyra_add_compute_shader_variant(veyra_shader_push_clean_sdr PushClean PushCleanSdr CLEAN_PQ=0)
+veyra_add_compute_shader_variant(veyra_shader_push_clean_pq PushClean PushCleanPq CLEAN_PQ=1)
+add_dependencies(veyra_pipeline veyra_shader_push_clean_sdr veyra_shader_push_clean_pq)
 # DLAA in HDR: adds the input's out-of-BT.709 part back to the DLSS result.
 veyra_add_compute_shader(veyra_shader_dlaa_hdr_restore DlaaHdrRestore)
 add_dependencies(veyra_pipeline veyra_shader_aa_luma veyra_shader_aa_fxaa3 veyra_shader_aa_fxaa4 veyra_shader_aa_fxaa5
@@ -558,11 +575,12 @@ target_compile_options(veyra_nis_gpu_tests PRIVATE /utf-8)
 target_link_libraries(veyra_nis_gpu_tests PRIVATE veyra_pipeline)
 add_dependencies(veyra_nis_gpu_tests veyra_shader_nis_color veyra_shader_nis_scaler_sdr veyra_shader_nis_scaler_pq)
 # PushFPS comparison clips and HUD frame sampling on a real D3D12 device (hardware or WARP), run in CI.
-add_executable(veyra_push_gpu_tests tests/integration/PushGpuTests.cpp src/engine/PushHud.cpp src/engine/PushHudSampler.cpp src/engine/RecordingCompare.cpp src/engine/PushStreamOverlay.cpp src/engine/PushLayerSourcesShape.cpp)
+add_executable(veyra_push_gpu_tests tests/integration/PushGpuTests.cpp src/engine/PushHud.cpp src/engine/PushHudSampler.cpp src/engine/PushPipelineProbe.cpp src/engine/RecordingCompare.cpp src/engine/PushStreamOverlay.cpp src/engine/PushLayerSourcesShape.cpp)
 target_compile_features(veyra_push_gpu_tests PRIVATE cxx_std_20)
 target_compile_options(veyra_push_gpu_tests PRIVATE /utf-8)
 target_link_libraries(veyra_push_gpu_tests PRIVATE veyra_pipeline)
-add_dependencies(veyra_push_gpu_tests veyra_shader_push_hud_lock_update veyra_shader_push_hud_lock_compose veyra_shader_push_compare_sbs veyra_shader_push_compare_vertical veyra_shader_push_compare_raw veyra_shader_push_compare_overlay veyra_shader_push_layer_blend veyra_shader_push_canvas_convert veyra_shader_push_flow_pack veyra_shader_push_flow_unpack veyra_shader_push_flow_reconstruct)
+add_dependencies(veyra_push_gpu_tests veyra_shader_push_hud_lock_update veyra_shader_push_hud_lock_compose veyra_shader_push_compare_sbs veyra_shader_push_compare_vertical veyra_shader_push_compare_raw veyra_shader_push_compare_overlay veyra_shader_push_layer_blend veyra_shader_push_canvas_convert veyra_shader_push_flow_pack veyra_shader_push_flow_unpack veyra_shader_push_flow_reconstruct veyra_shader_push_stream_change)
+add_dependencies(veyra_push_gpu_tests veyra_shader_push_clean_sdr veyra_shader_push_clean_pq veyra_shader_scale_blit)
 
 # PushFlowBench (tools/pushflow_bench): PushFlow timings on this PC's GPU, as JSON; shipped next to PushFPS.exe.
 add_executable(veyra_pushflow_bench tools/pushflow_bench/main.cpp)
@@ -766,6 +784,8 @@ if(VEYRA_FFMPEG_ROOT AND EXISTS "${VEYRA_FFMPEG_ROOT}/include/libavformat/avform
   # veyra_sources: product input sources (Playbook R3/R7). MediaFileSource
   # composes veyra_media; no second decode implementation exists.
   add_dependencies(veyra_pipeline veyra_shader_push_hud_lock_update veyra_shader_push_hud_lock_compose veyra_shader_push_compare_sbs veyra_shader_push_compare_vertical veyra_shader_push_compare_raw veyra_shader_push_compare_overlay veyra_shader_push_layer_blend veyra_shader_push_canvas_convert veyra_shader_effect_exclusion veyra_shader_sr_resolve veyra_shader_nr_downsample veyra_shader_nr_residual veyra_shader_nr_temporal veyra_shader_nr_hold veyra_shader_nr_reuse_compose veyra_shader_nr_reuse_warp veyra_shader_flow_adapt veyra_shader_flow_refine veyra_shader_flow_fill veyra_shader_flow_claim veyra_shader_vfg_shot_change)
+  # PushFPS experiment VEYRA_EXP_RP_STREAM_DEDUP: change of the decoded stream picture (pipeline/StreamChangePass.h).
+  add_dependencies(veyra_pipeline veyra_shader_push_stream_change)
   add_library(veyra_sources STATIC
     src/source/NativeCaptureSink.cpp
     src/source/MediaFileSource.cpp
@@ -1308,6 +1328,11 @@ if(VEYRA_BUILD_QML_UI AND Qt6_FOUND)
     src/ui/bridge/PushStudio.cpp
     src/ui/bridge/PushFrameInput.cpp
     src/ui/bridge/PushLatencyTest.cpp
+    src/ui/bridge/PushPipelineHook.cpp
+    src/ui/bridge/PushSlipstream.cpp
+    src/ui/bridge/PushAutorun.cpp
+    src/ui/bridge/PushCompare.cpp
+    src/ui/bridge/PushSmartLink.cpp
     src/ui/NvidiaVrrProfileController.cpp
     include/veyra/ui/NvidiaVrrProfileController.h
     src/ui/bridge/Hardware.cpp
@@ -1401,7 +1426,11 @@ if(VEYRA_BUILD_QML_UI AND Qt6_FOUND)
   endif()
   # VEYRA_DISPLAY_VERSION is the human-readable version the app reports; it is
   # the same value the resource file uses, so the UI cannot drift from it.
-  target_compile_definitions(veyra_qml_bridge PRIVATE VEYRA_DISPLAY_VERSION="${VEYRA_DISPLAY_VERSION}" VEYRA_UPSTREAM_VERSION="${VEYRA_UPSTREAM_VERSION}")
+  # VEYRA_SHOWN_VERSION is VEYRA_DISPLAY_VERSION, with "-slipstream" added in a Slipstream build.
+  target_compile_definitions(veyra_qml_bridge PRIVATE VEYRA_DISPLAY_VERSION="${VEYRA_SHOWN_VERSION}" VEYRA_UPSTREAM_VERSION="${VEYRA_UPSTREAM_VERSION}")
+  if(SLIPSTREAM_BUILD)
+    target_compile_definitions(veyra_qml_bridge PRIVATE VEYRA_SLIPSTREAM_BUILD=1)
+  endif()
   # libass (ISC) + FreeType/FriBidi/HarfBuzz, static, for full ASS/SSA effect
   # subtitles. Local prebuilt tree only (vcpkg x64-windows-static-md); never in
   # source Git. Without it ASS tracks fall back to the built-in styled renderer.
@@ -1663,7 +1692,7 @@ add_executable(veyra_sr_reconstruction_tests tests/integration/SrReconstructionT
   target_link_libraries(veyra_repair_fg_tests PRIVATE veyra_pipeline veyra_sinks veyra_nvof)
 
   # Headless quality-core runner (Playbook R3.3): the phase5 gate's quality
-  add_library(veyra_engine STATIC src/engine/EngineController.cpp src/engine/EngineWatchdog.cpp src/engine/PreviewGpuSession.cpp src/engine/EngineControllerImage.cpp src/engine/PosterFrame.cpp src/engine/EffectChain.cpp src/engine/PresetLibrary.cpp src/ui/PlayerUiFacade.cpp src/engine/TiledImageProcessor.cpp src/engine/PresetStore.cpp src/engine/VideoPresenter.cpp src/engine/DisplayStateService.cpp src/engine/VideoExportJob.cpp src/engine/ExportStreams.cpp src/engine/ExportQueue.cpp src/engine/ExportJobManager.cpp src/engine/Subtitles.cpp src/engine/FgCompatibilityProbe.cpp src/engine/LiveRecorder.cpp src/engine/ReplayBuffer.cpp src/engine/MicrophoneCapture.cpp src/engine/PushHud.cpp src/engine/PushHudSampler.cpp src/engine/RecordingCompare.cpp src/engine/LiveStream.cpp src/engine/Mp4Finalize.cpp src/engine/PushAudioMix.cpp src/engine/PushStreamOverlay.cpp src/engine/PushLayerSources.cpp src/engine/PushLayerSourcesShape.cpp src/engine/PushAuxAudio.cpp src/engine/PushAuxFifo.cpp src/engine/PushQuality.cpp src/engine/PushQualityProbe.cpp src/engine/PushInputLatency.cpp src/engine/PushInputLatencyProbe.cpp)
+  add_library(veyra_engine STATIC src/engine/EngineController.cpp src/engine/EngineWatchdog.cpp src/engine/PreviewGpuSession.cpp src/engine/EngineControllerImage.cpp src/engine/PosterFrame.cpp src/engine/EffectChain.cpp src/engine/PresetLibrary.cpp src/ui/PlayerUiFacade.cpp src/engine/TiledImageProcessor.cpp src/engine/PresetStore.cpp src/engine/VideoPresenter.cpp src/engine/DisplayStateService.cpp src/engine/VideoExportJob.cpp src/engine/ExportStreams.cpp src/engine/ExportQueue.cpp src/engine/ExportJobManager.cpp src/engine/Subtitles.cpp src/engine/FgCompatibilityProbe.cpp src/engine/LiveRecorder.cpp src/engine/ReplayBuffer.cpp src/engine/MicrophoneCapture.cpp src/engine/PushHud.cpp src/engine/PushHudSampler.cpp src/engine/RecordingCompare.cpp src/engine/LiveStream.cpp src/engine/Mp4Finalize.cpp src/engine/PushAudioMix.cpp src/engine/PushStreamOverlay.cpp src/engine/PushLayerSources.cpp src/engine/PushLayerSourcesShape.cpp src/engine/PushAuxAudio.cpp src/engine/PushAuxFifo.cpp src/engine/PushQuality.cpp src/engine/PushQualityProbe.cpp src/engine/PushInputLatency.cpp src/engine/PushInputLatencyProbe.cpp src/engine/PushPipelineProbe.cpp)
   target_sources(veyra_pipeline PRIVATE src/guidance/AmdOpticalFlow.cpp
     src/guidance/GpuDisOpticalFlow.cpp third_party/gpu-dis/src/gpu/native_strict_dis_provider.cpp)
   target_include_directories(veyra_pipeline PRIVATE third_party/gpu-dis/src/gpu)

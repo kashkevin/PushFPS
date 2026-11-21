@@ -1547,6 +1547,8 @@ public:
     Q_INVOKABLE bool pushQualityBegin(int seconds);
     Q_INVOKABLE void pushQualityCancel();
     Q_INVOKABLE QVariantMap pushQualityStatus();
+    // The multiplier frame generation keeps while it is off (fgMultiplier() reports 1 then); for the autorun `fg` step.
+    int pushFgKeptMultiplier() const;
     Q_INVOKABLE bool pushStartHudDetection(int samples);
     Q_INVOKABLE void pushCancelHudDetection();
     Q_INVOKABLE QVariantMap pushHudDetection();
@@ -1558,6 +1560,30 @@ public:
     // preference pushFlowHalfProbe and, when half precision matches and is faster, pushFlowHalf.
     Q_INVOKABLE bool pushTestPushFlowHalf();
     Q_INVOKABLE bool pushFlowHalfTesting() const;
+    // PushFPS performance modes and first-launch card (src/ui/bridge/PushSlipstream.cpp; the mode table
+    // itself is engine/PushPerformanceMode.h, applied by qml/Veyra/PushModes.js).
+    // pushHardwareSummary(): what this PC offers, by capability and never by model name: gpuName,
+    // gpuVendor ("nvidia" | "amd" | "intel" | ""), decodeKnown + decodeH264 / decodeHevc / decodeHevc10
+    // (the engine adapter's D3D12 video decode profiles), fgBackends (labels of the frame generation
+    // methods that can run), fgMaxMultiplier, displayHz (0 unknown), vrrState (0..4 as vrrState),
+    // lowLatencyNvidia, networkKnown + ethernet / wifi (active adapters), and for a saved PS5 address
+    // routeKnown + routeDirectLan + routeLink ("ethernet" | "wifi" | "other" | "unknown"). No addresses.
+    // With VEYRA_EXP_RP_GOVERNOR or VEYRA_EXP_RP_GPU_BUDGET set, also pushAdapterCapabilities()'s keys (vendor, vramMB, featureLevel, uma, fgMethods, opticalFlows, refreshHz,
+    // hdrDisplay, hybridGpu, power, defaults); a name already used above gets a "caps" prefix (capsVrrState ...).
+    Q_INVOKABLE QVariantMap pushHardwareSummary();
+    Q_INVOKABLE QVariantMap pushCalibration(const QString& request, const QVariantMap& args = {});   // PushFPS first-launch recommendation: "sample" | "plan" (PushSlipstream.cpp)
+    // Automatic mode, only while VEYRA_EXP_AUTO_MODE=1 (pushAutoModeAvailable). pushAutoModeStep feeds
+    // engine::PushAutomaticMode with numbers the snapshot already holds and returns
+    // { available, mode, changed, reason }; `ceiling` is the user's chosen mode, never exceeded.
+    // Call it about once a second from one place (PushModeDriver.qml). pushAutoModeState() only reads.
+    Q_INVOKABLE bool pushAutoModeAvailable() const;
+    Q_INVOKABLE QVariantMap pushAutoModeStep(const QString& ceiling);
+    Q_INVOKABLE QVariantMap pushAutoModeState() const;
+    // PushFPS SmartLink "Connection" row (PushSmartLink.cpp, qml/Veyra/PushSmartLinkRow.qml): the running PS5 stream's
+    // latest SmartLink decision, numbers only: available (Slipstream build with PS5 Remote Play), active (fresh),
+    // mode, profile, regime, risk, rttMs, rttMaxMs, targetKbps, measuredKbps, signalPercent, reorderMs,
+    // audioTargetMs, netLimited, headroom, advice (SmartLinkTypes.h Advice as an int). Cheap: once a second.
+    Q_INVOKABLE QVariantMap pushSmartLink() const;
     // PushFPS 窗口置顶: keeps a top-level window above others (SetWindowPos, no window recreation).
     Q_INVOKABLE bool pushSetAlwaysOnTop(QObject* window, bool onTop);
     Q_INVOKABLE void copyDiagnostics();
@@ -1677,7 +1703,12 @@ private:
     // audio endpoint). Called after load and after every accepted change.
     void applyPreference(const QString& key);
     void applyPushMix();   // PushFPS mixer preferences -> engine::setPushMix (PushStudio.cpp)
+    void applyPushLanProfile();   // preference pushLanProfile -> VEYRA_EXP_RP_LAN_PROFILE for the next PS5 connection (PushSlipstream.cpp)
+    void applyPushSmartLink();   // preference pushSmartLink -> VEYRA_EXP_RP_SMARTLINK for the next PS5 connection (PushSmartLink.cpp)
+    const char* pushSmartLinkConfigMode() const;   // [slipstream-config] smartlink= off | observe | apply (PushSmartLink.cpp)
     void pushFlowBudgetWatch();   // PushFlow too slow for the frame budget -> a faster tier (PushFps.cpp)
+    bool pushSlipstreamWatch();   // VEYRA_EXP_RP_GOVERNOR / _GPU_BUDGET, once a second; true = the budget applies (PushSlipstream.cpp)
+    void pushGpuBudgetRestore(const char* why);   // =apply: the user's frame generation choice back (PushSlipstream.cpp)
     engine::PushCanvas pushCanvas(int fit) const;   // PushFPS canvas preferences (Recording.cpp)
     void scheduleEnhancementPrewarm();
     // Hold-to-compare key (press/release), handled for the whole application.
@@ -1710,6 +1741,18 @@ private:
     std::unique_ptr<Impl> impl_;
     QObject* nvidiaVrrProfile_ = nullptr;
     QObject* updates_ = nullptr;
+
+public:
+    // PushFPS latency test v2 (PushLatencyTest.cpp, docs/LATENCY_MEASUREMENT.md): up to
+    // engine::latencystats::kTrialsMax presses; button "ps" (the original test), "options" or
+    // "dpad-right-left". pushLatencyTestBegin(trials) is this with "ps".
+    Q_INVOKABLE bool pushLatencyTestBeginWith(int trials, const QString& button);
+private:
+    // PushFPS test hook VEYRA_TEST_RP_PIPELINE (PushPipelineHook.cpp): [slipstream-pipeline], once per start.
+    void pushPipelineTestTick();
+    // PushFPS test automation (VEYRA_TEST_RP_AUTOCONNECT, VEYRA_TEST_RP_AUTORUN), the [slipstream-config] line
+    // and [log-summary] (PushAutorun.cpp); called from the bridge's poll timer.
+    void pushAutorunTick();
 };
 
 } // namespace veyra::ui

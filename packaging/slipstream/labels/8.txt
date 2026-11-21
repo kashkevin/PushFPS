@@ -1,0 +1,35 @@
+# START-HERE.txt of a package with this label (slipstream_package.py label_text): the text before
+# the separator line replaces @SHORTEST_AND_NEW@, the text after it @NEURAL_INSTALL@.
+# Lines starting with # are left out. ASCII only.
+THE SHORTEST WAY                                   three steps, about 50 minutes, most of it hands off
+  1. Double-click  Install-Slipstream.cmd          10 to 20 minutes, mostly one download of about 750 MB.
+                                                   It asks ONE question (the optional NVIDIA neural
+                                                   runtime: yes or no; "no" is fine, see section 1).
+  2. Start the game on the PS5 and stand in a quiet place. Open a Command Prompt in this folder:
+       Run-First-Test.cmd -Session input           about 21 minutes. Mouse, keyboard and the DualSense
+                                                   (connected to this PC): the kit prints every step.
+  3.   Run-First-Test.cmd -Session visual          about 25 minutes, hands off. Stand in ONE place with
+                                                   detail in the picture and do not move. Your HDR
+                                                   reference needs the H.265 HDR codec, chosen in the
+                                                   PS5 connect dialog BEFORE this session (optional).
+  Each session ends with RESULT.txt on screen and ONE zip to send back. That is all that is needed.
+  Wired or Wi-Fi both run; on Wi-Fi every table says "Wi-Fi: diagnostic only".
+
+WHAT IS NEW IN PACKAGE 8          (all of it in the experimental build, and OFF until you choose it)
+  - Mouse and keyboard: a settings page with an on / off switch, bindings, calibration, and three input
+    profiles (as today, Ultra Low Latency, Adaptive Precision). Session: input.
+  - Restoration: a clean-up stage for the compressed 1080p stream in front of the upscaler to
+    2560x1440, and five picture profiles. Session: visual.
+  - Neural layer ("DLSS 5 NR" in the interface): optional and experimental, with a conservative look
+    and a check that only an NVIDIA-signed original runtime is used. It is video processing, not
+    NVIDIA's game-integrated DLSS 5. Sessions: visual, neural.
+  - Frame generation, presentation and audio changes behind switches. Sessions: framegen, pacing,
+    audiofix.
+  - The kit: the time estimates were 4 times too high and are now taken from your runs of 20 November;
+    RESULT.txt has a section MEASURED VALUES for every session.
+----- the install question (section 1) -----
+   THE ONE QUESTION: the neural layer needs NVIDIA's own runtime file. The installer keeps it only
+   when you say yes, and only when the file is an NVIDIA-signed original; it never installs a
+   modified file. Without it everything else works, and the neural arms of the kit say
+   "not installed: skipped". To answer in advance:
+       Install-Slipstream.cmd -NeuralRuntime Yes       (or No; Ask is the default)

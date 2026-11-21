@@ -1,0 +1,23 @@
+# The text of "WHAT HAS BEEN CHECKED, AND WHAT HAS NOT" in START-HERE.txt (placeholder @CHECKED@ of the template).
+# The packager (packaging/slipstream/slipstream_package.py) copies every line that does not start with '#'.
+# WHO FILLS THIS IN: whoever makes the package, AFTER the Windows build, the automatic tests and the reviews of the
+# code in it are known, and before the package workflow runs. Replace each line in <angle brackets> with the fact
+# (run number, counts, what failed). The packager refuses to make a package while a line in <angle brackets> is left,
+# so that no package ships with a blank. Plain ASCII, lines of at most 100 characters, two spaces of indent.
+# Rule: say what was compiled, run and tested and on which machine; anything that only passed checks on GitHub's
+# Windows machine has NOT run on a gaming PC. Never write "validated" or a latency figure here.
+  <Windows build of the experimental build: build-windows run number, date, result>
+  <automatic tests on GitHub's Windows machine: which workflows, how many tests, result>
+  <independent reviews: which parts were reviewed, what was found, what was changed because of it>
+  The builds were compiled, installed and started on GitHub's Windows build machine (no graphics
+  card, no PS5, no screen to measure). On a real PC only these have run: package 6 once (19 November
+  2026, PS5 over Wi-Fi, software counters) and package 7 twice (20 November 2026, PS5 over Wi-Fi:
+  the presentation and audio sessions, about 12 minutes, software counters). EVERYTHING new in this
+  package (the list under "WHAT IS IN PACKAGE" above, and every new kit session)
+  has never run on a gaming PC, a graphics card or a PS5. No latency and no picture quality has
+  been measured with any of it. Everything new is off until you choose it.
+  The .cmd files here and the scripts behind them are run once on GitHub's Windows machine by the
+  workflow that made this package (job "verify" of the run named at the end of this file; look
+  there for its result). Every session of the kit also runs there on made-up logs: that shows the
+  scripts work, not that the numbers mean anything. None of this has run on a real PC either.
+  If anything fails, copy the text of the window and send it.
