@@ -16,6 +16,7 @@
 #include "veyra/engine/EngineWatchdog.h"
 #include "veyra/sink/CaptureAudioSession.h"
 #include "veyra/remoteplay/SessionInbox.h"
+#include "veyra/remoteplay/ConnectionHealth.h"
 #ifdef VEYRA_ENABLE_MOONLIGHT
 #include "veyra/source/MoonlightSessionSource.h"
 #endif
@@ -141,6 +142,28 @@ struct PlayerSnapshot {
     // PushFPS Frame Pacing Repair counters (PushPacingRepair.h): kept frames seen, re-timed.
     uint64_t pacingFrames=0,pacingRepaired=0;
     int hudLockState=0;  // PushFPS Live HUD Lock: EnhanceGraph::hudLockState()
+    // PushFPS experiment VEYRA_EXP_RP_STREAM_DEDUP (remoteplay/StreamCadence.h): duplicate removal for
+    // hardware-decoded Remote Play pictures. Refreshed every 10 s while the switch is set; all zero
+    // otherwise. Rates are counts over that window divided by its length. Presented frames are counted
+    // where they are presented (FrameFlowWindow), real game frames and generated frames apart.
+    struct StreamCadenceReport {
+        bool active=false;            // the switch is set and the source is a PS5 stream
+        int state=0;                  // remoteplay::StreamCadenceState: 0 unknown, 1 unique, 2 doubled, 3 still
+        double windowSeconds=0;
+        double streamFps=0;           // decoded stream pictures per second (what the console sends)
+        double sourceFps=0;           // unique pictures per second among them (what the game renders)
+        double realPresentedFps=0;    // real game frames presented per second
+        double generatedPresentedFps=0; // generated frames presented per second
+        double presentedFps=0;        // both together
+        uint64_t repeated=0;          // repeated stream pictures removed before any GPU work, in the window
+        uint64_t keptUnsure=0;        // likely repeats kept because the evidence was not enough
+        uint64_t unmeasured=0;        // pictures without a GPU measurement (kept)
+        uint64_t droppedUnread=0;     // decoded pictures the engine never read (overwritten in the mailbox)
+        uint64_t generatedNotShown=0; // generated frames made but never presented (expired or cancelled)
+        double fgGpuP95Ms=0;          // GPU time of one frame-generation batch, P95
+        double softwareLatencyMs=0;   // decoded picture to present call, mean of the last second (FrameFlowWindow)
+        double measureWaitMeanMs=0,measureWaitMaxMs=0; // CPU wait for the picture measurement, per picture
+    } streamCadence;
     // PushFlow while it runs: precision ("fp32"/"fp16"), full-resolution rebuild, inference p50/p95 (ms).
     std::string pushFlowPrecision; bool pushFlowRebuild=false; double pushFlowP50Ms=0, pushFlowP95Ms=0;
     uint64_t frames=0,generated=0;
@@ -196,9 +219,17 @@ struct PlayerSnapshot {
     // The session ended because the GPU stopped completing work (frame-ready timeout or a
     // removed device / driver reset), not because the source failed.
     bool gpuFailed=false;
+    // Experiment VEYRA_EXP_RP_RESUME_AFTER_DEVICE_LOSS (PushDeviceLossResume.h): the engine may start this PS5
+    // session again by itself, so the interface keeps the playing page and holds the failure notice. Never
+    // set with the switch off.
+    bool deviceLossResumePending=false;
     int remotePlayState=0; uint64_t remotePlaySkipped=0;
     bool remoteRecovering=false;unsigned remoteReconnectAttempts=0;std::wstring remoteRecoveryMessage;
     remoteplay::SessionInbox::Snapshot remoteStream;
+    // PushFPS experiment VEYRA_EXP_RP_HEALTH: the session's newest five-second connection health snapshot
+    // (remoteplay/ConnectionHealth.h), copied as it is for the statistics overlay. valid is false while
+    // the switch is off, before the first interval, and for every source that is not a PS5 stream.
+    remoteplay::HealthSnapshot remoteHealth;
     double remoteReceivedFps=0,remoteDecodedFps=0;bool remoteRatesReady=false;uint64_t remoteReceived=0,remoteDecoded=0,remoteIngressDropped=0;
 #ifdef VEYRA_ENABLE_MOONLIGHT
     bool moonlightActive=false;source::MoonlightStats moonlight;
