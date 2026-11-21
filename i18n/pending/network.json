@@ -1,0 +1,177 @@
+{
+ " · 变化 %1 次": {
+  "en": " · changed %1 times",
+  "zh-TW": " · 變化 %1 次",
+  "ja": " · %1 回変化"
+ },
+ "%1 % · %2 帧": {
+  "en": "%1 % · %2 frames",
+  "zh-TW": "%1 % · %2 幀",
+  "ja": "%1 % · %2 フレーム"
+ },
+ "%1 / 请求 %2 kbit/s": {
+  "en": "%1 / requested %2 kbit/s",
+  "zh-TW": "%1 / 請求 %2 kbit/s",
+  "ja": "%1 / 要求 %2 kbit/s"
+ },
+ "%1 ms · 峰值 %2 ms": {
+  "en": "%1 ms · peak %2 ms",
+  "zh-TW": "%1 ms · 峰值 %2 ms",
+  "ja": "%1 ms · ピーク %2 ms"
+ },
+ "FEC 恢复": {
+  "en": "FEC recovery",
+  "zh-TW": "FEC 恢復",
+  "ja": "FEC 復元"
+ },
+ "GPU 处理": {
+  "en": "GPU processing",
+  "zh-TW": "GPU 處理",
+  "ja": "GPU 処理"
+ },
+ "PS5 目标码率": {
+  "en": "PS5 target bitrate",
+  "zh-TW": "PS5 目標位元率",
+  "ja": "PS5 の目標ビットレート"
+ },
+ "PS5 编码码率低": {
+  "en": "Low PS5 encoder bitrate",
+  "zh-TW": "PS5 編碼位元率低",
+  "ja": "PS5 のエンコードビットレートが低い"
+ },
+ "主要瓶颈": {
+  "en": "Main bottleneck",
+  "zh-TW": "主要瓶頸",
+  "ja": "主なボトルネック"
+ },
+ "乱序的包": {
+  "en": "Out-of-order packets",
+  "zh-TW": "亂序的封包",
+  "ja": "順序が乱れたパケット"
+ },
+ "估计": {
+  "en": "Estimated",
+  "zh-TW": "估計",
+  "ja": "推定"
+ },
+ "关键帧恢复": {
+  "en": "Keyframe recoveries",
+  "zh-TW": "關鍵幀恢復",
+  "ja": "キーフレームによる回復"
+ },
+ "分辨率与编码": {
+  "en": "Resolution and codec",
+  "zh-TW": "解析度與編碼",
+  "ja": "解像度とコーデック"
+ },
+ "始终没到的包（上限）": {
+  "en": "Packets that never arrived (upper bound)",
+  "zh-TW": "始終沒到的封包（上限）",
+  "ja": "届かなかったパケット（上限）"
+ },
+ "无法恢复的帧": {
+  "en": "Frames that could not be recovered",
+  "zh-TW": "無法恢復的幀",
+  "ja": "回復できなかったフレーム"
+ },
+ "本机 UDP 接收错误（整台电脑）": {
+  "en": "UDP receive errors (whole PC)",
+  "zh-TW": "本機 UDP 接收錯誤（整台電腦）",
+  "ja": "UDP 受信エラー（PC 全体）"
+ },
+ "本机接收丢弃": {
+  "en": "Drops on this PC",
+  "zh-TW": "本機接收丟棄",
+  "ja": "この PC での受信破棄"
+ },
+ "每秒最低 / 最高": {
+  "en": "Lowest / highest per second",
+  "zh-TW": "每秒最低 / 最高",
+  "ja": "1 秒ごとの最低 / 最高"
+ },
+ "没有明显瓶颈": {
+  "en": "No clear bottleneck",
+  "zh-TW": "沒有明顯瓶頸",
+  "ja": "目立ったボトルネックなし"
+ },
+ "没有需要恢复的帧": {
+  "en": "No frame needed recovery",
+  "zh-TW": "沒有需要恢復的幀",
+  "ja": "回復が必要なフレームなし"
+ },
+ "画面增强": {
+  "en": "Picture enhancement",
+  "zh-TW": "畫面增強",
+  "ja": "画質向上"
+ },
+ "直连（同一子网）": {
+  "en": "Direct (same subnet)",
+  "zh-TW": "直連（同一子網）",
+  "ja": "直接接続（同じサブネット）"
+ },
+ "程序队列丢弃": {
+  "en": "Dropped by the app's queue",
+  "zh-TW": "程式佇列丟棄",
+  "ja": "アプリのキューで破棄"
+ },
+ "经过路由器": {
+  "en": "Through a router",
+  "zh-TW": "經過路由器",
+  "ja": "ルーター経由"
+ },
+ "缺少的包": {
+  "en": "Missing packets",
+  "zh-TW": "缺少的封包",
+  "ja": "欠けたパケット"
+ },
+ "网络丢包": {
+  "en": "Network packet loss",
+  "zh-TW": "網路丟包",
+  "ja": "ネットワークのパケットロス"
+ },
+ "网络到解码延迟": {
+  "en": "Network to decode delay",
+  "zh-TW": "網路到解碼延遲",
+  "ja": "ネットワークからデコードまでの遅延"
+ },
+ "网络抖动": {
+  "en": "Network jitter",
+  "zh-TW": "網路抖動",
+  "ja": "ネットワークのジッター"
+ },
+ "网络诊断 · 最近 %1 秒": {
+  "en": "Network diagnostics · last %1 s",
+  "zh-TW": "網路診斷 · 最近 %1 秒",
+  "ja": "ネットワーク診断 · 直近 %1 秒"
+ },
+ "迟到的包": {
+  "en": "Late packets",
+  "zh-TW": "遲到的封包",
+  "ja": "遅れて届いたパケット"
+ },
+ "接收线程唤醒晚": {
+  "en": "Receive thread woke late",
+  "zh-TW": "接收執行緒喚醒晚",
+  "ja": "受信スレッドの起動が遅い"
+ },
+ "包恢复（重排等待）": {
+  "en": "Packet recovery (reorder wait)",
+  "zh-TW": "封包恢復（重排等待）",
+  "ja": "パケット回復（並べ替え待ち）"
+ },
+ "网卡丢弃（整个网卡）": {
+  "en": "Adapter discards (whole adapter)",
+  "zh-TW": "網卡丟棄（整張網卡）",
+  "ja": "アダプターでの破棄（アダプター全体）"
+ },
+ "%1 个 · 丢包 %2 %": {
+  "en": "%1 · %2 % loss",
+  "zh-TW": "%1 個 · 丟包 %2 %",
+  "ja": "%1 個 · ロス %2 %"
+ },
+ "实测": {
+  "en": "Measured",
+  "zh-TW": "實測",
+  "ja": "実測"
+ }
+}

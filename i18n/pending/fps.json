@@ -1,0 +1,7 @@
+{
+ "目标不是游戏帧率的整数倍，以 2× 运行，显示帧率会高于目标": {
+  "en": "The target is not a whole multiple of the game's frame rate: running 2×, so more frames are shown than the target",
+  "zh-TW": "目標不是遊戲幀率的整數倍，以 2× 執行，顯示幀率會高於目標",
+  "ja": "目標がゲームのフレームレートの整数倍ではないため 2× で動作し、表示フレームレートは目標より高くなります"
+ }
+}
