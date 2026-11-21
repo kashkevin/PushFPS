@@ -10,10 +10,22 @@
 #include <SDL3/SDL_audio.h>
 #include <cstring>
 #include "veyra/Log.h"
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
 namespace veyra::remoteplay {
 bool ControllerInput::start(uint32_t preferredDevice){
     preferredDevice_=preferredDevice;
     if(initialized_)return true;
+    // Experiment, off unless VEYRA_EXP_RP_TRIGGER_FILTER=1: the L2/R2 jitter filter of Veyra 17e54e24
+    // (TriggerFilter.h). Unset: trigger values are sent exactly as read and nothing is logged.
+    {wchar_t value[4]{};const DWORD length=GetEnvironmentVariableW(L"VEYRA_EXP_RP_TRIGGER_FILTER",value,4);
+     triggerFilterOn_=length==1&&value[0]==L'1';triggerFilter_.reset();
+     if(triggerFilterOn_)veyra::log::info("remoteplay-input","trigger filter on (VEYRA_EXP_RP_TRIGGER_FILTER=1): ends snap, steps under 4 not sent, under 8 for 120 ms after the other trigger's release");}
     // No SDL window is created. Our explicit foreground gate is authoritative.
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS,"1");
     initialized_=SDL_InitSubSystem(SDL_INIT_GAMEPAD);return initialized_;
@@ -38,6 +50,7 @@ bool ControllerInput::opened(uint32_t id)const{
 }
 void ControllerInput::activate(SDL_Gamepad* pad){
     gamepad_=pad;
+    triggerFilter_.reset();
     touchQueue_.clear();touchState_={};sensorStamp_=0;haveGyro_=haveAccel_=false;gyroBias_={};calibrating_=false;touchIds_={-1,-1};gyro_=SDL_GamepadHasSensor(gamepad_,SDL_SENSOR_GYRO)&&SDL_SetGamepadSensorEnabled(gamepad_,SDL_SENSOR_GYRO,true);
     accel_=SDL_GamepadHasSensor(gamepad_,SDL_SENSOR_ACCEL)&&SDL_SetGamepadSensorEnabled(gamepad_,SDL_SENSOR_ACCEL,true);
     std::string line=std::string("device opened gyro=")+(gyro_?"1":"0")+" accel="+(accel_?"1":"0")+" touchpads="+std::to_string(SDL_GetNumGamepadTouchpads(gamepad_));
@@ -116,7 +129,7 @@ ControllerState ControllerInput::poll(bool focused){
             }
         }
     }
-    if(!focused||!gamepad_){touchQueue_.clear();touchState_={};touchIds_={-1,-1};haveGyro_=haveAccel_=false;releaseEffects();return state;}
+    if(!focused||!gamepad_){touchQueue_.clear();touchState_={};touchIds_={-1,-1};haveGyro_=haveAccel_=false;triggerFilter_.reset();releaseEffects();return state;}
     state.inputActive=true;
     struct Button{SDL_GamepadButton input;ControllerState::Button output;};
     constexpr Button buttons[]={
@@ -133,6 +146,8 @@ ControllerState ControllerInput::poll(bool focused){
     state.rightX=SDL_GetGamepadAxis(gamepad_,SDL_GAMEPAD_AXIS_RIGHTX);state.rightY=SDL_GetGamepadAxis(gamepad_,SDL_GAMEPAD_AXIS_RIGHTY);
     state.l2=uint8_t(std::max(0,int(SDL_GetGamepadAxis(gamepad_,SDL_GAMEPAD_AXIS_LEFT_TRIGGER)))*255/32767);
     state.r2=uint8_t(std::max(0,int(SDL_GetGamepadAxis(gamepad_,SDL_GAMEPAD_AXIS_RIGHT_TRIGGER)))*255/32767);
+    // Jitter must not push a trigger release out of Chiaki's history window (TriggerFilter.h).
+    if(triggerFilterOn_){const auto t=triggerFilter_.apply(state.l2,state.r2,now);state.l2=t.l2;state.r2=t.r2;}
     if(!touchQueue_.empty()){state.touches=touchQueue_.front();touchQueue_.pop_front();}
     else{
         for(int finger=0;finger<2;++finger){bool down=false;float x=0,y=0,pressure=0;

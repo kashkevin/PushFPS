@@ -1,0 +1,9 @@
+# offline CPU model: synthetic game-like frames, CPU scalers; no GPU, no RTX Video SR, no NIS
+# display 2560x1440, stream 1920x1080, codec none 0 Mbit/s, 6 frames x 3 scenes
+scaler                        PSNR dB   worst    SSIM  sharp overshoot
+bilinear                        29.75   29.71  0.9481  0.882     0.000
+bicubic                         31.30   31.26  0.9630  0.984     0.001
+lanczos4                        31.55   31.51  0.9638  0.987     0.004
+sharpen                         32.05   32.00  0.9659  1.047     0.036
+lanczos4-4k-then-bilinear       30.93   30.89  0.9590  0.956     0.000
+lanczos4-4k-then-area           30.67   30.63  0.9568  0.954     0.001
