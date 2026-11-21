@@ -1,0 +1,104 @@
+chiaki-ng backport: clear dropped entries in the reorder queue.
+
+Origin: https://github.com/streetpea/chiaki-ng commit
+727917c00067f4585d3ed076755c77835ce1ae9d ("Clear dropped entries in the
+reorder queue", 30 October 2026), unchanged, with its regression test.
+Licence of the patched files: LicenseRef-AGPL-3.0-only-OpenSSL (AGPL-3.0-only
+with the OpenSSL exception), as in chiaki-ng.
+
+chiaki_reorder_queue_drop() called the drop callback, which frees the packet,
+but left the entry marked as set, so a later peek or pull returned the freed
+packet, and the count never shrank when the last entry was dropped. The only
+caller is the Takion data (control message) queue, when a queued packet fails
+its MAC check once the key is available. No timing or wire change.
+
+Applies after 0001-0004 to the pin 0e16950165f06e5c3291537c2eeba6e852be7120.
+
+diff --git a/lib/src/reorderqueue.c b/lib/src/reorderqueue.c
+index 656c10d8..8e82d428 100644
+--- a/lib/src/reorderqueue.c
++++ b/lib/src/reorderqueue.c
+@@ -184,6 +184,7 @@ CHIAKI_EXPORT void chiaki_reorder_queue_drop(ChiakiReorderQueue *queue, uint64_t
+ 
+ 	if(queue->drop_cb)
+ 		queue->drop_cb(seq_num, entry->user, queue->drop_cb_user);
++	entry->set = false;
+ 
+ 	// reduce count if necessary
+ 	if(index == queue->count - 1)
+diff --git a/test/reorderqueue.c b/test/reorderqueue.c
+index f0fd5fec..074ce5d7 100644
+--- a/test/reorderqueue.c
++++ b/test/reorderqueue.c
+@@ -171,6 +171,57 @@ static MunitResult test_reorder_queue_16(const MunitParameter params[], void *te
+ 	return MUNIT_OK;
+ }
+ 
++static MunitResult test_reorder_queue_drop(const MunitParameter params[], void *test_user)
++{
++	ChiakiReorderQueue queue;
++	ChiakiErrorCode err = chiaki_reorder_queue_init_16(&queue, 2, 42);
++	munit_assert_int(err, ==, CHIAKI_ERR_SUCCESS);
++
++	DropRecord drop_record = { 0 };
++	chiaki_reorder_queue_set_drop_cb(&queue, drop, &drop_record);
++
++	uint64_t seq_num = 0;
++	void *user = NULL;
++
++	chiaki_reorder_queue_push(&queue, 42, (void *)0);
++	chiaki_reorder_queue_push(&queue, 43, (void *)1);
++	chiaki_reorder_queue_push(&queue, 44, (void *)2);
++	munit_assert_uint64(chiaki_reorder_queue_count(&queue), ==, 3);
++
++	// drop the head, it must not be peeked or pulled afterwards
++	chiaki_reorder_queue_drop(&queue, 0);
++	munit_assert(!drop_record.failed);
++	munit_assert_uint64(drop_record.count[0], ==, 1);
++	munit_assert_uint64(drop_record.seq_num[0], ==, 42);
++	munit_assert(!chiaki_reorder_queue_peek(&queue, 0, &seq_num, &user));
++	munit_assert(!chiaki_reorder_queue_pull(&queue, &seq_num, &user));
++
++	// dropping it again does nothing
++	chiaki_reorder_queue_drop(&queue, 0);
++	munit_assert_uint64(drop_record.count[0], ==, 1);
++
++	// drop the tail, count shrinks to the last set element
++	chiaki_reorder_queue_drop(&queue, 2);
++	munit_assert_uint64(drop_record.count[2], ==, 1);
++	munit_assert_uint64(chiaki_reorder_queue_count(&queue), ==, 2);
++
++	// a packet pushed into the dropped head slot is pulled, then the remaining one
++	chiaki_reorder_queue_push(&queue, 42, (void *)3);
++	munit_assert(!drop_record.failed);
++	munit_assert_uint64(drop_record.count[3], ==, 0);
++	munit_assert(chiaki_reorder_queue_pull(&queue, &seq_num, &user));
++	munit_assert_uint64(seq_num, ==, 42);
++	munit_assert_uint64((uint64_t)(size_t)user, ==, 3);
++	munit_assert(chiaki_reorder_queue_pull(&queue, &seq_num, &user));
++	munit_assert_uint64(seq_num, ==, 43);
++	munit_assert_uint64((uint64_t)(size_t)user, ==, 1);
++	munit_assert_uint64(chiaki_reorder_queue_count(&queue), ==, 0);
++
++	chiaki_reorder_queue_fini(&queue);
++
++	return MUNIT_OK;
++}
++
+ 
+ MunitTest tests_reorder_queue[] = {
+ 	{
+@@ -181,5 +232,13 @@ MunitTest tests_reorder_queue[] = {
+ 		MUNIT_TEST_OPTION_NONE,
+ 		NULL
+ 	},
++	{
++		"/reorder_queue_drop",
++		test_reorder_queue_drop,
++		NULL,
++		NULL,
++		MUNIT_TEST_OPTION_NONE,
++		NULL
++	},
+ 	{ NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL }
+ };
