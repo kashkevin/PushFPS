@@ -383,6 +383,9 @@ VPage {
                 }
             }
 
+            // PushFPS: once, until dismissed: what was found on this PC and a suggestion for a first test.
+            PushWelcomeCard { Layout.topMargin: 22 }
+
             // PushFPS: pick the frame rate before connecting; the same settings as
             // Professional → 补帧, in their short form.
             PushQuickSetup {

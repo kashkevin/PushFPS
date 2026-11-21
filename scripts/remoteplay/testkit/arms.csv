@@ -1,0 +1,163 @@
+# Test arms of the Slipstream hardware test kit (read by run-tests.ps1 and tools/remoteplay_latency_bench/report.py).
+# name      short name; becomes part of file names (letters, digits, '-' only)
+# exe       original | modified (the stable candidate) | experimental (the experimental build; only with -Versus or -Arms)
+# set       quick (always run) | standard (run unless -Quick) | experimental (only with -Experimental or -Arms) |
+#           versus (only with -Versus: the stable candidate against the experimental build, one named switch set per arm;
+#           duplicate detection VEYRA_EXP_RP_STREAM_DEDUP is in no arm)
+# compare   the arm its differences are taken against
+# switches  NAME=VALUE;NAME=VALUE put into the environment of that run only
+# note      shown before the run starts
+#
+# The original build logs only a summary per latency test, not every press, so the per-press baseline is
+# mod-legacy: the modified build with the original timing of every part.
+# fg        off | on: what frame generation must be in that arm; a run that logs otherwise is refused (and offered for a repeat)
+# differs   configuration keys (report.py / run-tests.ps1 config keys, separated by ;) the switch under test is EXPECTED to change;
+#           every other key must be the same in the arm and its pair, or the comparison is refused
+#           (also what follows from it: going full screen changes the window size, whether variable refresh is active and how
+#           Windows presents the picture: window, vrrActive, vrrLevel, and presentMode = PresentMon's present mode, report.py only)
+# Sets of the sprint 4 sessions (all in the experimental exe, started without clicks: VEYRA_EXP_RP_STATS=1, VEYRA_TEST_RP_AUTOCONNECT=1
+# and an autorun plan): switches (-Session switches: one switch per arm, interleaved), quality (-Session quality),
+# p-* presentation arms (docs/PRESENTATION_LATENCY.md section 6): composed or independent flip; 'pref:NAME=VALUE' in switches is
+# written into that arm's test profile (only pushAutoFullscreen). probe (-Session dedup-probe: a diagnostic of repeated pictures, never compared for latency; the only arm with duplicate detection).
+# switches also holds one arm per experiment now in the app, each a single switch against s-base (the kit adds VEYRA_EXP_RP_STATS=1
+# to every arm): audio smooth / adaptive / fast recovery, delivery catch-up, early loss, reorder wrap fix, expiry fix, keyframe
+# re-request. VEYRA_EXP_RP_RESUME_AFTER_DEVICE_LOSS=1 is set only by the reliability session (-ResumeAfterDeviceLoss).
+# network (-Session network, also in -Full): SmartLink off (the cost of observe mode itself), observe (the baseline and the recording: trace on), apply, apply with
+# the audio continuity switches; all automatic. network-builds (-Session network -NetworkWithBuilds): the original and the
+# stable build for 5 minutes each, compared only on what every build logs. The audio switch names are the audio stream's;
+# adjust them here at merge. network-wifi-mode: only with -Session network -WifiStreamingMode, never by default or in -Full.
+# Kit version 5 sessions (Run-First-Test.cmd -Session <name>; every arm one automatic start of the session's plan, 2 rounds interleaved,
+# no question; RESULT.txt section MEASURED VALUES, its values listed in measures.csv). An arm belongs to the session named in its set:
+# adding an arm to a session is ONE line here. 'pipeline:key=value|key=value' in switches becomes VEYRA_TEST_RP_PIPELINE=key=value;key=value
+# (test-only, applied once at the stream's first picture; every pipeline arm starts from profile=original so that no arm inherits another's
+# settings, and runs in its own settings folder). exe 'previous' = Package 7's own experimental build (the fourth installed copy).
+#   input     mouse and keyboard against the pad: one arm per input performance profile; the kit prints the steps
+#   visual    the picture paths A-E of the second directive, the owner's reference R and a vendor-neutral arm
+#   neural    the neural layer at internal sizes 720 / 900 / 1080 / 1440, each without and with the upscaler to the display
+#   framegen  every frame generation method at 2x (120 FPS) and, experimental, 3x (180 FPS); a method the build does not offer is refused by the app and named
+#   audiofix  s-base against the three audio continuity switches together, the audio own clock, and both (S5_PRESENT_API.md, comparison A)
+#   pacing    p-window against one arm per presentation switch (S5_PRESENT_API.md, comparison B3: the window region)
+#   builds    original, stable, Package 7's experimental build and this experimental build with the SAME test profile and no switch
+#   smoothness  native 60 against frame generation 2x with and without VRR, 3x, pacing repair and the adaptive multiplier: how evenly frames are PRESENTED
+#             (S5_PRESENT_API.md comparison D; pref:vrr / pref:fgAdaptive / pref:pacingRepair set the test profile; the kit never changes Windows settings)
+name,exe,set,compare,switches,note,fg,differs
+original,original,quick,mod-legacy,,The original build. Frame generation OFF.,off,
+mod-legacy,modified,quick,mod-legacy,VEYRA_TEST_RP_LEGACY_TIMING=1,Modified build with the original timing of all three parts (the baseline; should match 'original'). Frame generation OFF.,off,
+mod-all,modified,quick,mod-legacy,,Modified build as installed: all three timing changes together. Frame generation OFF.,off,
+mod-input,modified,standard,mod-legacy,VEYRA_TEST_RP_LEGACY_OWNER_WAIT=1;VEYRA_TEST_RP_LEGACY_ENGINE_WAKE=1,Only the immediate controller dispatch (and 4 ms poll) is new. Frame generation OFF.,off,
+mod-ownerwait,modified,standard,mod-legacy,VEYRA_TEST_RP_LEGACY_INPUT=1;VEYRA_TEST_RP_LEGACY_ENGINE_WAKE=1,Only the event-driven owner wait is new. Frame generation OFF.,off,
+mod-enginewake,modified,standard,mod-legacy,VEYRA_TEST_RP_LEGACY_INPUT=1;VEYRA_TEST_RP_LEGACY_OWNER_WAIT=1,Only the event-driven engine wake is new. Frame generation OFF.,off,
+exp-poll2,modified,experimental,mod-all,VEYRA_EXP_RP_PAD_POLL_MS=2,Experiment: 2 ms controller poll. Frame generation OFF.,off,
+exp-poll1,modified,experimental,mod-all,VEYRA_EXP_RP_PAD_POLL_MS=1,Experiment: 1 ms controller poll. Frame generation OFF.,off,
+exp-fg,modified,experimental,exp-fg,,Reference for the next arm: frame generation ON at 3X. Set it before connecting.,on,
+exp-fg-adaptive-phase,modified,experimental,exp-fg,VEYRA_EXP_RP_ADAPTIVE_PHASE=1,Experiment: adaptive pair phase. Frame generation ON at 3X exactly as in exp-fg.,on,
+exp-lan,modified,experimental,mod-all,VEYRA_EXP_RP_LAN_PROFILE=1,Experiment: LAN profile. Only meaningful in a build that contains the network work; otherwise identical to mod-all. Frame generation OFF.,off,
+exp-thread-priority,modified,experimental,mod-all,VEYRA_EXP_RP_THREAD_PRIORITY=1,Experiment: raised thread priority. Only meaningful in a build that contains the network work. Frame generation OFF.,off,
+stable,modified,versus,stable,,The stable candidate as installed (the reference of the comparison with the experimental build). Frame generation OFF.,off,
+x-base,experimental,versus,stable,,The experimental build with no experiment switched on. Frame generation OFF.,off,
+x-lan,experimental,versus,x-base,VEYRA_EXP_RP_LAN_PROFILE=1,Experimental build: LAN profile. Frame generation OFF.,off,
+x-reorder,experimental,versus,x-base,VEYRA_EXP_RP_REORDER_ADAPTIVE=1,Experimental build: adaptive reorder wait. Frame generation OFF.,off,
+x-health,experimental,versus,x-base,VEYRA_EXP_RP_HEALTH=1,Experimental build: network health line (observation only; shows its own cost). Frame generation OFF.,off,
+x-backlog,experimental,versus,x-base,VEYRA_EXP_RP_BACKLOG=1,Experimental build: bounded decode backlog. Frame generation OFF.,off,
+x-kbm,experimental,versus,x-base,VEYRA_EXP_RP_KBM=1,Experimental build: keyboard and mouse mode on (the latency test still uses the controller path). Frame generation OFF.,off,
+x-audio,experimental,versus,x-base,VEYRA_EXP_RP_AUDIO_FAST_RECOVER=1,Experimental build: audio fast recovery. Frame generation OFF.,off,
+x-governor,experimental,versus,x-base,VEYRA_EXP_RP_GOVERNOR=1,Experimental build: latency governor in observe mode (logs only). Frame generation OFF.,off,
+x-gpubudget,experimental,versus,x-base,VEYRA_EXP_RP_GPU_BUDGET=1,Experimental build: GPU budget in observe mode (logs only). Frame generation OFF.,off,
+s-base,experimental,switches,s-base,,Experimental build with no switch (the reference of this session). Frame generation OFF.,off,
+s-legacy,experimental,switches,s-base,VEYRA_TEST_RP_LEGACY_TIMING=1,Experimental build with the original timing of all three parts. Frame generation OFF.,off,
+s-audio-fast,experimental,switches,s-base,VEYRA_EXP_RP_AUDIO_FAST_RECOVER=1,Experimental build: audio fast recovery. Frame generation OFF.,off,
+s-audio-low,experimental,switches,s-base,VEYRA_EXP_RP_AUDIO_LOW_BUFFER=1,Experimental build: low audio buffer. Frame generation OFF.,off,
+s-audio-smooth,experimental,switches,s-base,VEYRA_EXP_RP_AUDIO_SMOOTH=1,Experimental build: audio smoothing alone (dropouts fade in and out; [remoteplay-audio] clicks= should stay flat). Frame generation OFF.,off,
+s-audio-adaptive,experimental,switches,s-base,VEYRA_EXP_RP_AUDIO_ADAPTIVE=1,Experimental build: adaptive audio playout target alone (playoutTargetMs= back to its start within a minute after trouble; delayMs= is a cost). Frame generation OFF.,off,
+s-delivery-catchup,experimental,switches,s-base,VEYRA_EXP_RP_DELIVERY=catchup,Experimental build: frame delivery catch-up (docs/FRAME_DELIVERY.md section 5). Needs 120 Hz or more. Accept only if replaced frames fall and seconds under 57 presents do not rise and caughtUp > 0 and latency P50 moves by less than 0.5 ms; reject if P50 rises by a quarter refresh. Frame generation OFF.,off,
+s-early-loss,experimental,switches,s-base,VEYRA_EXP_RP_EARLY_LOSS=1,Experimental build: early loss decision (a missing video packet given up at once when FEC cannot recover it; counters earlyLossCuts / earlyLossWrong). Only in a build with the network work. Frame generation OFF.,off,
+s-wrap-fix,experimental,switches,s-base,VEYRA_EXP_RP_REORDER_WRAP_FIX=1,Experimental build: reorder queue index wrap fix (packet 0 after 65535 no longer dropped). Only in a build with the network work. Frame generation OFF.,off,
+s-expiry-fix,experimental,switches,s-base,VEYRA_EXP_RP_EXPIRY_FIX=1,Experimental build: video queue expiry fix (no drop when the consumer clock is older than the frame). Only in a build with the network work. Frame generation OFF.,off,
+s-idr-retry,experimental,switches,s-base,VEYRA_EXP_RP_IDR_RETRY_MS=500,Experimental build: keyframe re-request after 500 ms without a decoded frame instead of 1000 ms. Only in a build with the network work. Frame generation OFF.,off,
+q-quality,experimental,quality,q-quality,,Super resolution cost and frame generation (the app switches each choice itself and restores the user setting). Frame generation is turned on by the plan; not a latency arm.,off,
+p-dedup,experimental,probe,p-dedup,VEYRA_EXP_RP_STREAM_DEDUP=1,Diagnostic: repeated pictures of a 30 FPS game (needs a game running at 30 FPS); removes nothing in this build. Frame generation OFF.,off,
+n-off,experimental,network,n-observe,VEYRA_EXP_RP_STATS=1,SmartLink switched OFF (current defaults with statistics only): measures what observe mode itself costs. Frame generation OFF.,off,smartlink
+n-observe,experimental,network,n-observe,VEYRA_EXP_RP_SMARTLINK=1;VEYRA_EXP_RP_SMARTLINK_TRACE=1,SmartLink observing only (changes nothing; the baseline of the network session and its recording). Frame generation OFF.,off,
+n-apply,experimental,network,n-observe,VEYRA_EXP_RP_SMARTLINK=apply,SmartLink applying its decisions. Frame generation OFF.,off,smartlink
+n-audio,experimental,network,n-observe,VEYRA_EXP_RP_SMARTLINK=apply;VEYRA_EXP_RP_STATS=1;VEYRA_EXP_RP_AUDIO_FAST_RECOVER=1;VEYRA_EXP_RP_AUDIO_SMOOTH=1;VEYRA_EXP_RP_AUDIO_ADAPTIVE=1,SmartLink applying plus the audio continuity switches (fast recovery; smooth; adaptive). Audio delay is a cost: its delayMs is shown beside the observe arm. Frame generation OFF.,off,smartlink
+n-original,original,network-builds,n-observe,,The original build in the network session (compared only on what every build logs). Frame generation OFF.,off,
+n-stable,modified,network-builds,n-observe,,The stable candidate in the network session (compared only on what every build logs). Frame generation OFF.,off,
+n-wifi-mode,experimental,network-wifi-mode,n-observe,VEYRA_EXP_RP_SMARTLINK=apply;VEYRA_EXP_RP_WIFI_STREAMING_MODE=1,SmartLink applying plus the Wi-Fi streaming mode (only with -WifiStreamingMode: asks the Wi-Fi adapter to avoid background scans while the stream runs). Frame generation OFF.,off,smartlink
+p-window,experimental,switches,p-window,pref:pushAutoFullscreen=false;VEYRA_EXP_PRESENT_WINDOW_FACTS=1,Presentation baseline as the owner ran it: windowed with the interface visible. Frame generation OFF.,off,
+p-fullscreen,experimental,switches,p-window,VEYRA_EXP_PRESENT_WINDOW_FACTS=1,Presentation: full screen on connect (the test profile). Frame generation OFF.,off,fullscreen;window;vrrActive;vrrLevel;presentMode
+p-vrr,experimental,switches,p-fullscreen,VEYRA_EXP_PRESENT_VRR_REQUEST=1;VEYRA_EXP_PRESENT_WINDOW_FACTS=1,Presentation: full screen and the variable refresh request. Frame generation OFF.,off,vrrRequested;vrrActive;vrrLevel;presentMode
+p-tearing,experimental,switches,p-fullscreen,VEYRA_EXP_PRESENT_TEARING=1;VEYRA_EXP_PRESENT_WINDOW_FACTS=1,Presentation: full screen with tearing allowed. If variable refresh is not really active for the window you will see tearing lines in the picture: that is expected for this arm. Scored only with PresentMon. Frame generation OFF.,off,presentTearing;presentVsync;presentMaxLatency;presentWaitable;vrrActive;vrrLevel;presentMode
+p-lowqueue-off,experimental,switches,p-window,pref:pushAutoFullscreen=false;VEYRA_EXP_PRESENT_LOW_QUEUE_OFF=1;VEYRA_EXP_PRESENT_WINDOW_FACTS=1,Presentation: windowed as p-window but presenting as the original build did in the first test (low-latency queue and NVIDIA low latency off). Shows whether that setting explains the original build's short present-to-screen times. Frame generation OFF.,off,lowQueue;nvLowLatency;presentWaitable;presentMaxLatency;displayQueuePaced
+p-test-uncovered,experimental,switches,p-window,pref:pushAutoFullscreen=false;VEYRA_EXP_PRESENT_TEST_UNCOVERED=1;VEYRA_EXP_PRESENT_WINDOW_FACTS=1,Presentation: windowed as p-window but the latency test window is kept behind the picture while the test runs (you will not see it; Esc or a click on the picture cancels the test). Shows whether a window over the picture slows presentation. Frame generation OFF.,off,presentMode;vrrActive;vrrLevel
+i-legacy,experimental,input,i-legacy,VEYRA_EXP_RP_KBM=1;VEYRA_EXP_RP_KBM_INPUT_PROFILE=legacy,Input: mouse and keyboard as today (the reference of this session). Frame generation OFF.,off,
+i-ultra,experimental,input,i-legacy,VEYRA_EXP_RP_KBM=1;VEYRA_EXP_RP_KBM_INPUT_PROFILE=ultra-low-latency,Input: profile Ultra Low Latency (no smoothing; immediate curves). Frame generation OFF.,off,
+i-event-send,experimental,input,i-legacy,VEYRA_EXP_RP_KBM=1;VEYRA_EXP_RP_KBM_INPUT_PROFILE=legacy;VEYRA_EXP_RP_KBM_EVENT_SEND=1,Input: leading-edge transmission of button presses (S5_INPUT_API.md change 4) on the profile as today. Frame generation OFF.,off,
+i-trigger-filter,experimental,input,i-legacy,VEYRA_EXP_RP_KBM=1;VEYRA_EXP_RP_KBM_INPUT_PROFILE=legacy;VEYRA_EXP_RP_TRIGGER_FILTER=1,Input: the DualSense trigger filter (L2 / R2 ends snap; the other trigger after a release); the kit's step holds L2 and R2 and releases one. Frame generation OFF.,off,
+i-adaptive,experimental,input,i-legacy,VEYRA_EXP_RP_KBM=1;VEYRA_EXP_RP_KBM_INPUT_PROFILE=adaptive-precision,Input: profile Adaptive Precision (calibrated sensitivity and dead-zone compensation; no temporal buffering). Frame generation OFF.,off,
+v-original,experimental,visual,v-original,pipeline:profile=original|hdr=0,Visual A: the original stream with no processing (the reference of this session).,off,
+v-dlss,experimental,visual,v-original,pipeline:profile=original|hdr=0|sr=dlss|srModel=M|srTarget=qhd,Visual B: DLSS upscaling alone to 2560x1440 with model M (NVIDIA recommends M for half resolution per axis).,off,
+v-dlss-k,experimental,visual,v-dlss,pipeline:profile=original|hdr=0|sr=dlss|srModel=K|srTarget=qhd,Visual B2: DLSS upscaling alone to 2560x1440 with model K (NVIDIA recommends K for the higher-resolution modes; 1080 to 1440 lines is 0.75 per axis). Compared with model M side by side.,off,
+v-clean,experimental,visual,v-original,pipeline:profile=original|hdr=0|clean=50,Visual C0: compression clean-up alone at the stream's own size (1920x1080 out): the arm whose blockiness can be compared with v-original's (same output size).,off,
+v-clean-dlss,experimental,visual,v-original,pipeline:profile=original|hdr=0|clean=50|sr=dlss|srModel=M|srTarget=qhd,Visual C: compression clean-up then DLSS upscaling to 2560x1440.,off,
+v-neural,experimental,visual,v-original,pipeline:profile=original|hdr=0|nr=1|nrRuntime=3|nrLook=conservative,Visual D: the neural layer alone (conservative look; NVIDIA-signed original runtime only). Says so when the runtime is missing.,off,
+v-clean-neural-dlss,experimental,visual,v-original,pipeline:profile=original|hdr=0|clean=50|nr=1|nrRuntime=3|nrLook=conservative|sr=dlss|srModel=M|srTarget=qhd,Visual E: clean-up then the neural layer then DLSS upscaling.,off,
+v-clean-nis,experimental,visual,v-original,pipeline:profile=original|hdr=0|clean=50|sr=nis,Visual vendor-neutral: clean-up then NIS upscaling (runs on every GPU maker).,off,
+v-reference,experimental,visual,v-original,pipeline:profile=original|sr=dlss|srModel=M|srTarget=4k|fg=vfg|fgMultiplier=2|hdr=1,Visual R: the owner's reference settings (DLSS Model M to 4K; VFG 2x; HDR). Measured values only. Frame generation ON.,on,
+nn-1080,experimental,neural,nn-1080,pipeline:profile=original|hdr=0|nr=1|nrRuntime=3|nrLook=conservative|nrSize=1080,Neural layer at 1080 lines internal size without the upscaler (the reference of this session).,off,
+nn-1080-idle-flow,experimental,neural,nn-1080,pipeline:profile=original|hdr=0|nr=1|nrRuntime=3|nrLook=conservative|nrSize=1080;VEYRA_EXP_PIPE_IDLE_NR_FLOW=1,Neural layer at 1080 lines with the graph's neural-size flow adaptation skipped while nothing needs it (VEYRA_EXP_PIPE_IDLE_NR_FLOW).,off,
+nn-720,experimental,neural,nn-1080,pipeline:profile=original|hdr=0|nr=1|nrRuntime=3|nrLook=conservative|nrSize=720,Neural layer at 720 lines internal size without the upscaler.,off,
+nn-900,experimental,neural,nn-1080,pipeline:profile=original|hdr=0|nr=1|nrRuntime=3|nrLook=conservative|nrSize=900,Neural layer at 900 lines internal size without the upscaler.,off,
+nn-1440,experimental,neural,nn-1080,pipeline:profile=original|hdr=0|nr=1|nrRuntime=3|nrLook=conservative|nrSize=1440,Neural layer at 1440 lines internal size without the upscaler.,off,
+nn-720-sr,experimental,neural,nn-720,pipeline:profile=original|hdr=0|nr=1|nrRuntime=3|nrLook=conservative|nrSize=720|sr=dlss|srTarget=qhd,Neural layer at 720 lines then DLSS upscaling to the display.,off,
+nn-900-sr,experimental,neural,nn-900,pipeline:profile=original|hdr=0|nr=1|nrRuntime=3|nrLook=conservative|nrSize=900|sr=dlss|srTarget=qhd,Neural layer at 900 lines then DLSS upscaling to the display.,off,
+nn-1080-sr,experimental,neural,nn-1080,pipeline:profile=original|hdr=0|nr=1|nrRuntime=3|nrLook=conservative|nrSize=1080|sr=dlss|srTarget=qhd,Neural layer at 1080 lines then DLSS upscaling to the display.,off,
+nn-1440-sr,experimental,neural,nn-1440,pipeline:profile=original|hdr=0|nr=1|nrRuntime=3|nrLook=conservative|nrSize=1440|sr=dlss|srTarget=qhd,Neural layer at 1440 lines then DLSS upscaling to the display.,off,
+f-off,experimental,framegen,f-off,pipeline:profile=original|hdr=0|fg=off,Frame generation OFF (the reference of this session).,off,
+f-vfg-2x,experimental,framegen,f-off,pipeline:profile=original|hdr=0|fg=vfg|fgMultiplier=2,Frame generation: NVIDIA VFG at 2x (120 FPS submitted). Frame generation ON.,on,
+f-dlss-2x,experimental,framegen,f-off,pipeline:profile=original|hdr=0|fg=dlss|fgMultiplier=2,Frame generation: DLSS Frame Generation at 2x (120 FPS submitted). Frame generation ON.,on,
+f-pushflow-2x,experimental,framegen,f-off,pipeline:profile=original|hdr=0|fg=pushflow|fgMultiplier=2,Frame generation: PushFlow at 2x (120 FPS submitted; vendor-neutral). Frame generation ON.,on,
+f-fsr-2x,experimental,framegen,f-off,pipeline:profile=original|hdr=0|fg=fsr|fgMultiplier=2,Frame generation: FSR at 2x (120 FPS submitted; vendor-neutral). Frame generation ON.,on,
+f-vfg-3x,experimental,framegen,f-vfg-2x,pipeline:profile=original|hdr=0|fg=vfg|fgMultiplier=3,EXPERIMENTAL target: NVIDIA VFG at 3x (180 FPS submitted). Frame generation ON.,on,
+f-dlss-3x,experimental,framegen,f-dlss-2x,pipeline:profile=original|hdr=0|fg=dlss|fgMultiplier=3,EXPERIMENTAL target: DLSS Frame Generation at 3x (180 FPS submitted). Frame generation ON.,on,
+f-pushflow-3x,experimental,framegen,f-pushflow-2x,pipeline:profile=original|hdr=0|fg=pushflow|fgMultiplier=3,EXPERIMENTAL target: PushFlow at 3x (180 FPS submitted). Frame generation ON.,on,
+f-fsr-3x,experimental,framegen,f-fsr-2x,pipeline:profile=original|hdr=0|fg=fsr|fgMultiplier=3,EXPERIMENTAL target: FSR at 3x (180 FPS submitted). Frame generation ON.,on,
+s-audio-all,experimental,audiofix,s-base,VEYRA_EXP_RP_AUDIO_FAST_RECOVER=1;VEYRA_EXP_RP_AUDIO_SMOOTH=1;VEYRA_EXP_RP_AUDIO_ADAPTIVE=1,Audio: fast recovery and smoothing and the adaptive playout target together (docs/AUDIO.md). Audio delay is a cost. Frame generation OFF.,off,
+s-audio-own,experimental,audiofix,s-base,VEYRA_EXP_RP_AUDIO_OWN_CLOCK=1,Audio: the audio own clock (audio follows the local picture delay instead of the video timestamps; ownFrames= must grow or the arm is a failed arm). Frame generation OFF.,off,
+s-audio-own-fast,experimental,audiofix,s-base,VEYRA_EXP_RP_AUDIO_OWN_CLOCK=1;VEYRA_EXP_RP_AUDIO_FAST_RECOVER=1;VEYRA_EXP_RP_AUDIO_SMOOTH=1;VEYRA_EXP_RP_AUDIO_ADAPTIVE=1,Audio: the own clock together with the three audio continuity switches. Frame generation OFF.,off,
+p-decode-keep-hw,experimental,pacing,p-window,pref:pushAutoFullscreen=false;VEYRA_EXP_RP_DECODE_KEEP_HW=1,Pacing: windowed as p-window; a failed decode after hardware decoding worked stays on hardware (S5_PRESENT_API.md comparison C; no failure in either arm = no evidence either way). Frame generation OFF.,off,
+p-rect-region,experimental,pacing,p-window,pref:pushAutoFullscreen=false;VEYRA_EXP_PRESENT_RECT_REGION=1;VEYRA_EXP_PRESENT_WINDOW_FACTS=1,Pacing: windowed as p-window but the video window's region is one rectangle while an interface item is over the picture. Shows whether the region's shape explains the slow first seconds. Frame generation OFF.,off,
+b-previous,previous,builds,b-previous,,Builds: Package 7's own experimental build with no switch (the reference of this session). Frame generation OFF.,off,
+b-experimental,experimental,builds,b-previous,,Builds: this package's experimental build with no switch: should behave as Package 7's. Frame generation OFF.,off,
+b-stable,modified,builds,b-previous,,Builds: the stable candidate (logs fewer values: those are 'cannot tell'). Frame generation OFF.,off,
+b-original,original,builds,b-previous,,Builds: the original build (logs fewer values: those are 'cannot tell'). Frame generation OFF.,off,
+sm-native60,experimental,smoothness,sm-native60,pipeline:profile=original|hdr=0|fg=off;VEYRA_EXP_PRESENT_WINDOW_FACTS=1,Smoothness: native 60 without frame generation (the reference of this session).,off,
+sm-fg2-vrr,experimental,smoothness,sm-native60,pipeline:profile=original|hdr=0|fg=vfg|fgMultiplier=2;VEYRA_EXP_PRESENT_WINDOW_FACTS=1,Smoothness: frame generation 2x (about 120 FPS) with variable refresh requested. Frame generation ON.,on,
+sm-fg2-novrr,experimental,smoothness,sm-native60,pref:vrr=false;pipeline:profile=original|hdr=0|fg=vfg|fgMultiplier=2;VEYRA_EXP_PRESENT_WINDOW_FACTS=1,Smoothness: frame generation 2x WITHOUT variable refresh: about 120 on a fixed refresh (on 180 Hz the 3:2 case). Frame generation ON.,on,vrrRequested;vrrActive
+sm-fg3,experimental,smoothness,sm-native60,pipeline:profile=original|hdr=0|fg=vfg|fgMultiplier=3;VEYRA_EXP_PRESENT_WINDOW_FACTS=1,Smoothness: frame generation 3x (about 180 FPS: even on 180 Hz). Frame generation ON.,on,
+sm-fg2-repair,experimental,smoothness,sm-native60,pref:pacingRepair=true;pipeline:profile=original|hdr=0|fg=vfg|fgMultiplier=2;VEYRA_EXP_PRESENT_WINDOW_FACTS=1,Smoothness: frame generation 2x with Frame Pacing Repair on. Frame generation ON.,on,
+sm-adaptive,experimental,smoothness,sm-native60,pref:fgAdaptive=true;pipeline:profile=original|hdr=0|fg=vfg|fgMultiplier=4;VEYRA_EXP_PRESENT_WINDOW_FACTS=1,Smoothness: the adaptive multiplier (ceiling 4x; the even-cadence switch was dropped: identical to this arm in the owner's case). Frame generation ON.,on,
+sm-sr4k-fg3,experimental,smoothness,sm-fg3,pipeline:profile=original|hdr=0|sr=dlss|srTarget=4k|fg=vfg|fgMultiplier=3;VEYRA_EXP_PRESENT_WINDOW_FACTS=1,Smoothness (stream smooth): DLSS upscaling to 4K then VFG 3x: the whole frame generation works at 3840x2160 on the owner's 1440p panel. Frame generation ON.,on,sr;srTarget
+sm-sr-display,experimental,smoothness,sm-sr4k-fg3,pipeline:profile=original|hdr=0|sr=dlss|srTarget=4k|fg=vfg|fgMultiplier=3;VEYRA_EXP_RP_SMOOTH_SR_DISPLAY=1;VEYRA_EXP_PRESENT_WINDOW_FACTS=1,Smoothness: upscaler target 4K asked for but VEYRA_EXP_RP_SMOOTH_SR_DISPLAY lowers it to the monitor (1440p). Frame generation ON.,on,
+sm-fg6,experimental,smoothness,sm-sr4k-fg3,pipeline:profile=original|hdr=0|sr=dlss|srTarget=4k|fg=vfg|fgMultiplier=6;VEYRA_EXP_PRESENT_WINDOW_FACTS=1,Smoothness: the owner's reported setup: 4K upscaling and VFG asked for 6x (the output cap lowers it per pair). Frame generation ON.,on,fgMultiplier
+sm-fg6-capfit,experimental,smoothness,sm-fg6,pipeline:profile=original|hdr=0|sr=dlss|srTarget=4k|fg=vfg|fgMultiplier=6;VEYRA_EXP_RP_SMOOTH_CAP_FIT=1;VEYRA_EXP_PRESENT_WINDOW_FACTS=1,Smoothness: as sm-fg6 with VEYRA_EXP_RP_SMOOTH_CAP_FIT (the cap reduction with a 2 % tolerance and a 0.5 s hold). Frame generation ON.,on,
+sm-mode-120,experimental,smoothness,sm-fg6,pipeline:profile=original|hdr=0|sr=dlss|srTarget=4k|fg=vfg|fgMultiplier=6;VEYRA_EXP_RP_SMOOTH_TARGET=120;VEYRA_EXP_PRESENT_WINDOW_FACTS=1,Smoothness Mode with a 120 FPS target (ceiling 6x) against the fixed sm-fg6. Frame generation ON.,on,
+sm-mode-180,experimental,smoothness,sm-fg6,pipeline:profile=original|hdr=0|sr=dlss|srTarget=4k|fg=vfg|fgMultiplier=6;VEYRA_EXP_RP_SMOOTH_TARGET=180;VEYRA_EXP_PRESENT_WINDOW_FACTS=1,Smoothness Mode with a 180 FPS target (ceiling 6x) against the fixed sm-fg6. Frame generation ON.,on,
+sm-mode-180-1440,experimental,smoothness,sm-mode-180,pipeline:profile=original|hdr=0|sr=dlss|srTarget=4k|fg=vfg|fgMultiplier=6;VEYRA_EXP_RP_SMOOTH_TARGET=180;VEYRA_EXP_RP_SMOOTH_SR_DISPLAY=1;VEYRA_EXP_RP_SMOOTH_STEADY=1;VEYRA_EXP_PRESENT_WINDOW_FACTS=1,Smoothness Mode 180 with the SR target at the monitor and the steady probe: the combination expected to hold best. Frame generation ON.,on,
+# clarity (stream clarity; docs/drafts/CLARITY_VERDICT.md section 9): the bitrate the PS5 is asked for and what it sends. Only through
+# -Session visual -Arms c-15,c-30,c-50,c-100,c-hdr-15,c-hdr-50 (set clarity: no session takes them by itself). VEYRA_TEST_RP_BITRATE_KBPS /
+# VEYRA_TEST_RP_CODEC change the connect request of that run only (the saved console profile is never changed); a moving scene is needed.
+c-15,experimental,clarity,c-15,pipeline:profile=original|hdr=0;VEYRA_TEST_RP_BITRATE_KBPS=15000;VEYRA_TEST_RP_CODEC=hevc;VEYRA_EXP_RP_HEALTH=1,Clarity: the stream as requested by default (H.265 SDR at 15 Mbit/s) with no processing; the console's own target in the health line. Use a moving scene (driving fast). Frame generation OFF.,off,
+c-30,experimental,clarity,c-15,pipeline:profile=original|hdr=0;VEYRA_TEST_RP_BITRATE_KBPS=30000;VEYRA_TEST_RP_CODEC=hevc;VEYRA_EXP_RP_HEALTH=1,Clarity: 30 Mbit/s requested; the same scene as c-15. Frame generation OFF.,off,bitrateKbps
+c-50,experimental,clarity,c-15,pipeline:profile=original|hdr=0;VEYRA_TEST_RP_BITRATE_KBPS=50000;VEYRA_TEST_RP_CODEC=hevc;VEYRA_EXP_RP_HEALTH=1,Clarity: 50 Mbit/s requested; the same scene as c-15. Frame generation OFF.,off,bitrateKbps
+c-100,experimental,clarity,c-15,pipeline:profile=original|hdr=0;VEYRA_TEST_RP_BITRATE_KBPS=100000;VEYRA_TEST_RP_CODEC=hevc;VEYRA_EXP_RP_HEALTH=1,Clarity: 100 Mbit/s requested (the protocol's highest in our dialog); the same scene as c-15. Frame generation OFF.,off,bitrateKbps
+c-hdr-15,experimental,clarity,c-15,pipeline:profile=original|hdr=0;VEYRA_TEST_RP_BITRATE_KBPS=15000;VEYRA_TEST_RP_CODEC=hevc-hdr;VEYRA_EXP_RP_HEALTH=1,Clarity: the H.265 HDR stream at 15 Mbit/s (the PS5 must be outputting HDR to a screen); no processing. Frame generation OFF.,off,codec;hdr
+c-hdr-50,experimental,clarity,c-hdr-15,pipeline:profile=original|hdr=0;VEYRA_TEST_RP_BITRATE_KBPS=50000;VEYRA_TEST_RP_CODEC=hevc-hdr;VEYRA_EXP_RP_HEALTH=1,Clarity: the H.265 HDR stream at 50 Mbit/s; the same scene. Frame generation OFF.,off,codec;hdr;bitrateKbps
+# clarity A-F (master directive section 10): the same recorded clip through each picture path. Run with -Session visual
+# -Arms cl-a-raw,cl-b-nis,cl-c-vsr,cl-d-neural,cl-e-vsr-neural,cl-f-clean-nis,cl-f-dlss -Clip <file> (one clip per scene).
+cl-a-raw,experimental,clarity,cl-a-raw,pipeline:profile=original|hdr=0,Clarity A: the decoded picture with no processing (the presenter scales it to the screen); the reference of A-F. Frame generation OFF.,off,
+cl-b-nis,experimental,clarity,cl-a-raw,pipeline:profile=original|hdr=0|sr=nis|srTarget=qhd,Clarity B: one spatial scale 1080p to 2560x1440 (NIS; any GPU). Frame generation OFF.,off,
+cl-c-vsr,experimental,clarity,cl-a-raw,pipeline:profile=original|hdr=0|sr=vsr-stream|srTarget=qhd,Clarity C: RTX Video Super Resolution only (streaming family) to 2560x1440. Frame generation OFF.,off,
+cl-d-neural,experimental,clarity,cl-a-raw,pipeline:profile=original|hdr=0|nr=1|nrRuntime=3|nrLook=conservative,Clarity D: the neural layer only (conservative look; NVIDIA-signed original runtime only). Frame generation OFF.,off,
+cl-e-vsr-neural,experimental,clarity,cl-a-raw,pipeline:profile=original|hdr=0|nr=1|nrRuntime=3|nrLook=conservative|sr=vsr-stream|srTarget=qhd,Clarity E: the neural layer and RTX Video Super Resolution together. Frame generation OFF.,off,
+cl-f-clean-nis,experimental,clarity,cl-a-raw,pipeline:profile=original|hdr=0|clean=50|sr=nis|srTarget=qhd,Clarity F1: compression clean-up then NIS to 2560x1440 (single frame; any GPU). Frame generation OFF.,off,
+cl-f-dlss,experimental,clarity,cl-a-raw,pipeline:profile=original|hdr=0|sr=dlss|srModel=M|srTarget=qhd,Clarity F2: DLSS upscaling to 2560x1440 (temporal: watch moving scenes for smear). Frame generation OFF.,off,

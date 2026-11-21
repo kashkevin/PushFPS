@@ -140,22 +140,32 @@ class FgCostSettling {
     int64_t lastEvaluated_=0,holdUntil_=0;
     unsigned left_=0,recorded_=0,failures_=0;
     bool probing_=false;
+    // PushFPS experiment VEYRA_EXP_RP_SMOOTH_STEADY=1 (PushSmoothness.h): the first failed probe of a series starts
+    // a second probe at once instead of a hold; only a second failure in a row holds. Off: unchanged.
+    bool steady_=false,retried_=false,rearm_=false;
 public:
     static constexpr int64_t kIdle100ns=10000000,kRetry100ns=20000000;
     static constexpr unsigned kEvaluations=2,kProbeGroups=4,kMaxDoublings=2;
-    void reset(){*this=FgCostSettling{};}
+    void reset(){const bool steady=steady_;*this=FgCostSettling{};steady_=steady;}
+    void setSteady(bool on){steady_=on;}
     // Call for each completed group in order; true marks a warmup sample.
     bool observe(bool skipped,bool evaluated,int64_t now){
         if(skipped){
-            if(probing_){probing_=false;left_=0;holdUntil_=now+(kRetry100ns<<failures_);failures_=std::min(failures_+1,kMaxDoublings);}
+            if(probing_){
+                probing_=false;left_=0;
+                if(steady_&&!retried_){retried_=true;rearm_=true;return false;}
+                retried_=false;
+                holdUntil_=now+(kRetry100ns<<failures_);failures_=std::min(failures_+1,kMaxDoublings);
+            }
             return false;
         }
         if(!evaluated)return false;
-        const bool idle=lastEvaluated_&&now-lastEvaluated_>=kIdle100ns;
+        const bool idle=(lastEvaluated_&&now-lastEvaluated_>=kIdle100ns)||rearm_;
+        rearm_=false;
         lastEvaluated_=now;
         if(idle){left_=kEvaluations;recorded_=0;probing_=true;}
         if(left_){--left_;return true;}
-        if(probing_&&++recorded_>=kProbeGroups){probing_=false;failures_=0;}
+        if(probing_&&++recorded_>=kProbeGroups){probing_=false;failures_=0;retried_=false;}
         return false;
     }
     bool holding(int64_t now)const{return now<holdUntil_;}

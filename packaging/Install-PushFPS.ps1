@@ -8,7 +8,7 @@
 
   Usage (normally just double-click Install-PushFPS.cmd):
     Install-PushFPS.ps1 [-Gpu Auto|NVIDIA|AMD] [-InstallDir <folder>] [-NoShortcuts] [-NoLaunch]
-                        [-ExperimentalExtras Ask|Yes|No]
+                        [-ExperimentalExtras Ask|Yes|No] [-NeuralRuntime Ask|Yes|No]
     Install-PushFPS.ps1 -Uninstall [-InstallDir <folder>]
 
   Works with Windows PowerShell 5.1 and PowerShell 7.
@@ -24,6 +24,11 @@ param(
     # Ask (default): a question when run in a console window; No when there is no one to ask.
     [ValidateSet('Ask', 'Yes', 'No')]
     [string]$ExperimentalExtras = 'Ask',
+    # NVIDIA's own signed neural-rendering runtime that Veyra's NVIDIA package carries (experimental, optional;
+    # see below). It is never kept without an explicit yes. Ask (default): a question when run in a console
+    # window; No when there is no one to ask.
+    [ValidateSet('Ask', 'Yes', 'No')]
+    [string]$NeuralRuntime = 'Ask',
     [switch]$Uninstall,
     # Signed in-app updates (src/ui/UpdateChecker.cpp): the running PushFPS that started this
     # installer; it quits right after, and the copy waits until it has (at most a minute).
@@ -209,6 +214,83 @@ try {
     }
     foreach ($item in $skipped) { Info "Not installed: $item" }
 
+    # The experimental neural layer's runtime ("AI picture enhancement"): NVIDIA's own signed nvngx_dlssnr.dll
+    # in Veyra's NVIDIA package. NVIDIA has published no DLSS 5 SDK and no terms covering this file's use by
+    # other programs, so it is never kept by default: only on an explicit yes (the question below, or
+    # -NeuralRuntime Yes), and then only if it is the file this release has a record of (Authenticode signature
+    # valid, signed by NVIDIA Corporation, SHA-256 as recorded). No, and Ask with no one to ask, leave it out.
+    # The user's yes is recorded as a marker file in the folder ($neuralMarker; also written by Settings >
+    # Components and licenses when the user installs a file there). A copy in the install folder WITH the marker is
+    # the user's earlier choice: Ask keeps it (an in-app update passes no choice), only an explicit No removes it.
+    # A copy WITHOUT the marker (earlier PushFPS versions installed the packaged copy on every NVIDIA PC) was never
+    # chosen: it is treated as Ask (the question in a console window; removed when there is no one to ask).
+    # In update mode (-WaitForPid) Ask never asks. A separate question from the extras above, which stay as they
+    # are. PushFPS checks the installed file again before it uses it. docs/NEURAL_RENDERING_RUNTIME.md
+    $neuralRel = 'runtime\experimental\nr-original'
+    $neuralMarker = 'pushfps-user-choice.txt'
+    $neuralLine = ''
+    $neuralRemoveInstalled = $false
+    $neuralSha256 = 'E16BCF15E16E13F527491CDF7845B2FE6521A738D8F7C9C721866A8496E1FC8E'   # nvngx_dlssnr.dll 310.8.0.0
+    $neuralStaged = Join-Path $runtimeRoot $neuralRel
+    $neuralSrc = Join-Path $neuralStaged 'nvngx_dlssnr.dll'
+    $neuralInstalled = Join-Path $InstallDir $neuralRel
+    $neuralHasCopy = Test-Path (Join-Path $neuralInstalled 'nvngx_dlssnr.dll')
+    $neuralMarked = $neuralHasCopy -and (Test-Path (Join-Path $neuralInstalled $neuralMarker))
+    if ((Test-Path $neuralSrc) -or $neuralHasCopy) {
+        $neuralChoice = $NeuralRuntime
+        $neuralExplicitNo = $neuralChoice -eq 'No'
+        if (($neuralChoice -eq 'Ask') -and $neuralMarked) { $neuralChoice = 'Keep' }
+        if ($neuralChoice -eq 'Ask') {
+            if ([Console]::IsInputRedirected -or ($WaitForPid -gt 0) -or -not (Test-Path $neuralSrc)) { $neuralChoice = 'No' }
+            else {
+                Step 'Optional: NVIDIA''s neural-rendering runtime (experimental)'
+                Info 'This is NVIDIA''s neural-rendering model, applied here to video ("AI picture enhancement").'
+                Info 'It is experimental and needs an RTX 50 card with driver 616.64 or newer. The file is an'
+                Info 'NVIDIA-signed original, but NVIDIA has published no terms covering its use by other'
+                Info 'programs: your decision. Everything else works without it; Settings can add or remove it later.'
+                $answer = Read-Host '    Install NVIDIA''s neural-rendering runtime? [y/N]'
+                if ($answer -match '^(y|yes|j|ja)$') { $neuralChoice = 'Yes' } else { $neuralChoice = 'No' }
+            }
+        }
+        $neuralProblem = ''
+        if ($neuralChoice -eq 'Yes') {
+            if (-not (Test-Path $neuralSrc)) { $neuralProblem = 'this package does not contain it' }
+            else {
+                $neuralSig = Get-AuthenticodeSignature -FilePath $neuralSrc
+                $neuralSigner = ''
+                if ($neuralSig.SignerCertificate) {
+                    $neuralSigner = $neuralSig.SignerCertificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false)
+                }
+                if ($neuralSig.Status -ne 'Valid') { $neuralProblem = "its signature is $($neuralSig.Status)" }
+                elseif ($neuralSigner -ne 'NVIDIA Corporation') { $neuralProblem = 'it is not signed by NVIDIA Corporation' }
+                elseif ((Get-Sha256 $neuralSrc) -ine $neuralSha256) { $neuralProblem = 'it is not the file this release has a record of' }
+            }
+        }
+        if ($neuralChoice -eq 'Yes' -and -not $neuralProblem) {
+            # The marker travels with the copy: the next update keeps it without asking.
+            Set-Content -Path (Join-Path $neuralStaged $neuralMarker) -Encoding ASCII -Value 'Installed by the user''s choice (PushFPS installer). PushFPS checks the file before it uses it; Settings > Components and licenses can remove it.'
+            Info 'Installing NVIDIA''s neural-rendering runtime by your choice (NVIDIA-signed original, SHA-256 as recorded)'
+            $neuralLine = "Neural runtime: installed by your choice ($neuralRel)"
+        } elseif ($neuralChoice -eq 'Keep') {
+            # The packaged copy is left out; the one the user chose earlier stays (PushFPS checks it before use).
+            if (Test-Path $neuralStaged) { Remove-Item $neuralStaged -Recurse -Force }
+            $neuralLine = "Neural runtime: kept ($neuralRel, installed earlier by your choice; Settings > Components and licenses can remove it)"
+            Info $neuralLine
+        } else {
+            if (Test-Path $neuralStaged) { Remove-Item $neuralStaged -Recurse -Force }
+            # An explicit No removes any copy; otherwise only a copy nobody chose (no marker).
+            $neuralRemoveInstalled = $neuralHasCopy -and ($neuralExplicitNo -or -not $neuralMarked)
+            if ($neuralProblem) { $neuralReason = "refused: $neuralProblem" }
+            else { $neuralReason = 'optional: install with -NeuralRuntime Yes, or later in Settings > Components and licenses' }
+            if ($neuralHasCopy -and -not $neuralRemoveInstalled) {
+                $neuralLine = "Neural runtime: kept ($neuralRel, installed earlier by your choice); the packaged copy was not installed ($neuralReason)"
+            } else {
+                $neuralLine = "Neural runtime: not installed ($neuralRel, NVIDIA's neural-rendering runtime, experimental; $neuralReason)"
+            }
+            Info $neuralLine
+        }
+    }
+
     Step "Installing to $InstallDir"
     if ($WaitForPid -gt 0) {
         $old = Get-Process -Id $WaitForPid -ErrorAction SilentlyContinue
@@ -216,6 +298,8 @@ try {
     }
     $running = Get-Process -Name 'PushFPS' -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($InstallDir, [StringComparison]::OrdinalIgnoreCase) }
     if ($running) { Fail 'PushFPS is running. Close it, then run the installer again.' }
+    # After PushFPS closed (it holds the checked runtime open while it runs).
+    if ($neuralRemoveInstalled) { Remove-Item $neuralInstalled -Recurse -Force -ErrorAction SilentlyContinue }
     New-Item -ItemType Directory -Force $InstallDir | Out-Null
     # /E copies every folder; files already there are replaced, your settings folder
     # (runtime_local\user-data-2.0.0) and other extra files stay.
@@ -230,6 +314,8 @@ try {
         "Runtime: $asset from https://github.com/$UpstreamRepo/releases/tag/$UpstreamTag",
         "Runtime SHA-256: $expected"
     ) + @($skipped | ForEach-Object { "Not installed: $_" })
+    # Its own prefix: "Not installed:" lines mean "experimental extras left out" to the in-app update (UpdateVerify.cpp).
+    if ($neuralLine) { $versionLines += $neuralLine }
     Set-Content -Path (Join-Path $InstallDir 'PushFPS-VERSION.txt') -Value $versionLines -Encoding UTF8
 } finally {
     Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue

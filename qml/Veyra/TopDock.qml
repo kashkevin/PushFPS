@@ -45,6 +45,7 @@ Item {
         { id: "pro",   icon: "sliders", tip: qsTr("专业模式") },
         { id: "live",  icon: "cast", tip: qsTr("直播模式") },
         { id: "watch", icon: "play", tip: qsTr("视频播放模式") },
+        { id: "kbm",   icon: "pointer", tip: qsTr("键盘和鼠标") },
         { id: "exp",   icon: "upload", tip: qsTr("导出") },
         { id: "set",   icon: "settings", tip: qsTr("设置") }
     ]
