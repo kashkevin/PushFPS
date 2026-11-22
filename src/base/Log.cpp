@@ -7,6 +7,7 @@
 
 #include <windows.h>
 
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <format>
@@ -16,6 +17,7 @@ namespace veyra {
 
 namespace {
 thread_local diagnostics::DiagnosticEvent threadDiagnosticContext;
+std::atomic<uint64_t> problemLineCounts[2]{}; // PushFPS [log-summary]: warning, error lines since start
 
 const char* levelTag(LogLevel level)
 {
@@ -182,6 +184,7 @@ void Logger::write(LogLevel level, const char* component, const std::string& mes
     // them during warning bursts (sweep 2026-09-22 C1).
     std::optional<diagnostics::DiagnosticEvent> pendingEvent;
     if(level==LogLevel::Warn||level==LogLevel::Error){
+        problemLineCounts[level==LogLevel::Error?1:0].fetch_add(1,std::memory_order_relaxed);
         static const std::regex hrPattern("(?:HRESULT|hr)[=: ]+(0x[0-9a-f]+|[0-9]+)",std::regex::icase|std::regex::optimize);
         static const std::regex sehPattern("seh[=: ]+(0x[0-9a-f]+|[0-9]+)",std::regex::icase|std::regex::optimize);
         static const std::regex nvofPattern("(?:status|st)[=: ]+(0x[0-9a-f]+|[0-9]+)",std::regex::icase|std::regex::optimize);
@@ -295,6 +298,11 @@ void warn(const char* component, const std::string& message)
 void error(const char* component, const std::string& message)
 {
     Logger::instance().write(LogLevel::Error, component, message);
+}
+
+uint64_t problemLines(bool errors)
+{
+    return problemLineCounts[errors?1:0].load(std::memory_order_relaxed);
 }
 
 bool verboseFrameLogs()
