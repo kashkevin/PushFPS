@@ -1,5 +1,6 @@
 #include "veyra/engine/PreviewGpuSession.h"
 #include "veyra/engine/GraphDescription.h"
+#include "veyra/engine/PushSmoothHook.h"
 #include "veyra/engine/EngineController.h"
 #include "veyra/gfx/GpuSchedulingPriority.h"
 #include "veyra/RuntimePaths.h"
@@ -73,6 +74,7 @@ bool PreviewGpuSession::prepare(EnhancementSettings settings,unsigned width,unsi
     const auto start=std::chrono::steady_clock::now();settings=PlayerOptions::from(settings).snapshot();
     if(!initialize()||!context.adapter().isNvidia||ngx::FgCompatibilitySession::requested(context.adapter().vendorId,context.adapter().deviceId))return false;
     StageRequest request;request.width=width;request.height=height;request.nr=settings.nr;request.sr=settings.sr;
+    pushSmoothPrewarmDisplay(request.displayWidth,request.displayHeight); // VEYRA_EXP_RP_SMOOTH_SR_DISPLAY: the size live playback builds (0 x 0 without it)
     pipeline::EnhanceGraphDesc desc;describeStages(request,settings,desc);desc.runtimeAbsPath=runtime::localRuntimeDirectory().wstring();
     uint64_t budget=0,before=0;const bool measured=context.videoMemoryInfo(budget,before);
     if(!graph->initialize(desc)||!graph->createViews()||!ring.waitIdle())return false;

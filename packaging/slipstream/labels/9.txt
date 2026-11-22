@@ -1,0 +1,71 @@
+# START-HERE.txt of a package with this label (slipstream_package.py label_text): the text before
+# the separator line replaces @SHORTEST_AND_NEW@, the text after it @NEURAL_INSTALL@.
+# Lines starting with # are left out. ASCII only.
+THE SHORTEST WAY                                   four steps; the kit prints each session's time
+  1. Double-click  Install-Slipstream.cmd          10 to 20 minutes. It updates your 8C or 8C1 copy in
+                                                   place (settings and PS5 pairing stay) and asks ONE
+                                                   question: the optional NVIDIA neural runtime (section 1).
+  2. Start the game on the PS5 and play somewhere with steady motion. Open a Command Prompt here:
+       Run-First-Test.cmd -Session smoothness      about 36 minutes, hands off but keep the camera moving
+                                                   slowly. It compares 4K against 1440p upscaling, 6X
+                                                   against a multiplier fitted to your screen, and
+                                                   Smoothness Mode against a fixed setting, judged on
+                                                   when frames were handed to the screen, not the counter.
+  3.   Run-First-Test.cmd -Session visual -Arms c-15,c-30,c-50,c-100
+                                                   The bitrate test: the PS5 is asked for 15, 30, 50 and
+                                                   100 Mbit/s in turn (that run only; your saved console
+                                                   profile is never changed). It shows what was asked,
+                                                   what the console aimed for and what really arrived.
+                                                   Keep the camera moving: a still picture needs few bits.
+  4.   Run-First-Test.cmd -Session framegen -Arms nd-base
+                                                   The network check, on the cable: are packets missing at
+                                                   all? If missing, late, UDP errors and lost frames all
+                                                   read 0 in this run, packet loss on the cable is not the
+                                                   cause (one run: jitter and delay need more).
+  Each session ends with RESULT.txt on screen and ONE zip to send back. That is all that is needed.
+  Optional: the picture comparison A to F on one recorded clip, and the camera test of real input
+  delay: docs\HARDWARE_TEST_PROCEDURE.md and docs\CLARITY_VERDICT.md (sections 11 to 14).
+
+WHAT IS NEW IN PACKAGE 9          (in the experimental build, OFF until you choose it; see below)
+  - Everything of Package 8C1 (restoration, picture profiles, mouse and keyboard, the neural layer).
+  - Smoothness Mode (quick setup, off by default): aims at a steady 60, 90, 120 or 180 FPS from the
+    GPU time it measures; it does not measure what the screen showed, and the engine can still skip
+    frames. Whenever it lowers the multiplier the row says why. Off is your fixed setting.
+  - Test switches for the frame-generation causes found in the code (all off): upscaler to your
+    screen's size instead of 4K, a multiplier fitted to the refresh, no pause after one slow frame.
+  - Network Diagnostics panel (with the statistics switch): incoming bitrate, missing and late
+    packets, error-correction repairs, lost frames, network-to-decode delay, the main bottleneck;
+    every value marked measured, estimated or unavailable. Network loss shows as freezes and
+    hitches, not blur: the audit (docs\NETWORK_AUDIT.md) explains why.
+  - New measurements ([slipstream-smooth], [slipstream-net]) and the bitrate test switch for the kit. Nothing in this
+    package is claimed to make the picture sharper or the motion smoother before your sessions show it.
+ON WITHOUT A CHOICE IN 9   (experimental build only; Package 7 and your own PushFPS unchanged)
+  - Fixes taken from Veyra: the controller queue drops inputs that are too old, the neural layer's
+    clean shutdown, and the loader fix for its DLL.
+  - chiaki-ng fixes: reorder-queue drop, send-buffer teardown, HTTP header bounds, PIN log line.
+  - The FPS readout says "N FPS shown" or "N FPS submitted" (and "uneven" when it is); "shown" is
+    worked out from the present times, not read from the screen.
+  - The variable-refresh state is read again 5 s and 15 s after the picture starts. If G-SYNC
+    engages only then, variable-refresh presentation starts mid-session (before, at the next
+    display change).
+  - Neural runtime: at an update, an unchosen packaged copy is removed (see section 1). When the
+    file is present, its signature and SHA-256 are checked at start (about 1 s, an estimate); the
+    NVIDIA runtime choice is offered only for a verified original, and a neural layer you never
+    changed moves to the verified original once one is installed. New log lines [nr-runtime-status]
+    and [nr-runtime-check].
+KNOWN ISSUE IN 9
+  - After using the profile "Ultra Low Latency" together with the lowest-latency switch, check that
+    Smooth pacing is still how you want it (quick setup) before you measure anything else.
+----- the install question (section 1) -----
+   THE ONE QUESTION: the neural layer needs NVIDIA's own runtime file. The installer keeps it only
+   when you say yes, and only when the file is an NVIDIA-signed original; it never installs a
+   modified file. Without it everything else works, and the neural arms of the kit say
+   "not installed: skipped". To answer in advance:
+       Install-Slipstream.cmd -NeuralRuntime Yes       (or No; Ask is the default)
+   UPDATING an earlier experimental copy (Package 7, 8A or 8B): an NVIDIA runtime copy that came with
+   an earlier package without your yes is removed at this update, and a layer saved on it becomes
+   unavailable. Answering no removes every copy, also one you added in Settings. Answer yes, or add
+   it later in that copy's Settings, Components and licenses.
+   THE OTHER THREE COPIES (original, stable, Package 7) use their older installers: on an NVIDIA PC
+   they keep the NVIDIA-signed runtime file from Veyra's package without asking, as PushFPS 3.2.1
+   does. Their neural layer still stays off until you turn it on.
