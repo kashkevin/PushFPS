@@ -35,9 +35,9 @@ or Wi-Fi both work: on Wi-Fi every heading says "Wi-Fi: diagnostic only, not a w
 | 5 | `Run-First-Test.cmd -Session framegen` | 20 min | keep the picture moving steadily (drive or walk straight) |
 | 6 | `Run-First-Test.cmd -Session neural` | 20 min | stand in one place; hands off |
 | 7 | `Run-First-Test.cmd -Session pacing` | 8 min | hands off |
-| 8 | `Run-First-Test.cmd -Session smoothness` | 30 min | the same steady motion in every run (drive or turn slowly); watch each run |
+| 8 | `Run-First-Test.cmd -Session smoothness` | 36 min | the same steady motion in every run (drive or turn slowly); watch each run |
 | 9 | `Run-First-Test.cmd -Session retest` | 25 min | follow the `>>>` lines: one route, keep moving in every run |
-| 10 | `Run-First-Test.cmd -Session capture` | 36 min | only with a capture card (PS5 picture over HDMI, DualSense plugged into the PS5, PS5 HDCP off): choose the card once when the kit asks, then the same steady motion in every run; once with a 30 FPS game and once with a 60 FPS game (docs/drafts/CAPTURE_FG.md; the camera procedure for input-to-photon is its section 9) |
+| 10 | `Run-First-Test.cmd -Session capture` | 42 min | only with a capture card (PS5 picture over HDMI, DualSense plugged into the PS5, PS5 HDCP off): choose the card once when the kit asks, then the same steady motion in every run; once with a 30 FPS game and once with a 60 FPS game (docs/drafts/CAPTURE_FG.md; the camera procedure for input-to-photon is its section 9) |
 
 Package 8 comes in three downloads: **8A** (restoration and the picture profiles; start with `-Session visual`, then
 the "look with your own eyes" step below, then `-Session builds`), **8B** (+ mouse and keyboard, pacing and audio:
@@ -174,6 +174,27 @@ frame gap, the transport's rejected callbacks and assembly errors, and the waits
 usual table adds the audio delay growth (ms per minute) and the console's frame rate. The matched pictures are analysed afterwards with
 `tools/clarity_frames/compare.py` (identity at 1:1, scaler against reference resamples). PresentMon is used when it is
 in the package folder and you start with `-PresentMonPrompt`. It does NOT measure input-to-photon.
+
+### The neural layer ("DLSS 5") with and without frame generation (stream nrperf, inside the smoothness session)
+
+The four-way comparison of the owner's eighteenth message, run inside the smoothness session (its passes and its page):
+
+- Remote Play, Windows at 120 Hz, then at 180 Hz: `Run-First-Test.cmd -Session smoothness -Pass 120 -Arms
+  nrp-base,nrp-nr,nrp-fg,nrp-nr-fg,nrp-nr-fg-adapt`, then the same with `-Pass 180` (about 14 minutes each). Every arm
+  upscales with DLSS to 1440p; `nrp-nr*` add the neural layer at 1080 lines; `nrp-*fg*` add VFG with a 3x ceiling (the
+  120 cap runs 2x, 180 runs 3x); `nrp-nr-fg-adapt` adds `VEYRA_EXP_RP_NR_ADAPT=1`.
+- The default 4K upscaler target: `-Arms nrp-fg,nrp-sr4k-fg,nrp-nr-sr4k-fg,nrp-nr-sr4k-fg-adapt` (about 11 minutes).
+- Capture card, later: `Run-First-Test.cmd -Session capture -Pass 120 -Arms nrpc-base,nrpc-nr,nrpc-fg,nrpc-nr-fg,nrpc-nr-fg-adapt`
+  (duplicate removal on in every arm; about 14 minutes), then `-Pass 180`.
+- With stream fglat's `VEYRA_EXP_RP_FG_ULL` (its phase part) and `VEYRA_EXP_RP_NR_ADAPT` both on, watch "late/s"
+  (`dropDeadlineFps`): the tighter phase leaves less room for the inferred pairs.
+
+Read per arm: presented spacing P95 / P99 and uneven presents (`[slipstream-cadence]`), pairs skipped and holds, the GPU
+time of the whole graph, the neural layer (P50, P95, worst), optical flow and frame generation against the pair budget,
+frames decoded against frames the engine received and the decoded frames replaced before the engine read them
+(`[slipstream-delivery] replaced`, `[slipstream-latency] decodedToPickupP95`), the in-app latency (software timestamps,
+internal: not input-to-photon), and the inference size and reuse level. docs/drafts/NR_STUTTER.md section 7 says what
+each result means; the adaptive arm is judged by eye too (a reused frame carries the previous inference's change).
 
 ### builds: is Package 8 with everything off the same as Package 7?
 

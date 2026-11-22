@@ -12,14 +12,14 @@ THE SHORTEST WAY                                   the kit prints each session's
                                                    keys, then the DualSense)
   3. Only if you have a capture card (PS5 picture over HDMI into the PC, DualSense plugged into the
      PS5, HDCP off on the PS5: Settings > System > HDMI):
-       Run-First-Test.cmd -Session capture -Pass 120      about 36 minutes, Windows at 120 Hz
-       Run-First-Test.cmd -Session capture -Pass 180      about 36 minutes, Windows at 180 Hz
+       Run-First-Test.cmd -Session capture -Pass 120      about 42 minutes, Windows at 120 Hz
+       Run-First-Test.cmd -Session capture -Pass 180      about 42 minutes, Windows at 180 Hz
                                                    Run each pass twice: once with a 30 FPS game, once
                                                    with a 60 FPS game (four runs). The first time,
                                                    choose your card when the kit asks.
   4. Not run yet from Package 10? These still matter most for the sound and clock fixes:
        Run-First-Test.cmd -Session retest          about 25 minutes, one moving scene
-       Run-First-Test.cmd -Session smoothness -Pass 120   (then -Pass 180)  30 minutes each
+       Run-First-Test.cmd -Session smoothness -Pass 120   (then -Pass 180)  36 minutes each
   5. Play normally for 10 minutes or more and listen: is the sound in step with the picture? Then
      double-click Collect-Diagnostics.cmd.
   Each step ends with ONE zip to send back. Please also tell us the name of your capture card.

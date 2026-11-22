@@ -13,6 +13,7 @@
 //   - the GPU stage times (sample) and the generated-frame counts (ready) for the window.
 // Blind Windows code: unverified on Windows.
 #include "veyra/engine/PushSmoothness.h"
+#include "veyra/engine/PushFgLatency.h"
 #include "veyra/engine/PushAdaptiveFg.h"
 #include "veyra/engine/DisplayFgBudget.h"
 #include "veyra/engine/EnhancementSettings.h"
@@ -93,6 +94,7 @@ class PushSmoothHook {
 public:
     PushSmoothHook() : sw_(pushSmoothSwitches()) {
         if (sw_.stats) window_ = std::make_unique<PushSmoothWindow>();  // about 70 KB, only with the statistics switch
+        if (sw_.stats) latency_ = std::make_unique<PushFgLatencyWindow>();  // stream "fglat": about 40 KB, same switch
         clearShared();   // a stream that ended must not leave its "now 3x" for the next one's row
     }
     ~PushSmoothHook() { clearShared(); }
@@ -108,8 +110,11 @@ public:
     const PushSmoothSwitches& switches() const { return sw_; }
     // Smoothness Mode may run (its target is set): only then are the budget's P95 costs worth computing per pair.
     bool wantsCosts() const {
-        return sw_.envTarget != 0 || pushSmoothTargetValid(pushSmoothShared().targetFps.load(std::memory_order_relaxed));
+        return sw_.envTarget != 0 || ullHeadroom_ || pushSmoothTargetValid(pushSmoothShared().targetFps.load(std::memory_order_relaxed));
     }
+    // Stream "fglat": VEYRA_EXP_RP_FG_ULL part "headroom" (PushFgLatency.h): without a target from the switch or the
+    // interface, Smoothness Mode runs with pushUllHeadroomTarget (below the VRR ceiling). Off: unchanged.
+    void setUllHeadroom(bool on) { ullHeadroom_ = on; }
     // Fills a stage request's display size when the SR-follows-display switch is on (describeStages lowers the SR
     // target with it). Remembered for the window line.
     void display(HWND hwnd, std::uint32_t& width, std::uint32_t& height) {
@@ -146,6 +151,17 @@ public:
     // per level, PushSmoothCostModel: a fixed part per pair, the flow, plus a part per generated frame).
     void groupCost(double fgMs, unsigned generated) { costs_.record(generated, fgMs); }
     void ready(unsigned valid, unsigned invalid) { generated_ += valid; invalid_ += invalid; }
+    // Stream "fglat": the latency fields (PushFgLatency.h PushFgLatencyWindow), statistics switch only. The engine
+    // checks wantsLatency() before it computes anything for them.
+    bool wantsLatency() const { return latency_ != nullptr; }
+    void presentedReal(double ageMs, double holdMs, double phaseMs, double firstMs, double lateMs, bool onPhase, unsigned generatedShown, bool fallback) {
+        if (!latency_) return;
+        latency_->real(ageMs, holdMs, phaseMs, firstMs, onPhase, generatedShown, fallback);
+        latency_->presented(lateMs);
+    }
+    void presentedGenerated(double lateMs) {
+        if (latency_) latency_->presented(lateMs);
+    }
 
     struct Pair {
         bool applies = false;                  // graph frame generation on, not an image, not a present-sink provider
@@ -164,6 +180,7 @@ public:
         const pipeline::EnhanceGraph* graph = nullptr;
         const EnhancementSettings* settings = nullptr;
         std::int64_t now100ns = 0;
+        bool phaseLearned = false;             // the pair phase is learned (LivePairLatency), not the fixed interval + base
     };
     // The multiplier for this pair: `multiplier` (the existing rules' choice) unless a switch or the mode decides.
     unsigned choose(unsigned multiplier, const Pair& p) {
@@ -178,7 +195,7 @@ public:
                 m = pushSmoothCapFitSwitch(m, capGate_.update(fit, p.now100ns));
                 why = "cap-fit";
             }
-            const int target = sw_.envTarget ? sw_.envTarget : pushSmoothShared().targetFps.load(std::memory_order_relaxed);
+            const int target = targetFor(p);
             if (pushSmoothTargetValid(target) && p.ceiling >= 3) {
                 PushSmoothInput in;
                 in.targetFps = target;
@@ -222,6 +239,12 @@ public:
     }
 
 private:
+    // The switch's target, else the interface's, else (VEYRA_EXP_RP_FG_ULL part "headroom") the one below the VRR ceiling.
+    int targetFor(const Pair& p) const {
+        const int target = sw_.envTarget ? sw_.envTarget : pushSmoothShared().targetFps.load(std::memory_order_relaxed);
+        if (pushSmoothTargetValid(target) || !ullHeadroom_) return target;
+        return pushUllHeadroomTarget(p.refreshHz, p.vrr);
+    }
     static double measured(const diagnostics::GpuFrameTiming& timing, diagnostics::GpuStage stage) {
         const auto& s = timing.gpu[static_cast<std::size_t>(stage)];
         return s.state == diagnostics::SampleState::Measured && s.milliseconds ? *s.milliseconds : -1.0;
@@ -292,8 +315,10 @@ private:
         if (!window_->started()) {
             info_ = describe(p);
             window_->restart(p.now100ns, counters(p));
+            if (latency_) latency_->clear();
         }
         window_->pair(m, p.contentFps);
+        phaseLearned_ = p.phaseLearned;
         line_.capFps = p.capFps;
         line_.refreshHz = p.refreshHz;
         line_.vrr = p.vrr;
@@ -303,19 +328,22 @@ private:
         const PushSmoothCounters c = counters(p);
         // A window in which the configuration changed is dropped without a line (never two configurations mixed).
         if (info_.sameConfiguration(now)) {
-            const int target = sw_.envTarget ? sw_.envTarget : pushSmoothShared().targetFps.load(std::memory_order_relaxed);
+            const int target = targetFor(p);
             line_.smoothTarget = pushSmoothTargetValid(target) ? target : 0;
             line_.smoothReason = mode_.applied() ? mode_.reason() : PushSmoothReason::Off;
             line_.smoothDowns = mode_.stepDowns();
             line_.smoothUps = mode_.stepUps();
+            line_.extra = latency_ ? latency_->fields(double(p.now100ns - window_->start()) / 1e7, phaseLearned_) : std::string();
             veyra::log::info("slipstream-smooth", pushSmoothLine(*window_, now, c, p.now100ns, line_));
         }
         info_ = now;
         window_->restart(p.now100ns, c);
+        if (latency_) latency_->clear();
     }
 
     PushSmoothSwitches sw_;   // a copy of the process-wide switches (read once)
     std::unique_ptr<PushSmoothWindow> window_;
+    std::unique_ptr<PushFgLatencyWindow> latency_;
     PushSmoothnessMode mode_;
     PushAdaptiveFgGate capGate_;
     PushSmoothConfigInfo info_;
@@ -324,5 +352,6 @@ private:
     std::uint64_t unique_ = 0, generated_ = 0, invalid_ = 0, holds_ = 0, revision_ = 0;
     std::int64_t lastHold_ = 0;
     std::uint32_t displayW_ = 0, displayH_ = 0;
+    bool ullHeadroom_ = false, phaseLearned_ = false;
 };
 }  // namespace veyra::engine

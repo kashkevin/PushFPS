@@ -244,6 +244,17 @@ GPU time per stage,smoothness,blit P95,slipstream-smooth,,all,gpuBlitP95Ms,media
 GPU time per stage,smoothness,pair budget,slipstream-smooth,,all,pairBudgetMs,median,2,0,0,ms,0
 GPU time per stage,smoothness,GPU load (model),slipstream-smooth,,all,gpuLoadPct,median,1,0,0,%,1
 GPU time per stage,smoothness,Smoothness Mode step-downs,slipstream-smooth,,all,stepDowns,last,0,0,0,,0
+frame generation latency,smoothness|capture,added delay estimate (hold of a ready real frame for its FG deadline) P50,slipstream-smooth,,all,addedEstMs,median,2,0,0,ms,1
+frame generation latency,smoothness|capture,real frame hold P99,slipstream-smooth,,all,realHoldP99Ms,median,2,0,0,ms,1
+frame generation latency,smoothness,real frame decode to Present return P50,slipstream-smooth,,all,realAgeP50Ms,median,2,0,0,ms,1
+frame generation latency,smoothness,real frame decode to Present return P95,slipstream-smooth,,all,realAgeP95Ms,median,2,0,0,ms,1
+frame generation latency,smoothness,real frame decode to Present return P99,slipstream-smooth,,all,realAgeP99Ms,median,2,0,0,ms,1
+frame generation latency,smoothness|capture,pair phase P50,slipstream-smooth,,all,phaseMs,median,2,0,0,ms,1
+frame generation latency,smoothness|capture,pair phase learned,slipstream-smooth,,all,phaseLearned,last-word,0,0,0,,0
+frame generation latency,smoothness|capture,first generated frame ready P50,slipstream-smooth,,all,firstReadyP50Ms,median,2,0,0,ms,1
+frame generation latency,smoothness|capture,present after its deadline P99,slipstream-smooth,,all,presentLateP99Ms,median,2,0,0,ms,1
+frame generation latency,smoothness|capture,real frames on an FG phase without a generated frame/s,slipstream-smooth,,all,deadPhaseFps,median,2,0,0,,1
+frame generation latency,smoothness|capture,real frames shown when ready by a hold/s,slipstream-smooth,,all,fallbackFps,median,2,0,0,,1
 network reception,input|visual|neural|framegen|audiofix|pacing|builds|smoothness|retest,packets missing per 5 s,slipstream-net,,all,missing,median,0,0,0,,0
 network reception,input|visual|neural|framegen|audiofix|pacing|builds|smoothness|retest,missing max,slipstream-net,,all,missing,max,0,0,0,,0
 network reception,input|visual|neural|framegen|audiofix|pacing|builds|smoothness|retest,late (given up) max,slipstream-net,,all,late,max,0,0,0,,0
@@ -315,3 +326,17 @@ capture settings at the end,capture,refresh,slipstream-config,,all,refreshHz,las
 capture settings at the end,capture,VRR requested,slipstream-config,,all,vrrRequested,last-word,0,0,0,,0
 capture settings at the end,capture,pipeline keys applied,slipstream-pipeline,,all,applied,last,0,0,0,,0
 capture settings at the end,capture,pipeline keys refused,slipstream-pipeline,,all,refused,last,0,0,0,,0
+neural layer cost,smoothness|capture,GPU P50,slipstream-smooth,,all,gpuNrP50Ms,median,2,0,0,ms,0
+neural layer cost,smoothness|capture,GPU P95,slipstream-smooth,,all,gpuNrP95Ms,median,2,0,0,ms,1
+neural layer cost,smoothness|capture,GPU worst 5 s P95,slipstream-smooth,,all,gpuNrP95Ms,max,2,0,0,ms,0
+neural layer cost,smoothness|capture,optical flow P95,slipstream-smooth,,all,gpuFlowP95Ms,median,2,0,0,ms,1
+neural layer cost,capture,whole graph P95,slipstream-smooth,,all,gpuSpanP95Ms,median,2,0,0,ms,1
+neural layer cost,capture,pair budget,slipstream-smooth,,all,pairBudgetMs,median,2,0,0,ms,0
+neural layer cost,capture,GPU load (model),slipstream-smooth,,all,gpuLoadPct,median,1,0,0,%,1
+neural layer cost,smoothness|capture,inference size,nr-model,,all,internal,last-word,0,0,0,,0
+neural layer cost,smoothness|capture,inference reuse level at the end,nr-reuse,,all,level,last,0,0,0,,0
+neural layer cost,smoothness|capture,adaptive switch,nr-adapt,,all,reason,last-word,0,0,0,,0
+lost before the engine,smoothness,decoded frames replaced per 5 s (delivery),slipstream-delivery,,all,replaced,median,0,0,0,,1
+lost before the engine,smoothness,decoded frames replaced max (delivery),slipstream-delivery,,all,replaced,max,0,0,0,,0
+lost before the engine,smoothness,decode to pickup P95,slipstream-latency,,all,decodedToPickupP95,median,2,0,0,ms,1
+lost before the engine,smoothness,mailbox overwrites per 5 s (only with -Health),remoteplay-health,,all,mailboxOverwrites,median,0,0,0,,1

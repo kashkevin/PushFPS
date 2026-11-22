@@ -290,7 +290,7 @@ function Get-UtcStamp {
 # --- redaction -----------------------------------------------------------------------------------
 # The same rules are in tools/remoteplay_latency_bench/report.py (redact_line), which is tested on Linux
 # and checks every received evidence folder again. Change both together.
-$allowedLine = '\[(INFO |WARN |ERROR|TRACE)\] \[(push-(latency|quality|benchmark|mode|hardware|profile|adaptive-fg)|remoteplay(-[a-z0-9-]+)?|slipstream-(governor|gpu-budget|watch|config|latency|latency-test|press|delivery|sr|fg|autorun|smartlink|swapchain|present|pipeline|nr|clean|quality|input|input-poll|scanout|cadence|net|smooth|capture)|capture-(driver-age|buffer)|nr-runtime-status|frame-(flow|rate)|pacing|present-deviation|present-contract|qml-window|ui-(dialog|fullscreen|window|resume)|fg-(validity|drops)|display-(vrr|refresh|latency|query)|gpu-(failure|reconnect)|reset-lifecycle|engine-(hang|test)|crash|overlay-hooks|log-backpressure|qml\] \[update-check)\] '
+$allowedLine = '\[(INFO |WARN |ERROR|TRACE)\] \[(push-(latency|quality|benchmark|mode|hardware|profile|adaptive-fg)|remoteplay(-[a-z0-9-]+)?|slipstream-(governor|gpu-budget|watch|config|latency|latency-test|press|delivery|sr|fg|autorun|smartlink|swapchain|present|pipeline|nr|clean|quality|input|input-poll|scanout|cadence|net|smooth|capture)|capture-(driver-age|buffer)|nr-(runtime-status|adapt|reuse|model)|frame-(flow|rate)|pacing|present-deviation|present-contract|qml-window|ui-(dialog|fullscreen|window|resume)|fg-(validity|drops|ull)|display-(vrr|refresh|latency|query)|gpu-(failure|reconnect)|reset-lifecycle|engine-(hang|test)|crash|overlay-hooks|log-backpressure|qml\] \[update-check)\] '
 $refusedLine = '\[remoteplay-discovery\]|registration|regist[_ -]?key|rp[_ -]?key|account|psn(?!r=)|token|secret|passw|ssid|morning|nickname'
 
 function Protect-Text([string]$Line) {
@@ -426,10 +426,11 @@ function Get-ArmPrefs($Arm) {
     $table = @{}
     # pushSmoothTarget 0: the fixed arms never inherit a Smoothness Mode chosen earlier in this folder (Package 9 integration
     # review); the sm-mode-* arms set it through VEYRA_EXP_RP_SMOOTH_TARGET.
-    if ([string]$Arm.set -eq 'smoothness') { $table['fgAdaptive'] = $false; $table['pacingRepair'] = $false; $table['pushSmoothTarget'] = 0 }
+    # the nrperf sets (stream nrperf) run inside the smoothness and capture sessions with -Arms and are treated as their arms
+    if (@('smoothness', 'nrperf') -contains [string]$Arm.set) { $table['fgAdaptive'] = $false; $table['pacingRepair'] = $false; $table['pushSmoothTarget'] = 0 }
     # the capture session (stream capture): automatic buffering unless the arm names it; Smoothness Mode, the adaptive multiplier
     # and pacing repair off, so no arm inherits them from the shared capture settings folder
-    if ([string]$Arm.set -eq 'capture') { $table['captureBufferMode'] = 0; $table['fgAdaptive'] = $false; $table['pacingRepair'] = $false; $table['pushSmoothTarget'] = 0 }
+    if (@('capture', 'nrperf-capture') -contains [string]$Arm.set) { $table['captureBufferMode'] = 0; $table['fgAdaptive'] = $false; $table['pacingRepair'] = $false; $table['pushSmoothTarget'] = 0 }
     if (-not $Arm.switches) { return $table }
     foreach ($pair in ($Arm.switches -split ';')) {
         if ($pair -match '^pref:(pushAutoFullscreen)=(true|false)$') { $table[$Matches[1]] = ($Matches[2] -eq 'true') }
@@ -1118,7 +1119,7 @@ function Invoke-ArmRun($Arm, [string]$Exe, [string]$Purpose, [int]$LimitSeconds,
         $plan = Get-AutorunPlan $Purpose $trials $testsWanted
         # the capture session starts the remembered capture card instead of connecting to the PS5 (stream capture)
         $startSwitch = 'VEYRA_TEST_RP_AUTOCONNECT'
-        if ([string]$Arm.set -eq 'capture') { $startSwitch = 'VEYRA_TEST_RP_CAPTURE' }
+        if (@('capture', 'nrperf-capture') -contains [string]$Arm.set) { $startSwitch = 'VEYRA_TEST_RP_CAPTURE' }
         foreach ($pair in @(('VEYRA_EXP_RP_STATS', '1'), ($startSwitch, '1'), ('VEYRA_TEST_RP_AUTORUN', $plan))) {
             if (-not $switches.ContainsKey($pair[0])) { Set-Item -Path ('Env:' + $pair[0]) -Value $pair[1]; $kitSwitches += ($pair[0] + '=' + $pair[1]) }
         }
@@ -1129,8 +1130,8 @@ function Invoke-ArmRun($Arm, [string]$Exe, [string]$Purpose, [int]$LimitSeconds,
     # settings folder, so the plain test profile of the other sessions never inherits them.
     $profileKind = [string]$Arm.exe
     if ($switches.ContainsKey('VEYRA_TEST_RP_PIPELINE')) { $profileKind += '-pipeline' }
-    if ([string]$Arm.set -eq 'smoothness') { $profileKind += '-smoothness' }   # its prefs (vrr, adaptive, repair) stay out of the other sessions' folders
-    if ([string]$Arm.set -eq 'capture') { $profileKind = [string]$Arm.exe + '-capture' }   # the folder that remembers the capture card (Invoke-CaptureSetup)
+    if (@('smoothness', 'nrperf') -contains [string]$Arm.set) { $profileKind += '-smoothness' }   # its prefs (vrr, adaptive, repair) stay out of the other sessions' folders
+    if (@('capture', 'nrperf-capture') -contains [string]$Arm.set) { $profileKind = [string]$Arm.exe + '-capture' }   # the folder that remembers the capture card (Invoke-CaptureSetup)
     if ($profiled) { $exeArgs = '--data-dir "' + (Write-TestProfile $profileKind (-not $automatic) (Get-ArmPrefs $Arm)) + '"' }
     $before = Get-LogSizes $logFolder
     $traceSince = (Get-Date).ToUniversalTime().AddSeconds(-2)   # trace files written after this belong to this run
@@ -1191,7 +1192,7 @@ function Invoke-ArmRun($Arm, [string]$Exe, [string]$Purpose, [int]$LimitSeconds,
     if ($profiled) { Write-Host '  Started with the kit''s test profile (low-latency queue, V-Sync, smooth pacing, full screen on connect); your own settings are untouched.' }
 
     if ($automatic) {
-        if ([string]$Arm.set -eq 'capture') { Write-Host ('  Automatic: PushFPS starts your capture card (no PS5 connection) and runs ' + $plan + ' by itself. Keep the game moving as the session asks.') -ForegroundColor Green }
+        if (@('capture', 'nrperf-capture') -contains [string]$Arm.set) { Write-Host ('  Automatic: PushFPS starts your capture card (no PS5 connection) and runs ' + $plan + ' by itself. Keep the game moving as the session asks.') -ForegroundColor Green }
         elseif ($Purpose -eq 'network') { Write-Host ('  Automatic: PushFPS connects to the last console and runs ' + $plan + ' by itself.') -ForegroundColor Green }
         else { Write-Host ('  Automatic: PushFPS connects to the last console and runs ' + $plan + ' by itself. Do not touch the controller.') -ForegroundColor Green }
         Write-Host '  If it cannot (no console paired in this copy, or a build without automation), the kit says so and shows the steps to do by hand.'
@@ -1879,7 +1880,7 @@ function Add-DryRunLog([string]$LogFolder, [string]$Purpose, [string]$ArmName, [
         if (($srAsked -eq '1') -and ($ArmSwitches -match 'VEYRA_EXP_RP_SMOOTH_SR_DISPLAY=1')) { $srUsed = '0' }
         $work = '1920x1080'
         if ($srUsed -eq '0') { $work = '2560x1440' } elseif ($srUsed -eq '1') { $work = '3840x2160' }
-        $smoothLine = '[INFO ] [slipstream-smooth] window=5.0 backend=vfg ceiling=3X chosen=3X chosenMin=3X chosenMax=3X changes=0 why=cap contentFps=59.94 capFps=179.95 refreshHz=179.950 vrr=1 source=1920x1080 work=' + $work + ' flow=1920x1080 display=2560x1440 srTarget=' + $srUsed + ' srTargetAsked=' + $srAsked + ' receivedFps=59.94 uniqueFps=59.94 evaluatedPairsFps=59.70 rejectedPairsFps=0.24 fastPairsFps=0.00 generatedFps=119.40 invalidFps=0.00 dropCapFps=0.00 dropDeadlineFps=0.40 dropCapacityFps=0.00 resets=0 holds=0 gpuColorP50Ms=0.200 gpuColorP95Ms=0.300 gpuCleanP50Ms=-1.000 gpuCleanP95Ms=-1.000 gpuSrP50Ms=2.000 gpuSrP95Ms=2.400 gpuNrP50Ms=-1.000 gpuNrP95Ms=-1.000 gpuFlowP50Ms=-1.000 gpuFlowP95Ms=-1.000 gpuFgP50Ms=6.000 gpuFgP95Ms=7.000 gpuBlitP50Ms=0.300 gpuBlitP95Ms=0.400 gpuSpanP50Ms=9.000 gpuSpanP95Ms=10.500 gpuFrames=299 pairBudgetMs=16.683 gpuLoadPct=54.0 smooth=0 smoothReason=off stepDowns=0 stepUps=0 srFollow=0 capFit=0 steady=0 (counts before Present; what reached the panel: [slipstream-cadence] / PresentMon; gpuLoadPct is a model)'
+        $smoothLine = '[INFO ] [slipstream-smooth] window=5.0 backend=vfg ceiling=3X chosen=3X chosenMin=3X chosenMax=3X changes=0 why=cap contentFps=59.94 capFps=179.95 refreshHz=179.950 vrr=1 source=1920x1080 work=' + $work + ' flow=1920x1080 display=2560x1440 srTarget=' + $srUsed + ' srTargetAsked=' + $srAsked + ' receivedFps=59.94 uniqueFps=59.94 evaluatedPairsFps=59.70 rejectedPairsFps=0.24 fastPairsFps=0.00 generatedFps=119.40 invalidFps=0.00 dropCapFps=0.00 dropDeadlineFps=0.40 dropCapacityFps=0.00 resets=0 holds=0 gpuColorP50Ms=0.200 gpuColorP95Ms=0.300 gpuCleanP50Ms=-1.000 gpuCleanP95Ms=-1.000 gpuSrP50Ms=2.000 gpuSrP95Ms=2.400 gpuNrP50Ms=-1.000 gpuNrP95Ms=-1.000 gpuFlowP50Ms=-1.000 gpuFlowP95Ms=-1.000 gpuFgP50Ms=6.000 gpuFgP95Ms=7.000 gpuBlitP50Ms=0.300 gpuBlitP95Ms=0.400 gpuSpanP50Ms=9.000 gpuSpanP95Ms=10.500 gpuFrames=299 pairBudgetMs=16.683 gpuLoadPct=54.0 smooth=0 smoothReason=off stepDowns=0 stepUps=0 srFollow=0 capFit=0 steady=0 realAgeP50Ms=26.500 realAgeP95Ms=29.000 realAgeP99Ms=31.000 addedEstMs=12.400 realHoldP95Ms=13.800 realHoldP99Ms=14.600 phaseMs=17.900 phaseLearned=0 firstReadyP50Ms=6.100 firstReadyP95Ms=7.400 presentLateP95Ms=0.300 presentLateP99Ms=0.600 deadPhaseFps=0.240 fallbackFps=0.000 (counts before Present; what reached the panel: [slipstream-cadence] / PresentMon; gpuLoadPct is a model)'
         for ($i = 0; $i -lt 3; $i++) { $made += $smoothLine }
         for ($i = 0; $i -lt 3; $i++) { $made += ('[INFO ] [slipstream-cadence] window=5 submittedFps=' + $subFps + ' realFps=59.90 generatedFps=' + $genFps + ' intervals=300 intervalP50Ms=8.33 intervalP95Ms=9.10 intervalP99Ms=10.20 intervalMaxMs=16.90 offPct=' + $offText + ' refreshHz=179.95 vrr=' + $vrrWord + ' fixedHold1=' + $h1 + ' fixedHold2=' + $h2 + ' fixedHold3=' + $h3 + ' fixedUnevenPct=' + $unevenText + ' fixedShownFps=119.80 evenFps=89.98 evenDivisor=2 overflow=0') }
     }
@@ -1914,7 +1915,7 @@ function Add-DryRunLog([string]$LogFolder, [string]$Purpose, [string]$ArmName, [
         $shown = $real * $mult
         $interval = 1000.0 / $shown
         for ($i = 0; $i -lt 3; $i++) { $made += ('[INFO ] [slipstream-cadence] window=5 submittedFps=' + $shown.ToString('F2', $inv) + ' realFps=' + $real.ToString('F2', $inv) + ' generatedFps=' + ($shown - $real).ToString('F2', $inv) + ' intervals=300 intervalP50Ms=' + $interval.ToString('F2', $inv) + ' intervalP95Ms=' + ($interval + 0.8).ToString('F2', $inv) + ' intervalP99Ms=' + ($interval + 1.5).ToString('F2', $inv) + ' intervalMaxMs=' + ($interval + 4.0).ToString('F2', $inv) + ' offPct=0.5 refreshHz=179.95 vrr=1 fixedHold1=0 fixedHold2=0 fixedHold3=0 fixedUnevenPct=0.0 fixedShownFps=' + $shown.ToString('F2', $inv) + ' evenFps=' + $shown.ToString('F2', $inv) + ' evenDivisor=1 overflow=0 pauses=0 (made up)') }
-        for ($i = 0; $i -lt 3; $i++) { $made += ('[INFO ] [slipstream-smooth] window=5.0 backend=vfg ceiling=' + $mult + 'X chosen=' + $mult + 'X chosenMin=' + $mult + 'X chosenMax=' + $mult + 'X changes=0 why=user contentFps=29.97 capFps=179.95 refreshHz=179.950 vrr=1 source=1920x1080 work=1920x1080 flow=1920x1080 display=2560x1440 srTarget=-1 srTargetAsked=-1 receivedFps=59.94 uniqueFps=' + $pairs.ToString('F2', $inv) + ' rejectedPairsFps=0.00 generatedFps=' + $gen.ToString('F2', $inv) + ' dropCapFps=0.00 dropDeadlineFps=0.10 holds=0 gpuSpanP95Ms=9.50 gpuFgP95Ms=7.20 gpuSrP95Ms=-1 pairBudgetMs=33.33 (made up)') }
+        for ($i = 0; $i -lt 3; $i++) { $made += ('[INFO ] [slipstream-smooth] window=5.0 backend=vfg ceiling=' + $mult + 'X chosen=' + $mult + 'X chosenMin=' + $mult + 'X chosenMax=' + $mult + 'X changes=0 why=user contentFps=29.97 capFps=179.95 refreshHz=179.950 vrr=1 source=1920x1080 work=1920x1080 flow=1920x1080 display=2560x1440 srTarget=-1 srTargetAsked=-1 receivedFps=59.94 uniqueFps=' + $pairs.ToString('F2', $inv) + ' rejectedPairsFps=0.00 generatedFps=' + $gen.ToString('F2', $inv) + ' dropCapFps=0.00 dropDeadlineFps=0.10 holds=0 gpuSpanP95Ms=9.50 gpuFgP95Ms=7.20 gpuSrP95Ms=-1 pairBudgetMs=33.33 realAgeP50Ms=-1.000 realAgeP95Ms=-1.000 realAgeP99Ms=-1.000 addedEstMs=24.500 realHoldP95Ms=26.000 realHoldP99Ms=27.200 phaseMs=29.500 phaseLearned=1 firstReadyP50Ms=7.500 firstReadyP95Ms=9.000 presentLateP95Ms=0.200 presentLateP99Ms=0.400 deadPhaseFps=0.000 fallbackFps=0.000 (made up)') }
     }
     # kit 5: two more seconds of display timing well after the first one, so the steady state (after 3 s) has values too
     for ($i = 0; $i -lt 2; $i++) { $made += '[INFO ] [display-latency] presentToScanoutP50Ms=1.200 presentToScanoutP95Ms=3.900 presentToScanoutMaxMs=5.100 samples=9 replacedAtLeast=0 compositionMode=2 refreshHz=180.000 (made up)' }

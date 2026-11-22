@@ -6,19 +6,21 @@
 # so that no package ships with a blank. Plain ASCII, lines of at most 100 characters, two spaces of indent.
 # Rule: say what was compiled, run and tested and on which machine; anything that only passed checks on GitHub's
 # Windows machine has NOT run on a gaming PC. Never write "validated" or a latency figure here.
-  Experimental build: build-windows number 64 (run 44975871790), 22 November 2026, compiled by
-  MSVC with warnings as errors and every check below passed; the source is archived as
-  archive/4462a475 (the text fixes made after it change no code).
+  Experimental build: build-windows number 66 (run 44980732479), 22 November 2026, compiled by
+  MSVC with warnings as errors and every step passed; the source is archived as
+  archive/c41755fe. One change came after it, to the test kit only (the [fg-ull] log lines are
+  now kept in the evidence); the program itself is exactly what build 66 compiled.
   On GitHub's Windows machine (software renderer, no graphics card, no PS5, no capture card): the
-  unit tests, the controller test on a virtual gamepad, the GPU tests, the strict QML tests, the
-  install test, remoteplay-checks number 192 (Linux and MSVC core tests, sanitizers, the kit's dry
-  runs of every session including input and capture) and checks number 207: all passed. 969 core
-  tests pass on Linux, 123 of them for keyboard and mouse.
-  Independent reviews (a reviewer who did not write the code): capture card frame generation and
-  the keyboard and mouse changes were each accepted after two rounds; a reviewer recomputed that
-  your existing mouse profiles send byte-identical controller states (1.6 million events). Both
-  merges were checked line by line (no line lost) and the merged Package 11 was reviewed and
-  accepted with text fixes, all made before packaging.
+  unit tests, the controller test on a virtual gamepad, the GPU tests, 394 QML tests in 27
+  suites, the install test, remoteplay-checks number 201 (986 core tests on Linux, plain and
+  with sanitizers, and with MSVC; the kit's dry runs of every session) and checks number 218:
+  all passed. After the kit change: remoteplay-checks number 204 and checks number 222 passed,
+  and 236 kit tests passed.
+  Independent reviews (a reviewer who did not write the code): the frame generation delay work
+  and the "DLSS 5" stutter work were each accepted, and their minor findings were fixed. The
+  merged Package 12 was checked line by line against Package 11 and both parts (no line lost or
+  doubled; nothing new on without a choice) and accepted with one fix to the test kit, made
+  before packaging.
   The builds were compiled, installed and started on GitHub's Windows build machine (no graphics
   card, no PS5, no screen to measure). On a real PC only these have run: package 6 once (19 November
   2026, PS5 over Wi-Fi, software counters) and package 7 twice (20 November 2026, PS5 over Wi-Fi:

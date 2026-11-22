@@ -12,6 +12,18 @@ has no graphics card (software renderer), no PS5 and no screen to measure (see "
 in the other documents that come from Linux models and simulators are models. Software timestamps are
 not proof of input-to-photon latency: only a camera or a light sensor on the screen is.
 
+## Package 12 (22 November 2026): frame generation delay and the "DLSS 5" stutter
+
+Everything of Package 11 (below) plus the rows here. **None of it has run on a gaming PC, a graphics card or a PS5.**
+Nothing new is on by default.
+
+| Part | Default? | Tested where | Review | Physically validated |
+|---|---|---|---|---|
+| Frame generation delay audit docs/drafts/FG_LATENCY.md (the three largest sources; extrapolation studied, not built) | doc | code reading | accepted | no: your smoothness passes |
+| `VEYRA_EXP_RP_FG_ULL` (parts hold, phase, headroom, grace; `include/veyra/engine/PushFgLatency.h`); new `[slipstream-smooth]` latency fields with `VEYRA_EXP_RP_STATS=1`; kit arms `sm-fg2-ull`, `sm-fg3-ull`, `cap-fg4-ull`, `cap-fg6-ull` | off | unit tests (plain, TSan, ASan+UBSan), kit dry run | accepted, three minor findings fixed | no |
+| "DLSS 5" stutter analysis docs/drafts/NR_STUTTER.md (NVIDIA's neural runtime on the decoded video; likely cause and decision table; placement study: keep the order) | doc | code reading | accepted | no: your four-way runs |
+| `VEYRA_EXP_RP_NR_ADAPT=1` (neural-layer result reuse under a time budget, `include/veyra/engine/PushNrAdapt.h`); kit arms `nrp-*`, `nrpc-*` | off | unit tests, kit dry run | accepted, two doc findings fixed | no |
+
 ## Package 11 (22 November 2026): capture card frame generation and GTA V-style mouse and keyboard
 
 Everything of Package 10 (below) plus the rows here. **None of it has run on a gaming PC, a graphics card, a capture

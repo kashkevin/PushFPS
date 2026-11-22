@@ -180,6 +180,18 @@ class KitFiles(unittest.TestCase):
         for name in ("run-tests.ps1", "collect-diagnostics.ps1"):
             with open(os.path.join(self.kit, name), encoding="ascii") as f: self.assertIn("|cadence|net|smooth|capture)", f.read())
 
+    def test_the_ull_lines_are_copied_by_the_kit(self):
+        # Stream fglat: the [fg-ull] lines FG_LATENCY.md tells the reader to look for must pass the kit's allowlist
+        # (it was missing when Package 12 was merged). Both formats as EngineController.cpp writes them.
+        lines = ["2026-11-22T08:00:00.000Z t=1 [INFO ] [fg-ull] experiment: Ultra Low Latency Frame Generation "
+                 "parts=hold,phase understood=true (VEYRA_EXP_RP_FG_ULL)",
+                 "2026-11-22T08:00:01.000Z t=2 [INFO ] [fg-ull] revision=3 held=true why=settling source=120 heldPairs=4 "
+                 "heldProbes=1 entries=1 (real frames shown when ready instead of on the FG phase while no generated frame "
+                 "of their pair is shown; 3 admitted pairs in a row resume)"]
+        self.assertEqual(report.safe_lines(lines), lines)
+        for name in ("run-tests.ps1", "collect-diagnostics.ps1"):
+            with open(os.path.join(self.kit, name), encoding="ascii") as f: self.assertIn("fg-(validity|drops|ull)", f.read())
+
     def test_arm_table_is_well_formed(self):
         with open(os.path.join(self.kit, "run-tests.ps1"), encoding="ascii") as f: kit_text = f.read()
         # the kit's own switch rule (Get-ArmSwitches, also run for every arm in Read-ArmTable at start-up) is the one checked below
@@ -190,7 +202,7 @@ class KitFiles(unittest.TestCase):
         for name, row in table.items():
             self.assertRegex(name, r"^[A-Za-z0-9-]+$")
             self.assertEqual(set(row), {"name", "exe", "set", "compare", "switches", "note", "fg", "differs"}, name)       # a comma in a note would add a column
-            self.assertIn(row["exe"], ("original", "modified", "experimental", "previous")); self.assertIn(row["set"], ("quick", "standard", "experimental", "versus", "switches", "quality", "probe", "network", "network-builds", "network-wifi-mode", "clarity", "netdiag") + report.MEASURE_SESSIONS)
+            self.assertIn(row["exe"], ("original", "modified", "experimental", "previous")); self.assertIn(row["set"], ("quick", "standard", "experimental", "versus", "switches", "quality", "probe", "network", "network-builds", "network-wifi-mode", "clarity", "netdiag", "nrperf", "nrperf-capture") + report.MEASURE_SESSIONS)
             if row["exe"] == "previous": self.assertEqual(row["set"], "builds", name)                    # Package 7's build only in the regression session
             if row["set"] in ("switches", "quality", "probe", "network", "network-wifi-mode", "netdiag"): self.assertEqual(row["exe"], "experimental", name)
             self.assertIn(row["fg"], ("off", "on"), name); self.assertEqual(row["fg"] == "on", "frame generation on" in row["note"].lower(), name)
@@ -199,7 +211,7 @@ class KitFiles(unittest.TestCase):
             for pair in filter(None, row["switches"].split(";")): self.assertRegex(pair, r"^(VEYRA_(EXP|TEST)_(RP|PRESENT|SR|PIPE)_[A-Z0-9_]+=[^=;]+|pref:(pushAutoFullscreen|vrr|fgAdaptive|pacingRepair)=(true|false)|pref:captureBufferMode=[012]|pipeline:[A-Za-z0-9]+=[A-Za-z0-9.-]+(\|[A-Za-z0-9]+=[A-Za-z0-9.-]+)*)$")
         self.assertEqual([n for n, r in table.items() if r["set"] == "quick"], ["original", "mod-legacy", "mod-all"])
         self.assertEqual(table["original"]["switches"], ""); self.assertEqual(table["mod-all"]["switches"], "")
-        self.assertTrue(all(r["set"] in ("experimental", "versus", "switches", "probe", "network", "network-wifi-mode", "input", "audiofix", "pacing", "smoothness", "neural", "clarity", "netdiag", "retest", "capture") for n, r in table.items() if "VEYRA_EXP_" in r["switches"]))   # experiments only when asked
+        self.assertTrue(all(r["set"] in ("experimental", "versus", "switches", "probe", "network", "network-wifi-mode", "input", "audiofix", "pacing", "smoothness", "neural", "clarity", "netdiag", "retest", "capture", "nrperf", "nrperf-capture") for n, r in table.items() if "VEYRA_EXP_" in r["switches"]))   # experiments only when asked
         self.assertEqual([n for n, r in table.items() if "STREAM_DEDUP" in r["switches"]], ["p-dedup"])
         versus = {n: r for n, r in table.items() if r["set"] == "versus"}
         self.assertEqual(versus["stable"]["exe"], "modified"); self.assertEqual(versus["x-base"]["compare"], "stable")

@@ -3420,3 +3420,74 @@ Remote Play is untouched; nothing changes for a user who sets nothing. Unverifie
 - Kit: `-Session capture` (13 arms, about 36 minutes; `-Pass 120` / `-Pass 180` allowed); the first time it starts
   PushFPS once with its own capture settings folder so the owner chooses the card; arms may set
   `pref:captureBufferMode=0|1|2`.
+
+## Ultra Low Latency Frame Generation (stream "fglat", `VEYRA_EXP_RP_FG_ULL`)
+
+Read once per process; off unless set. Named `VEYRA_EXP_RP_*` so the kit may set it (its switch rule); it applies to
+capture cards as well as PS5 streams. `1` or `all` turns every part on; otherwise a comma-separated list of parts
+(`hold`, `phase`, `headroom`, `grace`). Any other value (an unknown or empty part, upper case, spaces) turns nothing on
+and is logged as `[fg-ull] ... understood=false`. Why each part exists: docs/drafts/FG_LATENCY.md. Graph frame
+generation only (not XeSS, which paces inside its own presenter). Unverified on Windows; nothing measured.
+- `hold` (no dead FG phase; `engine/PushFgLatency.h` `PushFgFallbackHold`): a pair whose generated frames are not shown
+  no longer holds its real frame for them. While a FgCostSettling hold runs (2, 4 or 8 s in which the budget admits no
+  pair) the real frames go out as soon as they are ready from the first skipped pair; after 250 ms of nothing but
+  skipped pairs otherwise (LiveFgRejectionHold: 1 s, and on capture-card timing only); on PS5 streams too. A single
+  skipped pair between admitted ones keeps the phase. FG resumes on its phase after 8 admitted pairs in a row (as
+  LiveFgRejectionHold). Each hold costs two uneven moments: the picture jumps one phase forward when it starts and stands
+  still for one phase when it ends (FG_LATENCY.md section 5.1). `[fg-ull] held=1|0 why=settling|rejected entries=` on each change.
+- `phase` (source 3 of FG_LATENCY.md): a PS5 stream learns its pair phase as a capture card does, exactly what
+  `VEYRA_EXP_RP_ADAPTIVE_PHASE=1` does (and with it the 0-1 ms deadline margin). The real frame is then shown
+  (M-1)/M of an interval plus the first generated frame's readiness after decode instead of a whole interval plus the base
+  cost's P95. `[remoteplay-timing] experiment: adaptive pair phase ... (VEYRA_EXP_RP_FG_ULL part phase)`.
+- `headroom`: under confirmed variable refresh, and only when neither `VEYRA_EXP_RP_SMOOTH_TARGET` nor the interface's
+  Smoothness Mode sets a target, Smoothness Mode runs with the largest of 180 / 120 / 90 / 60 that is at most 97 % of the
+  refresh (179.95 Hz: 120, so a 60 fps game runs 2X and a 30 fps game 4X instead of 3X / 6X at the VRR ceiling). Its own
+  rules then apply (never below 2X, a step down after 1 s of predicted load over 0.92 or 10 % of pairs rejected, back up
+  after 5 s). Fixed refresh or VRR unknown: no automatic target. `[slipstream-smooth] smooth=` shows the target.
+- `grace`: a live generated frame is dropped instead of shown when it is later than half its output interval (at least
+  1 ms; the default allows 10 ms) plus the distance between its callback and its smoothed anchor (unchanged), so a late
+  generated frame cannot push its real frame to the next refresh. Counted in `dropDeadlineFps`.
+- Diagnostics (with `VEYRA_EXP_RP_STATS=1` only, with or without `VEYRA_EXP_RP_FG_ULL`): `[slipstream-smooth]` gains, before
+  its closing note, `realAgeP50/P95/P99Ms` (decode -> Present return of real frames; -1 on a capture card, whose
+  `[slipstream-capture] realLat` is the same measure), `addedEstMs` (ESTIMATE of FG's PC-side added delay: the P50 of a
+  ready real frame's wait for its FG deadline), `realHoldP95/P99Ms`, `phaseMs` (P50 of deadline minus decode / callback),
+  `phaseLearned`, `firstReadyP50/P95Ms` (decode / callback -> first generated frame seen ready), `presentLateP95/P99Ms`
+  (Present call minus deadline), `deadPhaseFps` (real frames on an FG phase with no generated frame of their pair shown)
+  and `fallbackFps` (real frames shown when ready because a hold, LiveFgRejectionHold or the ULL hold, held frame
+  generation off). Software times on the PC's clock, CPU observations of GPU fences; never input-to-photon.
+- Kit: `sm-fg2-ull`, `sm-fg3-ull`, `cap-fg4-ull`, `cap-fg6-ull` set `VEYRA_EXP_RP_FG_ULL=1`, every part at once (in the 3X / 6X
+  arms the headroom part also lowers the multiplier); a part can become a default only after an arm of its own.
+
+## Neural layer with frame generation: adaptive inference reuse (stream "nrperf", 22 Nov 2026)
+
+Why: `docs/drafts/NR_STUTTER.md` (cause C1: a live source is processed one pair at a time, so a pair whose GPU work,
+the neural layer included, is longer than its interval loses decoded frames in the mailbox and generated frames to
+admission). Unverified on Windows; nothing measured; nothing changes for a user who sets nothing.
+- `VEYRA_EXP_RP_NR_ADAPT=1` (exactly 1, read once per process; `engine/PushNrAdapt.h`, tests
+  `tests/remoteplay/NrAdaptTests.inc`): in a live session (PS5 / Moonlight / Xbox stream, capture card, screen, frame
+  input) with the neural layer (NVIDIA's runtime on an NVIDIA card) and graph frame generation on, a neural inference
+  reuse mode the user left **Off** runs as **Auto**: upstream's `AutoNrReuseController` (docs/NR_INFERENCE_REUSE_2026-11-07.md),
+  unchanged, which after 0.5 s of mean enhancement time (generated frames included) over its budget lets 1 frame in 4,
+  then 3, then 2 skip the inference and carry the previous inference's change along the optical flow (the next frame
+  always infers), and goes back one level after 3 s with 15 % to spare. Its budget becomes 80 % of the PAIR interval
+  (the measured content rate when duplicate removal has one, else the stream rate) instead of the stream rate alone.
+  A reuse mode the user chose is never changed; frame generation off, XeSS present-sink generation, AMD's runtime, files
+  and images: unchanged. It adds no buffer and no wait; the reuse pass's motion pass runs on every real frame (also at
+  level 0) in series with the base, so it adds its GPU time to each real frame and so to the pair phase (Remote Play:
+  T + P95 of the base; capture cards: the learned readiness P95): small, unmeasured. A reused frame itself does less GPU
+  work. With stream fglat's `VEYRA_EXP_RP_FG_ULL` (its phase part) on as well, watch `[slipstream-smooth]
+  dropDeadlineFps`: a tighter phase plus inferred and reused pairs of different cost leaves less room for the costly
+  ones. Lines: `[nr-adapt] reuse=auto|unchanged
+  reason=pair-budget|switch-off|not-live|no-neural-layer|no-frame-generation|present-sink-fg|not-ngx|user-choice` at each
+  graph build; the existing `[nr-reuse] active mode=1 ...` / `inactive reason=...` (the graph's own eligibility: optical
+  flow motion, no protection between layers, no split around the upscaler) and `[nr-reuse] auto level= framesPerReuse=
+  meanMs= nrMs= budgetMs=` on every level change. What it can and cannot fix (estimate, NR_STUTTER.md section 4):
+  configurations whose inferred pair and reused pair together fit in two intervals (Enhanced 1440p at 3X, SR to 4K at
+  2X with VFG Medium); not VFG High or `nrSize=native` at 4K. Picture risk: a reused frame's change is one source frame
+  old and falls back to the unenhanced pixel where the flow does not match (upstream measured 45.7 dB on a real game
+  pan, 0.13 % of pixels off by more than 8, on its own PC); judge `nrp-nr-fg-adapt` against `nrp-nr-fg` by eye.
+  Cost of the switch itself while nothing is reused (level 0): the reuse pass exists, so one compute pass at the flow
+  size runs per real frame (the motion chain, `NrReusePass::compose`; unmeasured, small) and its textures take about
+  100 MB at a 1440p work size, 175 MB at 4K (two RGBA16F at the chain size, two RGBA16F and one RG16F at the flow size;
+  arithmetic). Kit arms: `nrp-*` / `nrpc-*` (docs/HARDWARE_TEST_PROCEDURE.md, the neural layer with and without frame
+  generation).

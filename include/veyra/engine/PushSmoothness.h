@@ -529,6 +529,7 @@ struct PushSmoothLineInputs {
     PushSmoothReason smoothReason = PushSmoothReason::Off;
     std::uint64_t smoothDowns = 0, smoothUps = 0;
     std::string why = "user";                // what chose the last multiplier: user | cap | cap-fit | adaptive | smooth
+    std::string extra;                       // more fields, each with a leading space (stream "fglat": PushFgLatencyWindow)
 };
 
 namespace detail_smooth {
@@ -589,6 +590,7 @@ inline std::string pushSmoothLine(const PushSmoothWindow& w, const PushSmoothCon
     s += " smooth=" + std::to_string(x.smoothTarget) + " smoothReason=" + std::string(pushSmoothReasonName(x.smoothReason)) +
          " stepDowns=" + std::to_string(x.smoothDowns) + " stepUps=" + std::to_string(x.smoothUps);
     s += std::string(" srFollow=") + (info.srFollow ? "1" : "0") + " capFit=" + (info.capFit ? "1" : "0") + " steady=" + (info.steady ? "1" : "0");
+    s += x.extra;
     s += " (counts before Present; what reached the panel: [slipstream-cadence] / PresentMon; gpuLoadPct is a model)";
     return s;
 }

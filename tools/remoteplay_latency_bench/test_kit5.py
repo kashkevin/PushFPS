@@ -231,7 +231,7 @@ SMOOTH_LINE = ("window=5.0 backend=vfg ceiling=3X chosen=3X chosenMin=3X chosenM
                "gpuColorP95Ms=0.300 gpuCleanP50Ms=-1.000 gpuCleanP95Ms=-1.000 gpuSrP50Ms=2.000 gpuSrP95Ms=2.400 gpuNrP50Ms=-1.000 "
                "gpuNrP95Ms=-1.000 gpuFlowP50Ms=-1.000 gpuFlowP95Ms=-1.000 gpuFgP50Ms=6.000 gpuFgP95Ms=7.000 gpuBlitP50Ms=0.300 "
                "gpuBlitP95Ms=0.400 gpuSpanP50Ms=9.000 gpuSpanP95Ms=10.500 gpuFrames=299 pairBudgetMs=16.683 gpuLoadPct=54.0 smooth=0 "
-               "smoothReason=off stepDowns=0 stepUps=0 srFollow=0 capFit=0 steady=0 (counts before Present; what reached the panel: "
+               "smoothReason=off stepDowns=0 stepUps=0 srFollow=0 capFit=0 steady=0 realAgeP50Ms=26.500 realAgeP95Ms=29.000 realAgeP99Ms=31.000 addedEstMs=12.400 realHoldP95Ms=13.800 realHoldP99Ms=14.600 phaseMs=17.900 phaseLearned=0 firstReadyP50Ms=6.100 firstReadyP95Ms=7.400 presentLateP95Ms=0.300 presentLateP99Ms=0.600 deadPhaseFps=0.240 fallbackFps=0.000 (counts before Present; what reached the panel: "
                "[slipstream-cadence] / PresentMon; gpuLoadPct is a model)")
 
 def dry_lines(arm, exe, switches, wifi=False):
@@ -349,7 +349,7 @@ def dry_lines(arm, exe, switches, wifi=False):
                   f" fixedHold2=0 fixedHold3=0 fixedUnevenPct=0.0 fixedShownFps={shown:.2f} evenFps={shown:.2f} evenDivisor=1 overflow=0 pauses=0 (made up)")] * 3
         made += [("slipstream-smooth", f"window=5.0 backend=vfg ceiling={mult}X chosen={mult}X chosenMin={mult}X chosenMax={mult}X changes=0 why=user contentFps=29.97 capFps=179.95"
                   f" refreshHz=179.950 vrr=1 source=1920x1080 work=1920x1080 flow=1920x1080 display=2560x1440 srTarget=-1 srTargetAsked=-1 receivedFps=59.94 uniqueFps={pairs:.2f}"
-                  f" rejectedPairsFps=0.00 generatedFps={gen:.2f} dropCapFps=0.00 dropDeadlineFps=0.10 holds=0 gpuSpanP95Ms=9.50 gpuFgP95Ms=7.20 gpuSrP95Ms=-1 pairBudgetMs=33.33 (made up)")] * 3
+                  f" rejectedPairsFps=0.00 generatedFps={gen:.2f} dropCapFps=0.00 dropDeadlineFps=0.10 holds=0 gpuSpanP95Ms=9.50 gpuFgP95Ms=7.20 gpuSrP95Ms=-1 pairBudgetMs=33.33 realAgeP50Ms=-1.000 realAgeP95Ms=-1.000 realAgeP99Ms=-1.000 addedEstMs=24.500 realHoldP95Ms=26.000 realHoldP99Ms=27.200 phaseMs=29.500 phaseLearned=1 firstReadyP50Ms=7.500 firstReadyP95Ms=9.000 presentLateP95Ms=0.200 presentLateP99Ms=0.400 deadPhaseFps=0.000 fallbackFps=0.000 (made up)")] * 3
     made += [("display-latency", "presentToScanoutP50Ms=1.200 presentToScanoutP95Ms=3.900 presentToScanoutMaxMs=5.100 samples=9 replacedAtLeast=0 compositionMode=2 refreshHz=180.000 (made up)")] * 2
     return [line(0.2 * n, component, text) for n, (component, text) in enumerate(made) if component != "x"]
 
@@ -625,7 +625,7 @@ class KitMirror(unittest.TestCase):
             return report.about_minutes(rounds[session] * (len(arms) * report.plan_seconds(plans[session]) + by_hand * report.MANUAL_SECONDS))
         got = {s: minutes(s, by_hand=2 if s == "builds" else 0) for s in report.MEASURE_SESSIONS}
         self.assertEqual({k: got[k] for k in ("input", "visual", "neural", "framegen", "audiofix", "builds")}, {"input": 29, "visual": 25, "neural": 20, "framegen": 20, "audiofix": 19, "builds": 15})
-        self.assertEqual(got["smoothness"], 30); self.assertIn("About 30 minutes.", first[first.index("    smoothness "):first.index("    smoothness ") + 300])
+        self.assertEqual(got["smoothness"], 36); self.assertIn("About 36 minutes.", first[first.index("    smoothness "):first.index("    smoothness ") + 300])
         self.assertEqual(rounds["retest"], 3); self.assertEqual(plans["retest"], "settle:8;probe:20;wait:40;exit")
         self.assertEqual(got["pacing"], 8); self.assertIn("About 8 minutes.", first[first.index("    pacing "):first.index("    pacing ") + 200])
         # the procedure and START-HERE print the same figures
