@@ -180,6 +180,18 @@ class KitFiles(unittest.TestCase):
         for name in ("run-tests.ps1", "collect-diagnostics.ps1"):
             with open(os.path.join(self.kit, name), encoding="ascii") as f: self.assertIn("|cadence|net|smooth|capture)", f.read())
 
+    def test_the_ull_lines_are_copied_by_the_kit(self):
+        # Stream fglat: the [fg-ull] lines FG_LATENCY.md tells the reader to look for must pass the kit's allowlist
+        # (it was missing when Package 12 was merged). Both formats as EngineController.cpp writes them.
+        lines = ["2026-11-22T08:00:00.000Z t=1 [INFO ] [fg-ull] experiment: Ultra Low Latency Frame Generation "
+                 "parts=hold,phase understood=true (VEYRA_EXP_RP_FG_ULL)",
+                 "2026-11-22T08:00:01.000Z t=2 [INFO ] [fg-ull] revision=3 held=true why=settling source=120 heldPairs=4 "
+                 "heldProbes=1 entries=1 (real frames shown when ready instead of on the FG phase while no generated frame "
+                 "of their pair is shown; 3 admitted pairs in a row resume)"]
+        self.assertEqual(report.safe_lines(lines), lines)
+        for name in ("run-tests.ps1", "collect-diagnostics.ps1"):
+            with open(os.path.join(self.kit, name), encoding="ascii") as f: self.assertIn("fg-(validity|drops|ull)", f.read())
+
     def test_arm_table_is_well_formed(self):
         with open(os.path.join(self.kit, "run-tests.ps1"), encoding="ascii") as f: kit_text = f.read()
         # the kit's own switch rule (Get-ArmSwitches, also run for every arm in Read-ArmTable at start-up) is the one checked below
