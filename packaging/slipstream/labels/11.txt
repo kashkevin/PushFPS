@@ -1,0 +1,96 @@
+# START-HERE.txt of a package with this label (slipstream_package.py label_text): the text before
+# the separator line replaces @SHORTEST_AND_NEW@, the text after it @NEURAL_INSTALL@.
+# Lines starting with # are left out. ASCII only.
+THE SHORTEST WAY                                   the kit prints each session's time and its own >>> steps
+  1. Double-click  Install-Slipstream.cmd          10 to 20 minutes. It updates your experimental copy in
+                                                   place (settings and PS5 pairing stay) and asks ONE
+                                                   question: the optional NVIDIA neural runtime (section 1).
+  2. Mouse and keyboard, over Remote Play. In the experimental copy: Mouse & Keyboard page, switch
+     keyboard and mouse on, then "Apply GTA V-style keys". Calibrate once (the page's wizard).
+     Then open a Command Prompt here:
+       Run-First-Test.cmd -Session input           about 29 minutes; follow the >>> lines (mouse,
+                                                   keys, then the DualSense)
+  3. Only if you have a capture card (PS5 picture over HDMI into the PC, DualSense plugged into the
+     PS5, HDCP off on the PS5: Settings > System > HDMI):
+       Run-First-Test.cmd -Session capture -Pass 120      about 36 minutes, Windows at 120 Hz
+       Run-First-Test.cmd -Session capture -Pass 180      about 36 minutes, Windows at 180 Hz
+                                                   Run each pass twice: once with a 30 FPS game, once
+                                                   with a 60 FPS game (four runs). The first time,
+                                                   choose your card when the kit asks.
+  4. Not run yet from Package 10? These still matter most for the sound and clock fixes:
+       Run-First-Test.cmd -Session retest          about 25 minutes, one moving scene
+       Run-First-Test.cmd -Session smoothness -Pass 120   (then -Pass 180)  30 minutes each
+  5. Play normally for 10 minutes or more and listen: is the sound in step with the picture? Then
+     double-click Collect-Diagnostics.cmd.
+  Each step ends with ONE zip to send back. Please also tell us the name of your capture card.
+
+WHAT IS NEW IN PACKAGE 11   (everything of Package 10, plus the parts below; all off until chosen)
+  - Capture card frame generation: docs\CAPTURE_FG.md says what to expect (60 -> 120 at 2X should
+    fit; 30 -> 120 needs 4X; 180 is a stretch; frame generation always waits for the next real
+    frame: at least about 25 ms at 4X for a 30 FPS game, plus processing). NVIDIA's in-game DLSS
+    frame generation cannot work on a captured picture; the session's DLSS-path arms feed NVIDIA's
+    frame generation with motion estimated from the pictures. The capture session measures real
+    and generated frames apart; repeated frames are never counted as new ones.
+  - GTA V-style keys (button "Apply GTA V-style keys"): WASD, mouse camera, left click fire, right
+    click aim, Shift run, Space jump, F vehicle, R melee, Q cover, Ctrl crouch, Tab weapon wheel,
+    mouse wheel quick-swaps the weapon while aiming, E interact, Esc pause; on foot, aiming,
+    vehicle and menu keys. GTA VI's reload button is not published: if it is another button in the
+    game, put R on it. Every key can be changed. The button also sets the lowest-latency mouse
+    handling (no smoothing window, no carry, report timing, 8-bit stick steps) and keeps your own
+    sensitivities. This is a controller emulated from mouse and keyboard, not native mouse
+    support: the PS5 only ever sees a controller.
+  - Camera feel (switches, measured by the input session): mouse speed from the mouse's own report
+    times, a stop that never keeps the stick moving after your hand stops, whole 8-bit stick
+    steps. Your existing profiles send exactly what they sent before (tested on 1.6 million
+    events).
+  - Mouse and keyboard beside a capture card: add the line VEYRA_EXP_RP_KBM_CONTROL = 1 to a file
+    named slipstream.ini next to the experimental copy's PushFPS.exe
+    (%LOCALAPPDATA%\Programs\PushFPS-slipstream-exp), then in the capture card dialog switch the
+    PS5 controller control on. The picture comes from the card; only the buttons go over Remote
+    Play. Veyra users reported the controller control working on real consoles; whether the PS5
+    keeps its HDMI picture (resolution, HDR) meanwhile is not known: check it on your card.
+  - Guides: docs\KEYBOARD_MOUSE.md (last sections), docs\KBM_AUDIT.md.
+ON WITHOUT A CHOICE  (experimental build only; Package 7 and your own PushFPS unchanged)
+  - Nothing new in Package 11. Still on, from Package 10 and earlier:
+  - Fixes taken from Veyra: the controller queue drops inputs that are too old, the neural layer's
+    clean shutdown, and the loader fix for its DLL.
+  - chiaki-ng fixes: reorder-queue drop, send-buffer teardown, HTTP header bounds, PIN log line.
+  - The FPS readout says "N FPS shown" or "N FPS submitted" (and "uneven" when it is); "shown" is
+    worked out from the present times, not read from the screen.
+  - The variable-refresh state is read again 5 s and 15 s after the picture starts. If G-SYNC
+    engages only then, variable-refresh presentation starts mid-session (before, at the next
+    display change).
+  - Neural runtime: at an update, an unchosen packaged copy is removed (see section 1). When the
+    file is present, its signature and SHA-256 are checked at start (about 1 s, an estimate); the
+    NVIDIA runtime choice is offered only for a verified original, and a neural layer you never
+    changed moves to the verified original once one is installed. New log lines [nr-runtime-status]
+    and [nr-runtime-check].
+  - Package 10, three fixes that can only remove delay or wasted work (each has a test switch to
+    compare with the old behaviour; tested on Linux and GitHub only):
+    * Sound now follows each picture's real arrival. In Package 9 it waited for an estimated
+      video clock that falls behind when the PS5 sends fewer than 60 frames a second, up to 1.5 s.
+    * A queued frame that arrived after the app's clock reading is no longer thrown away as
+      stale (the rule Veyra and PushFPS themselves use).
+    * Under a frame cap, frame generation no longer makes frames the cap throws away (e.g. 2X
+      instead of 3X under a 120 FPS cap with a 59.94 FPS stream). It only ever lowers the
+      multiplier; with variable refresh confirmed the counter can read below the cap (115, not 120).
+  - Always logged: the PS5's real frame rate ([remoteplay-clock] wireFps=, about every 10 s), the
+    expiry rule and the causes of each keyframe wait ([remoteplay-ingress]), the audio rule in use
+    ([remoteplay-audio] pictureTerm=), each cap-fit change ([push-cap-fit]) and the share of dated
+    presents (scanoutKnownPct=).
+KNOWN ISSUES IN 11
+  - After using the profile "Ultra Low Latency" together with the lowest-latency switch, check that
+    Smooth pacing is still how you want it (quick setup) before you measure anything else.
+----- the install question (section 1) -----
+   THE ONE QUESTION: the neural layer needs NVIDIA's own runtime file. The installer keeps it only
+   when you say yes, and only when the file is an NVIDIA-signed original; it never installs a
+   modified file. Without it everything else works, and the neural arms of the kit say
+   "not installed: skipped". To answer in advance:
+       Install-Slipstream.cmd -NeuralRuntime Yes       (or No; Ask is the default)
+   UPDATING an earlier experimental copy (Package 7, 8A or 8B): an NVIDIA runtime copy that came with
+   an earlier package without your yes is removed at this update, and a layer saved on it becomes
+   unavailable. Answering no removes every copy, also one you added in Settings. Answer yes, or add
+   it later in that copy's Settings, Components and licenses.
+   THE OTHER THREE COPIES (original, stable, Package 7) use their older installers: on an NVIDIA PC
+   they keep the NVIDIA-signed runtime file from Veyra's package without asking, as PushFPS 3.2.1
+   does. Their neural layer still stays off until you turn it on.

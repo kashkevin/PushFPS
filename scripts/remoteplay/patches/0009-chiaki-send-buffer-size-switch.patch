@@ -1,0 +1,119 @@
+chiaki-ng backport behind a switch: keep up to 1024 reliable Takion packets
+for resending. OFF BY DEFAULT.
+
+Origin: https://github.com/streetpea/chiaki-ng commit
+3e1a24ddb26d2cac7807daa67ad12cd78b784df4 ("Keep up to 1024 reliable Takion
+packets for resending", 30 October 2026). Upstream's part: the constant
+CHIAKI_TAKION_SEND_BUFFER_SIZE (1024) in takionsendbuffer.h and the two ack
+arrays sized by it. Added here, not upstream's: the default stays the pinned
+library's 16 (CHIAKI_VEYRA_TAKION_SEND_BUFFER_SIZE_DEFAULT) and
+veyra_takion_send_buffer_size() in takion.c returns 1024 only when the
+environment variable VEYRA_EXP_RP_CHIAKI_SEND_BUFFER is exactly "1"
+(GetEnvironmentVariableA on Windows, getenv elsewhere), read once per
+connection on the Takion thread.
+Licence of the patched files: LicenseRef-AGPL-3.0-only-OpenSSL (AGPL-3.0-only
+with the OpenSSL exception), as in chiaki-ng.
+
+With 16, a burst of reliable messages sent while acknowledgements are not
+coming back (corrupt-frame reports, IDR requests and heartbeats during a
+network stall) overflows the buffer: the 17th and later packets are sent once
+and never resent, while the 16 oldest keep being resent. Upstream keeps 1024.
+Because that changes what is resent after a stall, it is an experiment here
+until a hardware run. With the switch unset the only difference from before is
+the size of two stack arrays (4 KB instead of 64 bytes each).
+
+Applies after 0001-0008 to the pin 0e16950165f06e5c3291537c2eeba6e852be7120.
+
+diff --git a/lib/include/chiaki/takionsendbuffer.h b/lib/include/chiaki/takionsendbuffer.h
+index 8ddecc01..ac806b64 100644
+--- a/lib/include/chiaki/takionsendbuffer.h
++++ b/lib/include/chiaki/takionsendbuffer.h
+@@ -16,6 +16,13 @@ extern "C" {
+ 
+ typedef struct chiaki_takion_t ChiakiTakion;
+ 
++// Unacknowledged reliable packets kept for resending: enough for every packet within the
++// console's receive window, so a burst sent during loss is resent rather than sent once untracked
++#define CHIAKI_TAKION_SEND_BUFFER_SIZE 1024
++// This build keeps the pinned library's 16 unless VEYRA_EXP_RP_CHIAKI_SEND_BUFFER=1 (see takion.c).
++// The ack arrays are sized by CHIAKI_TAKION_SEND_BUFFER_SIZE, which covers both.
++#define CHIAKI_VEYRA_TAKION_SEND_BUFFER_SIZE_DEFAULT 16
++
+ typedef struct chiaki_takion_send_buffer_packet_t ChiakiTakionSendBufferPacket;
+ 
+ typedef struct chiaki_takion_send_buffer_t
+diff --git a/lib/src/takion.c b/lib/src/takion.c
+index 308c98b2..1f0bac73 100644
+--- a/lib/src/takion.c
++++ b/lib/src/takion.c
+@@ -45,7 +45,6 @@
+ #define TAKION_REORDER_QUEUE_SIZE_EXP 4 // => 16 entries
+ #define TAKION_AV_VIDEO_REORDER_QUEUE_SIZE_EXP 6 // => 64 entries
+ #define TAKION_AV_REORDER_TIMEOUT_US 16000 // ~1 frame at 60fps
+-#define TAKION_SEND_BUFFER_SIZE 16
+ 
+ #define TAKION_POSTPONE_PACKETS_SIZE 32
+ 
+@@ -78,6 +77,23 @@ CHIAKI_EXPORT void chiaki_veyra_transport_set_options(uint32_t options)
+ 	VEYRA_ATOMIC_SET(&veyra_options, options);
+ }
+ 
++// Experiment, off by default: VEYRA_EXP_RP_CHIAKI_SEND_BUFFER=1 keeps CHIAKI_TAKION_SEND_BUFFER_SIZE
++// unacknowledged reliable packets for resending, as chiaki-ng does since 3e1a24dd. Unset (or anything
++// else) keeps the pinned library's 16. Read once per connection, on the Takion thread.
++static size_t veyra_takion_send_buffer_size(void)
++{
++	bool enabled;
++#ifdef _WIN32
++	char value[4];
++	DWORD length = GetEnvironmentVariableA("VEYRA_EXP_RP_CHIAKI_SEND_BUFFER", value, (DWORD)sizeof(value));
++	enabled = length == 1 && value[0] == '1';
++#else
++	const char *value = getenv("VEYRA_EXP_RP_CHIAKI_SEND_BUFFER");
++	enabled = value && value[0] == '1' && value[1] == '\0';
++#endif
++	return enabled ? (size_t)CHIAKI_TAKION_SEND_BUFFER_SIZE : (size_t)CHIAKI_VEYRA_TAKION_SEND_BUFFER_SIZE_DEFAULT;
++}
++
+ // CHIAKI_VEYRA_OPTION_REORDER_WRAP_FIX: the 16-bit sum, truncated.
+ static uint64_t veyra_seq_num_16_add_wrapped(uint64_t a, uint64_t b)
+ {
+@@ -1393,7 +1409,7 @@ static void *takion_thread_func(void *user)
+ 	chiaki_reorder_queue_set_drop_cb(&takion->data_queue, takion_data_drop, takion);
+ 
+ 	// The send buffer size MUST be consistent with the acked seqnums array size in takion_handle_packet_message_data_ack()
+-	if(chiaki_takion_send_buffer_init(&takion->send_buffer, takion, TAKION_SEND_BUFFER_SIZE) != CHIAKI_ERR_SUCCESS)
++	if(chiaki_takion_send_buffer_init(&takion->send_buffer, takion, veyra_takion_send_buffer_size()) != CHIAKI_ERR_SUCCESS)
+ 		goto error_reoder_queue;
+ 	chiaki_mutex_lock(&takion->send_buffer_active_mutex);
+ 	takion->send_buffer_active = true;
+@@ -1765,7 +1781,7 @@ static void takion_handle_packet_message_data_ack(ChiakiTakion *takion, uint8_t
+ 	CHIAKI_LOGV(takion->log, "Takion received data ack with cumulative_seq_num = %#x, a_rwnd = %#x, gap_ack_blocks_count = %#x, dup_tsns_count = %#x",
+ 			cumulative_seq_num, a_rwnd, gap_ack_blocks_count, dup_tsns_count);
+ 
+-	ChiakiSeqNum32 acked_seq_nums[TAKION_SEND_BUFFER_SIZE];
++	ChiakiSeqNum32 acked_seq_nums[CHIAKI_TAKION_SEND_BUFFER_SIZE];
+ 	size_t acked_seq_nums_count = 0;
+ 	chiaki_takion_send_buffer_ack(&takion->send_buffer, cumulative_seq_num, acked_seq_nums, &acked_seq_nums_count);
+ 
+diff --git a/lib/src/takionsendbuffer.c b/lib/src/takionsendbuffer.c
+index 5cee13cf..0d7f7567 100644
+--- a/lib/src/takionsendbuffer.c
++++ b/lib/src/takionsendbuffer.c
+@@ -12,7 +12,6 @@
+ #define TAKION_DATA_RESEND_TIMEOUT_MS 200
+ #define TAKION_DATA_RESEND_WAKEUP_TIMEOUT_MS (TAKION_DATA_RESEND_TIMEOUT_MS/2)
+ #define TAKION_DATA_RESEND_TRIES_MAX 25
+-#define TAKION_SEND_BUFFER_SIZE 16
+ 
+ #endif
+ 
+@@ -247,7 +246,7 @@ static void takion_send_buffer_resend(ChiakiTakionSendBuffer *send_buffer)
+ 			if(packet->tries >= TAKION_DATA_RESEND_TRIES_MAX)
+ 			{
+ 				CHIAKI_LOGI(send_buffer->log, "Hit max retries of %d tries... giving up on packet with seqnum %#llx", TAKION_DATA_RESEND_TRIES_MAX, (unsigned long long)packet->seq_num);
+-				ChiakiSeqNum32 ack_seq_nums[TAKION_SEND_BUFFER_SIZE];
++				ChiakiSeqNum32 ack_seq_nums[CHIAKI_TAKION_SEND_BUFFER_SIZE];
+ 				size_t ack_seq_nums_count;
+ 				chiaki_mutex_unlock(&send_buffer->mutex);
+ 				chiaki_takion_send_buffer_ack(send_buffer, packet->seq_num, ack_seq_nums, &ack_seq_nums_count);
