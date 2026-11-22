@@ -1,0 +1,41 @@
+# START-HERE.txt of a package with this label (slipstream_package.py label_text): the text before
+# the separator line replaces @SHORTEST_AND_NEW@, the text after it @NEURAL_INSTALL@.
+# Lines starting with # are left out. ASCII only.
+THE SHORTEST WAY                                   three steps, about 50 minutes, most of it hands off
+  1. Double-click  Install-Slipstream.cmd          10 to 20 minutes, mostly one download of about 750 MB.
+                                                   No question. It updates an 8A in place (section 1).
+  2. Start the game on the PS5 and stand in a quiet place. Open a Command Prompt in this folder:
+       Run-First-Test.cmd -Session input           about 21 minutes. Mouse, keyboard and the DualSense
+                                                   (connected to this PC): the kit prints every step.
+  3.   Run-First-Test.cmd -Session pacing          about 8 minutes, hands off; then -Session audiofix
+                                                   (about 19 minutes) when you have the time.
+  Each session ends with RESULT.txt on screen and ONE zip to send back. That is all that is needed.
+  Wired or Wi-Fi both run; on Wi-Fi every table says "Wi-Fi: diagnostic only".
+
+WHAT IS IN PACKAGE 8B    (the second of three downloads; in the experimental build, OFF until chosen)
+  - Everything of 8A: restoration, 1080p to 1440p, HDR handling, the picture profiles.
+  - Mouse and keyboard: a settings page with an on / off switch, bindings, calibration, and three input
+    profiles (as today, Ultra Low Latency, Adaptive Precision). Session: input.
+  - Frame pacing, presentation, audio and reliability changes behind switches. Sessions: pacing,
+    audiofix, framegen.
+  - Motion at about 120 FPS that is only sometimes smooth: Session smoothness (about 17 minutes) shows
+    how evenly frames are handed to the screen per arm (PresentMon, when installed: what was really
+    displayed), not the FPS counter; your eyes decide. Nothing here is claimed to fix it.
+ON WITHOUT A CHOICE IN 8B   (experimental build only; Package 7 and your own PushFPS unchanged)
+  - Fixes taken from Veyra: the controller queue drops inputs that are too old, the neural layer's
+    clean shutdown, and the loader fix for its DLL.
+  - chiaki-ng fixes: reorder-queue drop, send-buffer teardown, HTTP header bounds, PIN log line.
+  - The FPS readout says "N FPS shown" or "N FPS submitted" (and "uneven" when it is); "shown" is
+    worked out from the present times, not read from the screen.
+  - The variable-refresh state is read again 5 s and 15 s after the picture starts. If G-SYNC
+    engages only then, variable-refresh presentation starts mid-session (before, at the next
+    display change).
+KNOWN ISSUE IN 8B
+  - After using the profile "Ultra Low Latency" together with the lowest-latency switch, check that
+    Smooth pacing is still how you want it (quick setup) before you measure anything else.
+  - In the tables, the rows "in effect at the end" for the neural layer read n/a: it is not in 8B.
+WHAT IS NOT IN 8B YET
+  - 8C, the complete Package 8: the optional neural layer and its verified installation (session
+    neural; the neural arms of -Session visual say "not in this build: skipped" in 8B).
+----- the install question (section 1) -----
+   No question about the neural layer: it is not in this download (it comes with 8C).
