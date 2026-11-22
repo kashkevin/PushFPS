@@ -491,6 +491,18 @@ VGroup {
         }
     }
 
+    // Picture profiles (PushProfileRow.qml): one choice for the whole picture pipeline (clean-up, upscaling,
+    // the experimental neural layer, a frame generation target) from the table in
+    // engine/PushPerformanceMode.h. "None" (the default) leaves every row below to the user.
+    // Ultra Low Latency writes the same presentation settings as the lowest-latency switch: the switch is
+    // turned off (its saved settings put back) before that profile is picked, and cannot be turned on while
+    // the profile is in place, so "None" and the switch never hold two different "before" records.
+    readonly property bool ullProfile: String(veyra.preferences.pushProfile || "") === "ultra-low-latency"
+    PushProfileRow {
+        objectName: "pushfps-profile-rows"; compact: quick.compact
+        beforePick: function (id) { if (id === "ultra-low-latency" && quick.lowestLatency) quick.setLowestLatency(false) }
+    }
+
     // PushFPS tools: measure this PC, start from a game's preset, protect the HUD,
     // record a before/after clip. They wrap onto a second line in narrow panels.
     readonly property bool compareRecording: veyra.recording && veyra.recordingState.compare === true
@@ -666,6 +678,15 @@ VGroup {
             }
         }
     }
+
+    // Performance modes (PushModeRow.qml): one choice that sets frame generation, duplicate removal and
+    // presentation from the table in engine/PushPerformanceMode.h. "Off" leaves every row below to the user.
+    PushModeRow { objectName: "pushfps-mode-rows" }
+    // SmartLink "Connection" (PushSmartLinkRow.qml), experimental: shown only for PS5 Remote Play in a Slipstream
+    // build. Off by default; the choice applies from the next PS5 connection.
+    PushSmartLinkRow { objectName: "pushfps-smartlink-rows" }
+    // Smoothness Mode (PushSmoothnessRow.qml), experimental: shown while frame generation is on. Off by default.
+    PushSmoothnessRow { objectName: "pushfps-smoothness-rows" }
 
     VRow {
         objectName: "pushfps-game-fps-row"
@@ -908,11 +929,13 @@ VGroup {
         objectName: "pushfps-lowest-latency-row"
         label: qsTr("最低延迟")
         help: qsTr("一键打开所有不影响画质的低延迟设置：显卡只排队一帧（NVIDIA 显卡用 NVIDIA 低延迟），连接后进入全屏（绕过桌面合成，少等一次刷新），屏幕支持 G-SYNC/FreeSync 时用可变刷新同步（不撕裂、不跳帧）。补帧、AI 增强、HUD 锁定和帧节奏修复保持不变。关闭后恢复之前的设置")
-        hint: quick.lowestLatencyHint
+        hint: quick.ullProfile && !quick.lowestLatency ? qsTr("「极低延迟」方案已经设好了这些；选别的方案或「不使用方案」后可以使用这个开关") : quick.lowestLatencyHint
         VSwitch {
             objectName: "pushfps-lowest-latency"
             checked: quick.lowestLatency
-            onToggled: checked => quick.setLowestLatency(checked)
+            enabled: !quick.ullProfile || checked
+            opacity: enabled ? 1 : 0.4
+            onToggled: checked => { if (checked && quick.ullProfile) return; quick.setLowestLatency(checked) }
         }
     }
 
@@ -934,6 +957,18 @@ VGroup {
                 checked: veyra.preferences.pushLatencyOverlay === true
                 onToggled: checked => veyra.setPreference("pushLatencyOverlay", checked)
             }
+        }
+    }
+
+    // Statistics overlay (PushStatsOverlay.qml): reads numbers the engine already has, once a second.
+    VRow {
+        objectName: "pushfps-stats-overlay-row"
+        label: qsTr("在画面上显示详细统计")
+        hint: qsTr("模式、来源和显示帧率、生成与真实的帧、处理延迟，PS5 串流还有连接质量、丢包、抖动和线路。只读取已有的数字，没有的显示「未测量」")
+        VSwitch {
+            objectName: "pushfps-stats-overlay"
+            checked: veyra.preferences.pushStatsOverlay === true
+            onToggled: checked => veyra.setPreference("pushStatsOverlay", checked)
         }
     }
 
