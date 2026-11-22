@@ -1,5 +1,8 @@
 #pragma once
 #include <windows.h>
+#include <dxgi1_5.h>
+#include "veyra/engine/PushHardwareCapabilities.h"
+#include "veyra/Log.h"
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
@@ -29,6 +32,8 @@ struct VrrState {
     bool currentlyCapable=false; // ... with the applied display settings
     bool trueGsync=false;        // G-SYNC module, not adaptive sync
     bool simulated=false;        // VEYRA_TEST_VRR_LEVEL override
+    uint8_t dxgiTearing=0;       // VEYRA_EXP_VRR_DXGI_FALLBACK, NVAPI not ready: engine::PushCapability of DXGI tearing support.
+                                 // Diagnostic only: vrrLevel() and the interface never read it.
     int status=0;          // last NvAPI status (0 = OK)
     bool operator==(const VrrState&)const=default;
 };
@@ -49,6 +54,29 @@ constexpr unsigned vrrLevel(const VrrState& s){
     if(vrrPresentationAvailable(s))return 3;
     if(s.supportsVrr||s.currentlyCapable)return 2;
     return 1;
+}
+// PushFPS, VEYRA_EXP_VRR_DXGI_FALLBACK=1 (read once; docs/PS5_REMOTE_PLAY_EXPERIMENTS.md): a DIAGNOSTIC for PCs where
+// NVAPI is not ready (no NVIDIA driver, or its initialisation failed). DXGI tearing support is an OS / driver
+// capability, not a property of the screen, so it never changes the level: the state stays as without the switch
+// (unknown) and only dxgiTearing carries the answer; one [display-vrr] log line per process says what DXGI reported.
+constexpr VrrState dxgiTearingState(engine::PushCapability tearing){VrrState s;s.dxgiTearing=uint8_t(tearing);return s;}
+static_assert(vrrLevel(dxgiTearingState(engine::PushCapability::Yes))==vrrLevel(VrrState{}),"the DXGI diagnostic must not change the VRR level");
+inline VrrState dxgiVrrFallback(HWND window){
+    static const bool on=[]{wchar_t v[4]{};return GetEnvironmentVariableW(L"VEYRA_EXP_VRR_DXGI_FALLBACK",v,4)==1&&v[0]==L'1';}();
+    if(!on||!window)return VrrState{};
+    static const engine::PushCapability tearing=[]{
+        IDXGIFactory5* factory=nullptr;BOOL allowed=FALSE;
+        engine::PushCapability result=engine::PushCapability::Unknown;
+        if(SUCCEEDED(CreateDXGIFactory1(__uuidof(IDXGIFactory5),reinterpret_cast<void**>(&factory)))&&factory){
+            const HRESULT hr=factory->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING,&allowed,sizeof(allowed));
+            factory->Release();
+            result=engine::pushCapability(SUCCEEDED(hr),allowed!=FALSE);
+        }
+        veyra::log::info("display-vrr",std::string("nvapi=unavailable dxgiTearing=")+(result==engine::PushCapability::Yes?"1":result==engine::PushCapability::No?"0":"unknown")+
+            " (diagnostic only; VRR level unchanged)");
+        return result;
+    }();
+    return dxgiTearingState(engine::pushDxgiTearingReport(on,false,tearing));
 }
 inline VrrState queryVrr(HWND window){
     // Test hook (VEYRA_TEST_VRR_LEVEL=0..4): this rig's monitor reports no VRR
@@ -86,7 +114,8 @@ inline VrrState queryVrr(HWND window){
         ready=init&&idByName&&getVrr&&init()==0;
     });
     VrrState state;
-    if(!ready||!window)return state;
+    if(!ready)return dxgiVrrFallback(window);   // the switch off: an empty state, as before
+    if(!window)return state;
     MONITORINFOEXW monitor{};monitor.cbSize=sizeof(monitor);
     if(!GetMonitorInfoW(MonitorFromWindow(window,MONITOR_DEFAULTTONEAREST),&monitor))return state;
     char name[CCHDEVICENAME*2]{};

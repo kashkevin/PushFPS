@@ -1,0 +1,35 @@
+# The text of "WHAT HAS BEEN CHECKED, AND WHAT HAS NOT" in START-HERE.txt (placeholder @CHECKED@ of the template).
+# The packager (packaging/slipstream/slipstream_package.py) copies every line that does not start with '#'.
+# WHO FILLS THIS IN: whoever makes the package, AFTER the Windows build, the automatic tests and the reviews of the
+# code in it are known, and before the package workflow runs. Replace each line in <angle brackets> with the fact
+# (run number, counts, what failed). The packager refuses to make a package while a line in <angle brackets> is left,
+# so that no package ships with a blank. Plain ASCII, lines of at most 100 characters, two spaces of indent.
+# Rule: say what was compiled, run and tested and on which machine; anything that only passed checks on GitHub's
+# Windows machine has NOT run on a gaming PC. Never write "validated" or a latency figure here.
+  Experimental build: build-windows number 62 (run 44951360667), 21 November 2026, compiled by
+  MSVC with warnings as errors and every check below passed; the source is archived as
+  archive/8658fd34 (the text fixes made after it change no code).
+  On GitHub's Windows machine (software renderer, no graphics card, no PS5): the unit tests, the
+  controller test on a virtual gamepad, the GPU tests, the strict QML tests, the install test,
+  remoteplay-checks number 158 (Linux and MSVC core tests, sanitizers, the kit's dry runs of every
+  session including retest and both smoothness passes) and checks number 172: all passed. 935 core
+  tests pass on Linux. The sound fix was tested on a simulated clock and audio model, not on a
+  PS5.
+  Independent reviews (a reviewer who did not write the code): the sound/clock fix (a blocker
+  found and fixed: a 5 s bound that switched the fix off in long play), the frame-rate fixes
+  (about 70 million combinations checked) and the picture captures (the presenter resize found to
+  work on 8-bit codes, not linear light) were each accepted after two rounds; the merged Package
+  10 was reviewed line by line and accepted with text fixes, all made before packaging.
+  The builds were compiled, installed and started on GitHub's Windows build machine (no graphics
+  card, no PS5, no screen to measure). On a real PC only these have run: package 6 once (19 November
+  2026, PS5 over Wi-Fi, software counters) and package 7 twice (20 November 2026, PS5 over Wi-Fi:
+  the presentation and audio sessions, about 12 minutes, software counters). EVERYTHING new in this
+  package (the list of what is in this package above, and every new kit session)
+  has never run on a gaming PC, a graphics card or a PS5. No latency and no picture quality has
+  been measured with any of it. Everything new is off until you choose it, except what is listed
+  under ON WITHOUT A CHOICE above (if anything is).
+  The .cmd files here and the scripts behind them are run once on GitHub's Windows machine by the
+  workflow that made this package (job "verify" of the run named at the end of this file; look
+  there for its result). Every session of the kit also runs there on made-up logs: that shows the
+  scripts work, not that the numbers mean anything. None of this has run on a real PC either.
+  If anything fails, copy the text of the window and send it.
