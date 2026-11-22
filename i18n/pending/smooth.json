@@ -1,0 +1,67 @@
+{
+ "流畅模式": {
+  "en": "Smoothness mode",
+  "zh-TW": "流暢模式",
+  "ja": "スムーズモード"
+ },
+ "使用你自己的固定补帧倍数": {
+  "en": "Uses your own fixed frame generation multiplier",
+  "zh-TW": "使用你自己的固定補幀倍數",
+  "ja": "自分で設定した固定のフレーム生成倍率を使います"
+ },
+ "把补帧倍数设为 3× 或更高，流畅模式才能在其中选择": {
+  "en": "Set frame generation to 3× or higher so smoothness mode has a choice",
+  "zh-TW": "把補幀倍數設為 3× 或更高，流暢模式才能在其中選擇",
+  "ja": "スムーズモードが選べるよう、フレーム生成を 3× 以上にしてください"
+ },
+ "当前 %1×": {
+  "en": "Now %1×",
+  "zh-TW": "目前 %1×",
+  "ja": "現在 %1×"
+ },
+ "目标需要 %1×": {
+  "en": "the target needs %1×",
+  "zh-TW": "目標需要 %1×",
+  "ja": "目標には %1× が必要"
+ },
+ "显卡余量不足，已降一档": {
+  "en": "not enough GPU headroom: one step down",
+  "zh-TW": "顯示卡餘量不足，已降一檔",
+  "ja": "GPU の余裕が足りないため 1 段下げました"
+ },
+ "有画面来不及补帧，已降一档": {
+  "en": "some frames could not be generated in time: one step down",
+  "zh-TW": "有畫面來不及補幀，已降一檔",
+  "ja": "一部のフレームの生成が間に合わないため 1 段下げました"
+ },
+ "显卡余量恢复，已升一档": {
+  "en": "GPU headroom is back: one step up",
+  "zh-TW": "顯示卡餘量恢復，已升一檔",
+  "ja": "GPU の余裕が戻ったため 1 段上げました"
+ },
+ "游戏帧率已接近目标，保持最低的 2×": {
+  "en": "the game is already close to the target: staying at the lowest, 2×",
+  "zh-TW": "遊戲幀率已接近目標，保持最低的 2×",
+  "ja": "ゲームのフレームレートが目標に近いため、最低の 2× のままです"
+ },
+ "等待显卡余量稳定后再升档": {
+  "en": "waiting for steady GPU headroom before stepping up",
+  "zh-TW": "等待顯示卡餘量穩定後再升檔",
+  "ja": "GPU の余裕が安定するまで上げずに待っています"
+ },
+ "目标由测试开关设定": {
+  "en": "target set by a test switch",
+  "zh-TW": "目標由測試開關設定",
+  "ja": "目標はテスト用スイッチで設定"
+ },
+ "以显示 %1 FPS 为目标，在 %2× 以内自动选择补帧倍数": {
+  "en": "Aims at %1 FPS shown; the multiplier is chosen automatically, up to %2×",
+  "zh-TW": "以顯示 %1 FPS 為目標，在 %2× 以內自動選擇補幀倍數",
+  "ja": "表示 %1 FPS を目標に、%2× までで倍率を自動的に選びます"
+ },
+ "以所选的显示帧率为目标：按游戏帧率、显卡计时和补帧调度的结果选择补帧倍数，不超过你设定的倍数。显卡持续跟不上时先降一档，模式本身从不关闭补帧；但补帧调度仍可能跳过个别画面，偶尔暂停补帧几秒。它不测量屏幕实际显示的画面。选「关闭」就是你自己的固定设置，可以用来对比。": {
+  "en": "Aims at the chosen shown frame rate: the frame generation multiplier is chosen from the game's frame rate, GPU timings and what the frame generation scheduler managed, never above the multiplier you set. When the GPU keeps falling behind it steps down one level first, and the mode itself never turns frame generation off; the scheduler can still skip single frames and sometimes pause frame generation for a few seconds. It does not measure what the screen actually showed. “Off” is your own fixed setting, for comparison.",
+  "zh-TW": "以所選的顯示幀率為目標：依遊戲幀率、顯示卡計時和補幀排程的結果選擇補幀倍數，不超過你設定的倍數。顯示卡持續跟不上時先降一檔，模式本身從不關閉補幀；但補幀排程仍可能跳過個別畫面，偶爾暫停補幀幾秒。它不測量螢幕實際顯示的畫面。選「關閉」就是你自己的固定設定，可以用來對比。",
+  "ja": "選んだ表示フレームレートを目標にします。ゲームのフレームレート、GPU の計測時間、フレーム生成スケジューラの結果から、設定した倍率を超えない範囲で倍率を選びます。GPU が追いつかない状態が続くとまず 1 段下げ、モード自体がフレーム生成を止めることはありません。ただしスケジューラが個々のフレームを飛ばしたり、数秒フレーム生成を止めたりすることはあります。画面に実際に表示された内容は測定しません。「オフ」は自分の固定設定で、比較に使えます。"
+ }
+}
