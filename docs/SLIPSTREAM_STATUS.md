@@ -12,6 +12,17 @@ has no graphics card (software renderer), no PS5 and no screen to measure (see "
 in the other documents that come from Linux models and simulators are models. Software timestamps are
 not proof of input-to-photon latency: only a camera or a light sensor on the screen is.
 
+## Package 12A (23 November 2026): frame generation latency, part by part (test kit only)
+
+The same program as Package 12 (experimental build 66, `archive/c41755fe`); only the test kit changed. New arm set
+`fglat` (inside `-Session smoothness -Pass 120 -Arms flt-...`, about 25 minutes): frame generation off, VFG 2X as
+installed, each part of `VEYRA_EXP_RP_FG_ULL` alone (phase, hold, grace, headroom), all parts, all parts with the
+presentation queue at high priority, and all parts with VFG Low (docs/HARDWARE_TEST_PROCEDURE.md "Frame generation
+latency, part by part"). The kit also keeps `[present-priority]` and clears `VEYRA_TEST_PRESENT_*` between runs.
+Checked: 242 kit tests, remoteplay-checks 207 (the Windows dry run of the whole set) and checks 227; an independent
+review accepted it with fixes (the `flt-fg2-headroom` arm, the Smoothness Mode note), all made. Nothing measured on a
+gaming PC: the run decides which parts lower the real-frame age without hurting evenness.
+
 ## Package 12 (22 November 2026): frame generation delay and the "DLSS 5" stutter
 
 Everything of Package 11 (below) plus the rows here. **None of it has run on a gaming PC, a graphics card or a PS5.**
