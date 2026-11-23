@@ -92,9 +92,9 @@ class NrPerfKit(unittest.TestCase):
 
     def test_sets_are_treated_like_their_sessions(self):
         # preferences, settings folder and (capture) the start of the remembered card: the same as the session's own arms
-        self.assertIn("if (@('smoothness', 'nrperf') -contains [string]$Arm.set) { $table['fgAdaptive'] = $false; $table['pacingRepair'] = $false; $table['pushSmoothTarget'] = 0 }", self.kit)
+        self.assertIn("if (@('smoothness', 'nrperf', 'fglat') -contains [string]$Arm.set) { $table['fgAdaptive'] = $false; $table['pacingRepair'] = $false; $table['pushSmoothTarget'] = 0 }", self.kit)
         self.assertIn("if (@('capture', 'nrperf-capture') -contains [string]$Arm.set) { $table['captureBufferMode'] = 0;", self.kit)
-        self.assertIn("if (@('smoothness', 'nrperf') -contains [string]$Arm.set) { $profileKind += '-smoothness' }", self.kit)
+        self.assertIn("if (@('smoothness', 'nrperf', 'fglat') -contains [string]$Arm.set) { $profileKind += '-smoothness' }", self.kit)
         self.assertIn("if (@('capture', 'nrperf-capture') -contains [string]$Arm.set) { $profileKind = [string]$Arm.exe + '-capture' }", self.kit)
         self.assertIn("if (@('capture', 'nrperf-capture') -contains [string]$Arm.set) { $startSwitch = 'VEYRA_TEST_RP_CAPTURE' }", self.kit)
         self.assertNotIn("[string]$Arm.set -eq 'smoothness'", self.kit)

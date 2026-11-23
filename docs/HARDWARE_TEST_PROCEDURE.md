@@ -196,6 +196,26 @@ frames decoded against frames the engine received and the decoded frames replace
 internal: not input-to-photon), and the inference size and reuse level. docs/drafts/NR_STUTTER.md section 7 says what
 each result means; the adaptive arm is judged by eye too (a reused frame carries the previous inference's change).
 
+### Frame generation latency, part by part (the fglat set, inside the smoothness session)
+
+What frame generation adds, and how much of it each part of `VEYRA_EXP_RP_FG_ULL` takes back (docs/drafts/FG_LATENCY.md
+sections 0, 5 and 6). Remote Play, Windows at 120 Hz:
+`Run-First-Test.cmd -Session smoothness -Pass 120 -Arms flt-off,flt-fg2,flt-fg2-phase,flt-fg2-hold,flt-fg2-grace,flt-fg2-ull,flt-fg2-ull-prio,flt-fg2-ull-low`
+(about 22 minutes). Keep the camera moving steadily in every run (the same scene each time).
+
+- `flt-off` (no frame generation) against `flt-fg2` (VFG 2x as installed): what frame generation adds.
+- `flt-fg2-phase`, `flt-fg2-hold`, `flt-fg2-grace`: one part each against `flt-fg2`; `flt-fg2-ull`: all parts.
+- `flt-fg2-ull-prio`: all parts with the presentation queue at high priority (`[present-priority]` says whether the card
+  allowed it) against `flt-fg2-ull`; `flt-fg2-ull-low`: all parts with VFG Low (the cheapest first generated frame;
+  judge the picture) against `flt-fg2-ull`.
+
+Read per arm (software times inside the PC, never input-to-photon): `[slipstream-smooth]` real-frame age P50 / P95 / P99
+(`realAge*`), the estimate `addedEstMs`, the phase in force (`phaseMs`, `phaseLearned`), presents late (`presentLateP95Ms`
+/ `P99Ms`), generated frames dropped late (`dropDeadlineFps`), the first generated frame's readiness (`firstReady*`) and
+the GPU time per stage; `[slipstream-cadence]` real and generated frames per second and the spacing P50 / P95 / P99 / max
+of the presents. A part is only worth keeping when its arm shows lower real-frame age than its pair with the same
+spacing. The camera procedure of docs/drafts/FG_LATENCY.md section 6 is the only input-to-photon measure.
+
 ### builds: is Package 8 with everything off the same as Package 7?
 
 Arms: `b-previous` (Package 7's experimental build, the fourth installed copy), `b-experimental` (this package's, no

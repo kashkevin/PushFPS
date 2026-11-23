@@ -290,7 +290,7 @@ function Get-UtcStamp {
 # --- redaction -----------------------------------------------------------------------------------
 # The same rules are in tools/remoteplay_latency_bench/report.py (redact_line), which is tested on Linux
 # and checks every received evidence folder again. Change both together.
-$allowedLine = '\[(INFO |WARN |ERROR|TRACE)\] \[(push-(latency|quality|benchmark|mode|hardware|profile|adaptive-fg)|remoteplay(-[a-z0-9-]+)?|slipstream-(governor|gpu-budget|watch|config|latency|latency-test|press|delivery|sr|fg|autorun|smartlink|swapchain|present|pipeline|nr|clean|quality|input|input-poll|scanout|cadence|net|smooth|capture)|capture-(driver-age|buffer)|nr-(runtime-status|adapt|reuse|model)|frame-(flow|rate)|pacing|present-deviation|present-contract|qml-window|ui-(dialog|fullscreen|window|resume)|fg-(validity|drops|ull)|display-(vrr|refresh|latency|query)|gpu-(failure|reconnect)|reset-lifecycle|engine-(hang|test)|crash|overlay-hooks|log-backpressure|qml\] \[update-check)\] '
+$allowedLine = '\[(INFO |WARN |ERROR|TRACE)\] \[(push-(latency|quality|benchmark|mode|hardware|profile|adaptive-fg)|remoteplay(-[a-z0-9-]+)?|slipstream-(governor|gpu-budget|watch|config|latency|latency-test|press|delivery|sr|fg|autorun|smartlink|swapchain|present|pipeline|nr|clean|quality|input|input-poll|scanout|cadence|net|smooth|capture)|capture-(driver-age|buffer)|nr-(runtime-status|adapt|reuse|model)|frame-(flow|rate)|pacing|present-deviation|present-contract|present-priority|qml-window|ui-(dialog|fullscreen|window|resume)|fg-(validity|drops|ull)|display-(vrr|refresh|latency|query)|gpu-(failure|reconnect)|reset-lifecycle|engine-(hang|test)|crash|overlay-hooks|log-backpressure|qml\] \[update-check)\] '
 $refusedLine = '\[remoteplay-discovery\]|registration|regist[_ -]?key|rp[_ -]?key|account|psn(?!r=)|token|secret|passw|ssid|morning|nickname'
 
 function Protect-Text([string]$Line) {
@@ -426,8 +426,8 @@ function Get-ArmPrefs($Arm) {
     $table = @{}
     # pushSmoothTarget 0: the fixed arms never inherit a Smoothness Mode chosen earlier in this folder (Package 9 integration
     # review); the sm-mode-* arms set it through VEYRA_EXP_RP_SMOOTH_TARGET.
-    # the nrperf sets (stream nrperf) run inside the smoothness and capture sessions with -Arms and are treated as their arms
-    if (@('smoothness', 'nrperf') -contains [string]$Arm.set) { $table['fgAdaptive'] = $false; $table['pacingRepair'] = $false; $table['pushSmoothTarget'] = 0 }
+    # the nrperf sets (stream nrperf) and the fglat set (FG latency part by part) run inside the smoothness and capture sessions with -Arms and are treated as their arms
+    if (@('smoothness', 'nrperf', 'fglat') -contains [string]$Arm.set) { $table['fgAdaptive'] = $false; $table['pacingRepair'] = $false; $table['pushSmoothTarget'] = 0 }
     # the capture session (stream capture): automatic buffering unless the arm names it; Smoothness Mode, the adaptive multiplier
     # and pacing repair off, so no arm inherits them from the shared capture settings folder
     if (@('capture', 'nrperf-capture') -contains [string]$Arm.set) { $table['captureBufferMode'] = 0; $table['fgAdaptive'] = $false; $table['pacingRepair'] = $false; $table['pushSmoothTarget'] = 0 }
@@ -1130,7 +1130,7 @@ function Invoke-ArmRun($Arm, [string]$Exe, [string]$Purpose, [int]$LimitSeconds,
     # settings folder, so the plain test profile of the other sessions never inherits them.
     $profileKind = [string]$Arm.exe
     if ($switches.ContainsKey('VEYRA_TEST_RP_PIPELINE')) { $profileKind += '-pipeline' }
-    if (@('smoothness', 'nrperf') -contains [string]$Arm.set) { $profileKind += '-smoothness' }   # its prefs (vrr, adaptive, repair) stay out of the other sessions' folders
+    if (@('smoothness', 'nrperf', 'fglat') -contains [string]$Arm.set) { $profileKind += '-smoothness' }   # its prefs (vrr, adaptive, repair) stay out of the other sessions' folders
     if (@('capture', 'nrperf-capture') -contains [string]$Arm.set) { $profileKind = [string]$Arm.exe + '-capture' }   # the folder that remembers the capture card (Invoke-CaptureSetup)
     if ($profiled) { $exeArgs = '--data-dir "' + (Write-TestProfile $profileKind (-not $automatic) (Get-ArmPrefs $Arm)) + '"' }
     $before = Get-LogSizes $logFolder

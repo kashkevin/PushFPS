@@ -516,9 +516,12 @@ $sessionRuns = @(
     [pscustomobject]@{ name = 'visual-no-hook'; out = (Join-Path $OutRoot 'kit-visual-no-hook'); args = @{ Session = 'visual'; DryRunWithout = 'slipstream-pipeline' } },
     [pscustomobject]@{ name = 'neural-not-in-build'; out = (Join-Path $OutRoot 'kit-neural-not-in-build'); args = @{ Session = 'neural'; DryRunNoNeural = $true } },
     # Stream network: the receive-side arms run inside the framegen session's plan (-Session framegen -Arms ...), each alone against nd-base.
-    [pscustomobject]@{ name = 'netdiag'; out = (Join-Path $OutRoot 'kit-netdiag'); args = @{ Session = 'framegen'; Arms = @('nd-base', 'nd-wait2', 'nd-load') } }
+    [pscustomobject]@{ name = 'netdiag'; out = (Join-Path $OutRoot 'kit-netdiag'); args = @{ Session = 'framegen'; Arms = @('nd-base', 'nd-wait2', 'nd-load') } },
+    # FG latency part by part: the fglat arms run inside the smoothness session's plan (-Session smoothness -Arms ...), each against its pair.
+    [pscustomobject]@{ name = 'fglat'; out = (Join-Path $OutRoot 'kit-fglat'); args = @{ Session = 'smoothness'; Arms = @('flt-off', 'flt-fg2', 'flt-fg2-phase', 'flt-fg2-hold', 'flt-fg2-grace', 'flt-fg2-ull', 'flt-fg2-ull-prio', 'flt-fg2-ull-low') } }
 )
 $featureText = @{
+    'fglat' = @('MEASURED VALUES: SMOOTHNESS', '  flt-off (2 runs)', '  flt-fg2 (2 runs)', '  flt-fg2-ull-low (2 runs)', 'against flt-off: ', 'against flt-fg2: ', 'against flt-fg2-ull: ', 'detail profile:ok,hdr:ok,fg:ok,fgMultiplier:ok,fgTier:ok')
     'netdiag' = @('MEASURED VALUES: FRAMEGEN', '  nd-base (2 runs)', '  nd-wait2 (2 runs)', '  nd-load (2 runs)', 'against nd-base:', 'network to decode P95 1.80 ms', 'dominant cause none')
     'input-no-core' = @('MEASURED VALUES: INPUT', 'input: not in this build (no [slipstream-input] line in any run')
     'visual-no-hook' = @('MEASURED VALUES: VISUAL', 'pipeline keys not applied: this build has no VEYRA_TEST_RP_PIPELINE', 'not compared with v-original: pipeline keys not applied in this arm', 'verdict: no verdict: the pipeline keys were not applied')

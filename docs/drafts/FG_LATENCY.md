@@ -328,6 +328,11 @@ parts=... understood=1`.
 headroom part also changes the multiplier (3X -> 2X, 6X -> 4X under VRR at 180 Hz). So these arms answer "does the whole
 mode help", not which part does: before any single part can become a default it needs its own arm (for example
 `VEYRA_EXP_RP_FG_ULL=hold` against the same arm without the switch), measured on its own.
+**Those arms now exist** (the kit's `fglat` set, 22 Nov 2026; docs/HARDWARE_TEST_PROCEDURE.md "Frame generation latency,
+part by part"): `flt-off`, `flt-fg2` (2X as installed), `flt-fg2-phase`, `flt-fg2-hold`, `flt-fg2-grace` (one part each
+against `flt-fg2`), `flt-fg2-ull` (all parts), `flt-fg2-ull-prio` (all parts + `VEYRA_TEST_PRESENT_QUEUE_PRIORITY=high`,
+section 1.4's presentation-blit contention) and `flt-fg2-ull-low` (all parts + VFG Low, a smaller fg1), about 22 minutes
+inside `-Session smoothness -Pass 120`. No engine code changed for them.
 
 Every arm: `deadPhaseFps` and `fallbackFps` (source 2; `fallbackFps` counts real frames shown when ready because a hold
 held frame generation off, LiveFgRejectionHold or the ULL hold), `presentLateP99Ms`, `dropDeadlineFps` (the grace part's cost),

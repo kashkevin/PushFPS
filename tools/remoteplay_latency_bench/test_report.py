@@ -202,7 +202,7 @@ class KitFiles(unittest.TestCase):
         for name, row in table.items():
             self.assertRegex(name, r"^[A-Za-z0-9-]+$")
             self.assertEqual(set(row), {"name", "exe", "set", "compare", "switches", "note", "fg", "differs"}, name)       # a comma in a note would add a column
-            self.assertIn(row["exe"], ("original", "modified", "experimental", "previous")); self.assertIn(row["set"], ("quick", "standard", "experimental", "versus", "switches", "quality", "probe", "network", "network-builds", "network-wifi-mode", "clarity", "netdiag", "nrperf", "nrperf-capture") + report.MEASURE_SESSIONS)
+            self.assertIn(row["exe"], ("original", "modified", "experimental", "previous")); self.assertIn(row["set"], ("quick", "standard", "experimental", "versus", "switches", "quality", "probe", "network", "network-builds", "network-wifi-mode", "clarity", "netdiag", "nrperf", "nrperf-capture", "fglat") + report.MEASURE_SESSIONS)
             if row["exe"] == "previous": self.assertEqual(row["set"], "builds", name)                    # Package 7's build only in the regression session
             if row["set"] in ("switches", "quality", "probe", "network", "network-wifi-mode", "netdiag"): self.assertEqual(row["exe"], "experimental", name)
             self.assertIn(row["fg"], ("off", "on"), name); self.assertEqual(row["fg"] == "on", "frame generation on" in row["note"].lower(), name)
@@ -211,7 +211,7 @@ class KitFiles(unittest.TestCase):
             for pair in filter(None, row["switches"].split(";")): self.assertRegex(pair, r"^(VEYRA_(EXP|TEST)_(RP|PRESENT|SR|PIPE)_[A-Z0-9_]+=[^=;]+|pref:(pushAutoFullscreen|vrr|fgAdaptive|pacingRepair)=(true|false)|pref:captureBufferMode=[012]|pipeline:[A-Za-z0-9]+=[A-Za-z0-9.-]+(\|[A-Za-z0-9]+=[A-Za-z0-9.-]+)*)$")
         self.assertEqual([n for n, r in table.items() if r["set"] == "quick"], ["original", "mod-legacy", "mod-all"])
         self.assertEqual(table["original"]["switches"], ""); self.assertEqual(table["mod-all"]["switches"], "")
-        self.assertTrue(all(r["set"] in ("experimental", "versus", "switches", "probe", "network", "network-wifi-mode", "input", "audiofix", "pacing", "smoothness", "neural", "clarity", "netdiag", "retest", "capture", "nrperf", "nrperf-capture") for n, r in table.items() if "VEYRA_EXP_" in r["switches"]))   # experiments only when asked
+        self.assertTrue(all(r["set"] in ("experimental", "versus", "switches", "probe", "network", "network-wifi-mode", "input", "audiofix", "pacing", "smoothness", "neural", "clarity", "netdiag", "retest", "capture", "nrperf", "nrperf-capture", "fglat") for n, r in table.items() if "VEYRA_EXP_" in r["switches"]))   # experiments only when asked
         self.assertEqual([n for n, r in table.items() if "STREAM_DEDUP" in r["switches"]], ["p-dedup"])
         versus = {n: r for n, r in table.items() if r["set"] == "versus"}
         self.assertEqual(versus["stable"]["exe"], "modified"); self.assertEqual(versus["x-base"]["compare"], "stable")
