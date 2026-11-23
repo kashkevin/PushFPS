@@ -53,9 +53,9 @@
 #   nrperf-capture  the same four-way on a capture card inside the capture session (its card folder):
 #             Run-First-Test.cmd -Session capture -Pass 120 -Arms nrpc-base,nrpc-nr,nrpc-fg,nrpc-nr-fg,nrpc-nr-fg-adapt (then -Pass 180).
 #   fglat     (frame generation latency, part by part; docs/drafts/FG_LATENCY.md section 6) FG off, VFG 2x as installed, then each
-#             part of VEYRA_EXP_RP_FG_ULL alone (phase, hold, grace), all of it, all of it with the presentation queue at high
+#             part of VEYRA_EXP_RP_FG_ULL alone (phase, hold, grace, headroom), all of it, all of it with the presentation queue at high
 #             priority, and all of it with VFG Low (the cheapest first generated frame). Runs INSIDE the smoothness session with -Arms:
-#             Run-First-Test.cmd -Session smoothness -Pass 120 -Arms flt-off,flt-fg2,flt-fg2-phase,flt-fg2-hold,flt-fg2-grace,flt-fg2-ull,flt-fg2-ull-prio,flt-fg2-ull-low
+#             Run-First-Test.cmd -Session smoothness -Pass 120 -Arms flt-off,flt-fg2,flt-fg2-phase,flt-fg2-hold,flt-fg2-grace,flt-fg2-headroom,flt-fg2-ull,flt-fg2-ull-prio,flt-fg2-ull-low
 #             Each part is compared with flt-fg2 (the same 2x without the switch), the combinations with flt-fg2-ull, flt-fg2 with flt-off.
 name,exe,set,compare,switches,note,fg,differs
 original,original,quick,mod-legacy,,The original build. Frame generation OFF.,off,
@@ -237,6 +237,7 @@ flt-fg2,experimental,fglat,flt-off,pipeline:profile=original|hdr=0|fg=vfg|fgMult
 flt-fg2-phase,experimental,fglat,flt-fg2,pipeline:profile=original|hdr=0|fg=vfg|fgMultiplier=2;VEYRA_EXP_RP_FG_ULL=phase;VEYRA_EXP_PRESENT_WINDOW_FACTS=1,FG latency: only the learned pair phase (VEYRA_EXP_RP_FG_ULL=phase) against 2x as installed. Expected about 4 ms less at 2x (watch dropDeadlineFps). Frame generation ON.,on,
 flt-fg2-hold,experimental,fglat,flt-fg2,pipeline:profile=original|hdr=0|fg=vfg|fgMultiplier=2;VEYRA_EXP_RP_FG_ULL=hold;VEYRA_EXP_PRESENT_WINDOW_FACTS=1,FG latency: only the hold (VEYRA_EXP_RP_FG_ULL=hold: real frames shown when ready while no generated frame is shown). No difference expected while every pair is generated. Frame generation ON.,on,
 flt-fg2-grace,experimental,fglat,flt-fg2,pipeline:profile=original|hdr=0|fg=vfg|fgMultiplier=2;VEYRA_EXP_RP_FG_ULL=grace;VEYRA_EXP_PRESENT_WINDOW_FACTS=1,FG latency: only the short grace (VEYRA_EXP_RP_FG_ULL=grace: a late generated frame is dropped instead of shown up to 10 ms late). Frame generation ON.,on,
+flt-fg2-headroom,experimental,fglat,flt-fg2,pipeline:profile=original|hdr=0|fg=vfg|fgMultiplier=2;VEYRA_EXP_RP_FG_ULL=headroom;VEYRA_EXP_PRESENT_WINDOW_FACTS=1,FG latency: only the headroom part (VEYRA_EXP_RP_FG_ULL=headroom: Smoothness Mode with a target under the VRR ceiling; 90 at 120 Hz). A 60 fps game stays 2x; [slipstream-smooth] chosen= says if it stepped down. Frame generation ON.,on,
 flt-fg2-ull,experimental,fglat,flt-fg2,pipeline:profile=original|hdr=0|fg=vfg|fgMultiplier=2;VEYRA_EXP_RP_FG_ULL=1;VEYRA_EXP_PRESENT_WINDOW_FACTS=1,FG latency: all parts of Ultra Low Latency Frame Generation (VEYRA_EXP_RP_FG_ULL=1) against 2x as installed. Frame generation ON.,on,
 flt-fg2-ull-prio,experimental,fglat,flt-fg2-ull,pipeline:profile=original|hdr=0|fg=vfg|fgMultiplier=2;VEYRA_EXP_RP_FG_ULL=1;VEYRA_TEST_PRESENT_QUEUE_PRIORITY=high;VEYRA_EXP_PRESENT_WINDOW_FACTS=1,FG latency: all parts plus the presentation queue at high priority (does showing a frame wait behind the next pair's GPU work? the [present-priority] line says whether the card allowed it). Frame generation ON.,on,
 flt-fg2-ull-low,experimental,fglat,flt-fg2-ull,pipeline:profile=original|hdr=0|fg=vfg|fgMultiplier=2|fgTier=0;VEYRA_EXP_RP_FG_ULL=1;VEYRA_EXP_PRESENT_WINDOW_FACTS=1,FG latency: all parts with VFG Low (the cheapest model: the first generated frame is ready sooner; judge the picture). Frame generation ON.,on,fgTier

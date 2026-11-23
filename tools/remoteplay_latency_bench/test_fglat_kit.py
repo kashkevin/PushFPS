@@ -19,10 +19,10 @@ KIT = os.path.join(ROOT, "scripts", "remoteplay", "testkit")
 sys.path.insert(0, HERE)
 import report  # noqa: E402
 
-ARMS = ["flt-off", "flt-fg2", "flt-fg2-phase", "flt-fg2-hold", "flt-fg2-grace", "flt-fg2-ull", "flt-fg2-ull-prio",
-        "flt-fg2-ull-low"]
+ARMS = ["flt-off", "flt-fg2", "flt-fg2-phase", "flt-fg2-hold", "flt-fg2-grace", "flt-fg2-headroom", "flt-fg2-ull",
+        "flt-fg2-ull-prio", "flt-fg2-ull-low"]
 PAIRS = {"flt-off": "flt-off", "flt-fg2": "flt-off", "flt-fg2-phase": "flt-fg2", "flt-fg2-hold": "flt-fg2",
-         "flt-fg2-grace": "flt-fg2", "flt-fg2-ull": "flt-fg2", "flt-fg2-ull-prio": "flt-fg2-ull",
+         "flt-fg2-grace": "flt-fg2", "flt-fg2-headroom": "flt-fg2", "flt-fg2-ull": "flt-fg2", "flt-fg2-ull-prio": "flt-fg2-ull",
          "flt-fg2-ull-low": "flt-fg2-ull"}
 # What each arm adds to its pair: (pipeline keys added, pipeline keys removed, other switches added)
 ADDS = {
@@ -30,6 +30,7 @@ ADDS = {
     "flt-fg2-phase": ([], [], {"VEYRA_EXP_RP_FG_ULL=phase"}),
     "flt-fg2-hold": ([], [], {"VEYRA_EXP_RP_FG_ULL=hold"}),
     "flt-fg2-grace": ([], [], {"VEYRA_EXP_RP_FG_ULL=grace"}),
+    "flt-fg2-headroom": ([], [], {"VEYRA_EXP_RP_FG_ULL=headroom"}),
     "flt-fg2-ull": ([], [], {"VEYRA_EXP_RP_FG_ULL=1"}),
     "flt-fg2-ull-prio": ([], [], {"VEYRA_TEST_PRESENT_QUEUE_PRIORITY=high"}),
     "flt-fg2-ull-low": (["fgTier=0"], [], set()),
@@ -89,7 +90,7 @@ class FgLatKit(unittest.TestCase):
 
     def test_part_names_are_the_engines(self):
         # pushUllParse turns an unknown part into "nothing on": a typo would make an arm a copy of its pair
-        for part in ("hold", "phase", "grace"):
+        for part in ("hold", "phase", "grace", "headroom"):
             self.assertIn('part == L"' + part + '"', self.header, part)
         self.assertIn('value == L"1"', self.header)                                # flt-fg2-ull's "1" means every part
         with open(os.path.join(ROOT, "src", "engine", "VideoPresenter.cpp"), encoding="utf-8") as f:
@@ -108,7 +109,7 @@ class FgLatKit(unittest.TestCase):
         found = re.findall(r"    '(\w+)' = @\{ plan = '([^']+)'; rounds = (\d+);", self.kit)
         plans = {s: p for s, p, _r in found}
         rounds = {s: int(r) for s, _p, r in found}
-        self.assertEqual(report.about_minutes(rounds["smoothness"] * len(ARMS) * report.plan_seconds(plans["smoothness"])), 22)
+        self.assertEqual(report.about_minutes(rounds["smoothness"] * len(ARMS) * report.plan_seconds(plans["smoothness"])), 25)
 
     def test_the_lines_it_compares_are_kept(self):
         lines = [

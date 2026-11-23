@@ -445,7 +445,7 @@ function Get-ArmPrefs($Arm) {
 function Clear-KitSwitches {
     $names = @()
     foreach ($item in Get-ChildItem Env:) {
-        if (($item.Name -like 'VEYRA_EXP_RP_*') -or ($item.Name -like 'VEYRA_TEST_RP_*') -or ($item.Name -like 'VEYRA_EXP_PRESENT_*') -or ($item.Name -like 'VEYRA_EXP_SR_*') -or ($item.Name -like 'VEYRA_EXP_PIPE_*')) { $names += $item.Name }
+        if (($item.Name -like 'VEYRA_EXP_RP_*') -or ($item.Name -like 'VEYRA_TEST_RP_*') -or ($item.Name -like 'VEYRA_EXP_PRESENT_*') -or ($item.Name -like 'VEYRA_EXP_SR_*') -or ($item.Name -like 'VEYRA_EXP_PIPE_*') -or ($item.Name -like 'VEYRA_TEST_PRESENT_*')) { $names += $item.Name }
     }
     foreach ($name in $names) { Remove-Item -Path ('Env:' + $name) -ErrorAction SilentlyContinue }
     return $names

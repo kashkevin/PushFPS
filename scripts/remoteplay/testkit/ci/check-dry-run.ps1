@@ -518,7 +518,7 @@ $sessionRuns = @(
     # Stream network: the receive-side arms run inside the framegen session's plan (-Session framegen -Arms ...), each alone against nd-base.
     [pscustomobject]@{ name = 'netdiag'; out = (Join-Path $OutRoot 'kit-netdiag'); args = @{ Session = 'framegen'; Arms = @('nd-base', 'nd-wait2', 'nd-load') } },
     # FG latency part by part: the fglat arms run inside the smoothness session's plan (-Session smoothness -Arms ...), each against its pair.
-    [pscustomobject]@{ name = 'fglat'; out = (Join-Path $OutRoot 'kit-fglat'); args = @{ Session = 'smoothness'; Arms = @('flt-off', 'flt-fg2', 'flt-fg2-phase', 'flt-fg2-hold', 'flt-fg2-grace', 'flt-fg2-ull', 'flt-fg2-ull-prio', 'flt-fg2-ull-low') } }
+    [pscustomobject]@{ name = 'fglat'; out = (Join-Path $OutRoot 'kit-fglat'); args = @{ Session = 'smoothness'; Arms = @('flt-off', 'flt-fg2', 'flt-fg2-phase', 'flt-fg2-hold', 'flt-fg2-grace', 'flt-fg2-headroom', 'flt-fg2-ull', 'flt-fg2-ull-prio', 'flt-fg2-ull-low') } }
 )
 $featureText = @{
     'fglat' = @('MEASURED VALUES: SMOOTHNESS', '  flt-off (2 runs)', '  flt-fg2 (2 runs)', '  flt-fg2-ull-low (2 runs)', 'against flt-off: ', 'against flt-fg2: ', 'against flt-fg2-ull: ', 'detail profile:ok,hdr:ok,fg:ok,fgMultiplier:ok,fgTier:ok')

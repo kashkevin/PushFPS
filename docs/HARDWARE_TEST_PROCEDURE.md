@@ -200,18 +200,24 @@ each result means; the adaptive arm is judged by eye too (a reused frame carries
 
 What frame generation adds, and how much of it each part of `VEYRA_EXP_RP_FG_ULL` takes back (docs/drafts/FG_LATENCY.md
 sections 0, 5 and 6). Remote Play, Windows at 120 Hz:
-`Run-First-Test.cmd -Session smoothness -Pass 120 -Arms flt-off,flt-fg2,flt-fg2-phase,flt-fg2-hold,flt-fg2-grace,flt-fg2-ull,flt-fg2-ull-prio,flt-fg2-ull-low`
-(about 22 minutes). Keep the camera moving steadily in every run (the same scene each time).
+`Run-First-Test.cmd -Session smoothness -Pass 120 -Arms flt-off,flt-fg2,flt-fg2-phase,flt-fg2-hold,flt-fg2-grace,flt-fg2-headroom,flt-fg2-ull,flt-fg2-ull-prio,flt-fg2-ull-low`
+(about 25 minutes). Set Windows to 120 Hz first: `-Pass 120` only says what the kit asks for, it does not change the
+display. Keep the camera moving steadily in every run (the same scene each time).
 
 - `flt-off` (no frame generation) against `flt-fg2` (VFG 2x as installed): what frame generation adds.
-- `flt-fg2-phase`, `flt-fg2-hold`, `flt-fg2-grace`: one part each against `flt-fg2`; `flt-fg2-ull`: all parts.
+- `flt-fg2-phase`, `flt-fg2-hold`, `flt-fg2-grace`, `flt-fg2-headroom`: one part each against `flt-fg2`; `flt-fg2-ull`:
+  all four parts (`VEYRA_EXP_RP_FG_ULL=1`, what one line in `slipstream.ini` turns on).
+- The headroom part (and so every `-ull` arm) runs Smoothness Mode with a target under the VRR ceiling when variable
+  refresh is active: 90 at 120 Hz, 120 at 180 Hz. A 60 fps game still runs 2x, but Smoothness Mode may step down under load
+  and measures each pair's cost; check that `[slipstream-smooth] chosen=` is the same 2x as in `flt-fg2` and note any
+  step-down. Without variable refresh the part does nothing.
 - `flt-fg2-ull-prio`: all parts with the presentation queue at high priority (`[present-priority]` says whether the card
   allowed it) against `flt-fg2-ull`; `flt-fg2-ull-low`: all parts with VFG Low (the cheapest first generated frame;
   judge the picture) against `flt-fg2-ull`.
 
 Read per arm (software times inside the PC, never input-to-photon): `[slipstream-smooth]` real-frame age P50 / P95 / P99
-(`realAge*`), the estimate `addedEstMs`, the phase in force (`phaseMs`, `phaseLearned`), presents late (`presentLateP95Ms`
-/ `P99Ms`), generated frames dropped late (`dropDeadlineFps`), the first generated frame's readiness (`firstReady*`) and
+(`realAge*`), the estimate `addedEstMs`, the phase in force (`phaseMs`, `phaseLearned`), presents late (`presentLateP99Ms` on the
+page; the P95 is only in the kept log line), generated frames dropped late (`dropDeadlineFps`), the first generated frame's readiness (`firstReady*`) and
 the GPU time per stage; `[slipstream-cadence]` real and generated frames per second and the spacing P50 / P95 / P99 / max
 of the presents. A part is only worth keeping when its arm shows lower real-frame age than its pair with the same
 spacing. The camera procedure of docs/drafts/FG_LATENCY.md section 6 is the only input-to-photon measure.
