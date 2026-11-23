@@ -766,6 +766,7 @@ bool requiresGraphRebuild(const EnhancementSettings& savedPrevious, const Enhanc
     if(previous.exclusion.enabled!=next.exclusion.enabled)return true;
     // PushFPS Live HUD Lock owns its mask and compose passes (pipeline/PushHudLock.h).
     if(previous.multiplier>1&&next.multiplier>1&&previous.hudLock!=next.hudLock)return true;
+    if((previous.clean>0)!=(next.clean>0))return true;   // PushFPS restoration: its pass exists only when it is on
     // The output stabiliser's pass exists only when it is on (EnhanceGraph::createNrHoldPass).
     if ((previous.nrHoldStrength > 0.0f) != (next.nrHoldStrength > 0.0f)) return true;
     // NR inference reuse allocates its pass only when on (EnhanceGraph::createNrReusePass);
