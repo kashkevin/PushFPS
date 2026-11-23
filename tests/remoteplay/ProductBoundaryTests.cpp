@@ -1,3 +1,10 @@
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h> // Get/SetEnvironmentVariableW: the trigger filter switch in virtualInput()
 #include "veyra/source/RemotePlaySessionSource.h"
 #include "veyra/remoteplay/ControllerInput.h"
 #include "veyra/remoteplay/Discovery.h"
@@ -29,7 +36,7 @@ static void mailbox(){
     s.controller(down);auto up=down;up.touches[0].id=-1;s.controller(up);
     if(s.takeControllerLocked(now).touches[0].id!=1||s.takeControllerLocked(now).touches[0].id!=-1)throw std::runtime_error("input edges overwritten by decoder owner");
     for(int i=0;i<40;++i)s.controller(down);
-    if(s.pendingControllers_.size()>16||s.takeControllerLocked(now+2000000)!=remoteplay::ControllerState{})throw std::runtime_error("input queue bound or stale release");
+    if(s.controllers_.depth()>16||s.takeControllerLocked(now+2000000)!=remoteplay::ControllerState{})throw std::runtime_error("input queue bound or stale release");
     AVFrame* raw=av_frame_alloc();raw->width=16;raw->height=16;raw->format=AV_PIX_FMT_YUV420P;
     if(av_frame_get_buffer(raw,32)<0)throw std::bad_alloc();
     pipeline::FramePacket packet;SourceInfo info;info.width=16;info.height=16;
@@ -107,6 +114,32 @@ int virtualInput(){
     auto calibrated=input.poll(true);ok&=std::abs(calibrated.gyro[0])<1e-5&&std::abs(calibrated.gyro[2])<1e-5;
     ControllerFeedback f;f.rumble=true;f.left=5;input.feedback(f,true);ok&=rumbleCalls>0;
     const auto before=rumbleCalls;ok&=input.poll(false)==ControllerState{};ok&=rumbleCalls>before;
+    input.stop();
+    // Veyra 6ebaab48 / 9ff43a77 (#161): a held RT must never pulse neutral or become LT; focus loss releases
+    // it, and returning focus must resume the held physical state without reconnect. Run on a fresh
+    // ControllerInput with the trigger filter experiment off (the default) and on
+    // (VEYRA_EXP_RP_TRIGGER_FILTER=1, read once in ControllerInput::start; the caller's value is restored).
+    const auto heldTrigger=[&](const wchar_t* filter){
+        wchar_t saved[8]{};const DWORD had=GetEnvironmentVariableW(L"VEYRA_EXP_RP_TRIGGER_FILTER",saved,8);
+        SetEnvironmentVariableW(L"VEYRA_EXP_RP_TRIGGER_FILTER",filter);
+        ControllerInput pad;const bool started=pad.start(id);
+        SetEnvironmentVariableW(L"VEYRA_EXP_RP_TRIGGER_FILTER",had>0&&had<8?saved:nullptr);
+        if(!started)return false;
+        pad.poll(true); // opens the virtual pad
+        bool pass=true;
+        SDL_SetJoystickVirtualAxis(joystick,SDL_GAMEPAD_AXIS_LEFT_TRIGGER,-32768);
+        SDL_SetJoystickVirtualAxis(joystick,SDL_GAMEPAD_AXIS_RIGHT_TRIGGER,32767);
+        for(int n=0;n<250;++n){const auto held=pad.poll(true);pass&=held.inputActive&&held.r2==255&&held.l2==0;}
+        pass&=pad.poll(false)==ControllerState{};
+        const auto resumed=pad.poll(true);pass&=resumed.inputActive&&resumed.r2==255&&resumed.l2==0;
+        SDL_SetJoystickVirtualAxis(joystick,SDL_GAMEPAD_AXIS_LEFT_TRIGGER,32767);
+        SDL_SetJoystickVirtualAxis(joystick,SDL_GAMEPAD_AXIS_RIGHT_TRIGGER,-32768);
+        const auto brake=pad.poll(true);pass&=brake.l2==255&&brake.r2==0;
+        pad.stop();return pass;
+    };
+    const bool heldPlain=heldTrigger(nullptr),heldFiltered=heldTrigger(L"1");
+    std::cout<<"HELD_TRIGGER filter_off="<<heldPlain<<" filter_on="<<heldFiltered<<"\n";
+    ok&=heldPlain&&heldFiltered;
     ControllerFeedback bounded;for(int i=0;i<20;++i){ControllerFeedback packet;packet.haptics.resize(120,1);bounded.merge(std::move(packet));ok&=bounded.haptics.size()<=600;}
     input.stop();SDL_CloseJoystick(joystick);SDL_DetachVirtualJoystick(id);SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
     std::cout<<"VIRTUAL_INPUT motion_touch_lifecycle_focus_feedback_bounded="<<ok<<" REAL_PS5_NOT_TESTED=1\n";return ok?0:23;
