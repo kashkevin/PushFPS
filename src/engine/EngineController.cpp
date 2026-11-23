@@ -37,6 +37,7 @@
 #include "veyra/engine/PushCaptureStats.h"
 #include "veyra/engine/PushFgLatency.h"
 #include "veyra/engine/PushNrAdapt.h"
+#include "veyra/engine/PushSizesHook.h"
 #include "veyra/source/MediaFileSource.h"
 #include "veyra/source/CaptureCardSource.h"
 #include "veyra/source/DeckLinkCapture.h"
@@ -808,6 +809,7 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
             // adapter, so AMD NR never ran in the product (field log 2026-10-05,
             // RX 9070 XT: "normalized ... nr=false").
             const bool amdNrAdapter=ctx.adapter().vendorId==0x1002;
+            PushSizesHook sizesHook;   // PushFPS stream "delay90": [slipstream-sizes], always on, at most one look a second (engine/PushSizesHook.h)
             PushSmoothHook smoothHook; // PushFPS stream "smooth": VEYRA_EXP_RP_SMOOTH_*, Smoothness Mode, [slipstream-smooth] (engine/PushSmoothHook.h)
             // PushFPS stream "capture": [slipstream-capture] for capture cards, only with VEYRA_EXP_RP_STATS=1 (engine/PushCaptureStats.h).
             PushCaptureWindow captureWindow(physicalCapture&&smoothHook.switches().stats);int captureWindowFormat=-1;
@@ -3294,7 +3296,10 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
                                     for(unsigned f=0;f<batch.batch.count;++f)if(batch.batch.frames[f].kind==pipeline::FrameKind::Generated&&watch->frameReadyObserved[f]){firstAt=watch->frameReadyObserved[f];break;}
                                     const bool onPhase=timeline.paced()&&due-baselineReady>5000;
                                     smoothHook.presentedReal(physicalCapture?-1.0:double(presentEndHost-baselineReady)/10000,readyAt>0?double(presentBeginHost-readyAt)/10000:-1.0,
-                                        timeline.paced()?double(due-baselineReady)/10000:-1.0,firstAt>0?double(firstAt-baselineReady)/10000:-1.0,lateMs,onPhase,unsigned(s.count),pairFgHeld);
+                                        timeline.paced()?double(due-baselineReady)/10000:-1.0,firstAt>0?double(firstAt-baselineReady)/10000:-1.0,lateMs,onPhase,unsigned(s.count),pairFgHeld,
+                                        double(std::chrono::duration_cast<std::chrono::nanoseconds>(watch->processStart.time_since_epoch()).count()/100-baselineReady)/10000,readyAt>0?double(readyAt-baselineReady)/10000:-1.0,
+                                        batch.batch.count>=2&&batch.batch.b100ns>batch.batch.a100ns?double(batch.batch.count-1)/double(batch.batch.count)*double(batch.batch.b100ns-batch.batch.a100ns)/10000:-1.0,
+                                        double(presentBeginHost-baselineReady)/10000);   // stream "delay90": pickup, ready, (M-1)/M x T, Present call (PushFgLatency.h parts)
                                 }
                             }
                             if(didPresent){++s.handled;++s.count;flow->presented(generated,item.lease->consumerFence,host100ns(),presenter.lastPresentCallHost100ns());if(!generated)++presentationCompletedReal;s.ageMs=double(host100ns()-captureArrival)/10000;
@@ -3387,6 +3392,12 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
 
                 for(size_t stage=0;stage<measured.gpu.size();++stage){const auto& sample=measured.gpu[stage];if(sample.state==diagnostics::SampleState::Measured&&sample.milliseconds&&sample.end&&sample.end!=lastGpuSampleEnd[stage]){gpuStageTimes[stage].add(*sample.milliseconds);lastGpuSampleEnd[stage]=sample.end;}}
                 measured.resolution=pipeline::ResolutionPlan::make({width,height},options.sr,options.snapshot().nrPolicy,isImage,options.settings.revision,runningSrTarget(options.settings,options.sr,isImage,ctx.adapter().isNvidia,smoothHook.followWidth(),smoothHook.followHeight()),options.settings.lowLatency&&options.nr,0,runningSrPrescale(options.settings,ctx.adapter().isNvidia,isImage),runningSrOutput(options.settings,ctx.adapter().isNvidia),dualSrRuns(options.settings,ctx.adapter().isNvidia,isImage),options.settings.dualSrTarget);measured.decodeCpuMs=decodeMs;measured.submitCpuMs=std::chrono::duration<double,std::milli>(processDone-processStart).count();measured.gpuWaitCpuMs=gpuWaitMs;measured.deadlineWaitCpuMs=frameWaitMs;measured.presentCpuMs=framePresentMs;measured.queueWatermark=out.batch.count;
+                if(!isImage&&sizesHook.due(host100ns())){   // stream "delay90": the real working sizes (PushSizesHook.h; writes only on a change)
+                    PushSizesHook::Inputs si;si.graph=graph.get();si.plan=&measured.resolution;si.sr=options.sr;si.dualSr=dualSrRuns(options.settings,ctx.adapter().isNvidia,isImage);si.hdrOutput=graph->hdrOutput();
+                    si.srTargetAsked=int(options.settings.srTarget);si.srTargetUsed=int(runningSrTarget(options.settings,options.sr,isImage,ctx.adapter().isNvidia,smoothHook.followWidth(),smoothHook.followHeight()));
+                    si.backBufferW=presenter.backBufferWidth();si.backBufferH=presenter.backBufferHeight();si.srDisplaySwitch=smoothHook.switches().srDisplay;si.fitSwitch=smoothHook.switches().fitDisplay;
+                    sizesHook.observe(window,si);
+                }
                 LiveStats completed;if(liveScheduler)completed=liveStats;
                 uint64_t skipped=0;{std::lock_guard lock(mutex_);skipped=snapshot_.captureRateSkipped-rateSkippedBase;}
                 frameFlow->update([&](auto& m){m.counters.captureReceived=captureStats.received-captureFlowBase.received;m.counters.mailboxOverwritten=captureStats.dropped-captureFlowBase.dropped;m.counters.sourceSkippedBeforeGraph=skipped;m.slotReuseWaitCount=slotWaitCount;m.slotReuseWaitMs=slotWaitMilliseconds;m.counters.commandSlotsInFlight=slotsInFlight;m.counters.commandSlotHighWater=std::max(m.counters.commandSlotHighWater,slotsInFlight);});

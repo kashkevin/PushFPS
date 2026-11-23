@@ -90,6 +90,9 @@ public:
     // queue; caller drains the shared queue and releases before resize/close.
     Microsoft::WRL::ComPtr<ID3D12Resource> presentedResourceForTest();
     uint64_t submittedCount() const {return sink_.presentCount();}
+    // PushFPS stream "delay90" ([slipstream-sizes]): the swap chain's back buffer extent.
+    uint32_t backBufferWidth() const {return sink_.bufferWidth();}
+    uint32_t backBufferHeight() const {return sink_.bufferHeight();}
     uint64_t consumerFenceValue(uint64_t sharedValue)const{return presentationQueue_?presentationRing_.lastSignaledValue():sharedValue;}
     double cpuWaitMilliseconds(const gfx::CommandSlotRing& shared)const{return presentationQueue_?presentationRing_.cpuWaitMilliseconds():shared.cpuWaitMilliseconds();}
     uint64_t xessGeneratedCount() const {return sink_.xess()?sink_.xess()->generatedCount():0;}

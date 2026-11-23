@@ -97,8 +97,8 @@ class FgLatKit(unittest.TestCase):
             self.assertIn('GetEnvironmentVariableW(L"VEYRA_TEST_PRESENT_QUEUE_PRIORITY",requestedPriority,16)&&std::wstring_view(requestedPriority)==L"high"', f.read())
 
     def test_runs_inside_the_smoothness_session(self):
-        self.assertIn("if (@('smoothness', 'nrperf', 'fglat') -contains [string]$Arm.set) { $table['fgAdaptive'] = $false; $table['pacingRepair'] = $false; $table['pushSmoothTarget'] = 0 }", self.kit)
-        self.assertIn("if (@('smoothness', 'nrperf', 'fglat') -contains [string]$Arm.set) { $profileKind += '-smoothness' }", self.kit)
+        self.assertIn("if (@('smoothness', 'nrperf', 'fglat', 'd90') -contains [string]$Arm.set) { $table['fgAdaptive'] = $false; $table['pacingRepair'] = $false; $table['pushSmoothTarget'] = 0 }", self.kit)
+        self.assertIn("if (@('smoothness', 'nrperf', 'fglat', 'd90') -contains [string]$Arm.set) { $profileKind += '-smoothness' }", self.kit)
         # the command in arms.csv names exactly this set, in the order of the table
         m = re.search(r"-Session smoothness -Pass 120 -Arms (flt-[a-z0-9,-]+)", self.csv)
         self.assertIsNotNone(m)

@@ -462,6 +462,7 @@ TEST(keyboard_mouse_states_coalesce_in_the_controller_queue){
 #include "FgLatencyTests.inc"
 #include "KbmCameraTests.inc"
 #include "NrAdaptTests.inc"
+#include "SizesTests.inc"
 int main(int argc,char**argv){
     std::string filter;
     if(argc==2&&std::string_view(argv[1])=="--list"){for(auto [name,f]:tests()){(void)f;std::cout<<name<<'\n';}return 0;}

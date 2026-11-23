@@ -518,9 +518,15 @@ $sessionRuns = @(
     # Stream network: the receive-side arms run inside the framegen session's plan (-Session framegen -Arms ...), each alone against nd-base.
     [pscustomobject]@{ name = 'netdiag'; out = (Join-Path $OutRoot 'kit-netdiag'); args = @{ Session = 'framegen'; Arms = @('nd-base', 'nd-wait2', 'nd-load') } },
     # FG latency part by part: the fglat arms run inside the smoothness session's plan (-Session smoothness -Arms ...), each against its pair.
-    [pscustomobject]@{ name = 'fglat'; out = (Join-Path $OutRoot 'kit-fglat'); args = @{ Session = 'smoothness'; Arms = @('flt-off', 'flt-fg2', 'flt-fg2-phase', 'flt-fg2-hold', 'flt-fg2-grace', 'flt-fg2-headroom', 'flt-fg2-ull', 'flt-fg2-ull-prio', 'flt-fg2-ull-low') } }
+    [pscustomobject]@{ name = 'fglat'; out = (Join-Path $OutRoot 'kit-fglat'); args = @{ Session = 'smoothness'; Arms = @('flt-off', 'flt-fg2', 'flt-fg2-phase', 'flt-fg2-hold', 'flt-fg2-grace', 'flt-fg2-headroom', 'flt-fg2-ull', 'flt-fg2-ull-prio', 'flt-fg2-ull-low') } },
+    # The delay at 90 FPS at 4K (stream delay90): a few d90 arms inside the smoothness session (a 4K arm, the diagnostic screen-size
+    # arm and 2x against 3x), two d90c arms inside the capture session; every arm's switches are still checked at start-up (Read-ArmTable).
+    [pscustomobject]@{ name = 'd90'; out = (Join-Path $OutRoot 'kit-d90'); args = @{ Session = 'smoothness'; Pass = 180; Arms = @('d90-off', 'd90-fg3', 'd90-fg3-fit', 'd90-fg2') } },
+    [pscustomobject]@{ name = 'd90-capture'; out = (Join-Path $OutRoot 'kit-d90-capture'); args = @{ Session = 'capture'; Pass = 180; Arms = @('d90c-off', 'd90c-fg3') } }
 )
 $featureText = @{
+    'd90' = @('MEASURED VALUES: SMOOTHNESS', '  d90-off (2 runs)', '  d90-fg3 (2 runs)', '  d90-fg2 (2 runs)', 'against d90-off: ', 'against d90-fg3: ', 'interpolation wait (M-1)/M x T (formula on the pair''s own times) P50 22.24 ms', 'frame generation 3840x2160')
+    'd90-capture' = @('MEASURED VALUES: CAPTURE', '  d90c-off (2 runs)', '  d90c-fg3 (2 runs)', 'against d90c-off: ', 'interpolation wait (M-1)/M x T (formula on the pair''s own times) P50 22.24 ms', 'reason source-size')
     'fglat' = @('MEASURED VALUES: SMOOTHNESS', '  flt-off (2 runs)', '  flt-fg2 (2 runs)', '  flt-fg2-ull-low (2 runs)', 'against flt-off: ', 'against flt-fg2: ', 'against flt-fg2-ull: ', 'detail profile:ok,hdr:ok,fg:ok,fgMultiplier:ok,fgTier:ok')
     'netdiag' = @('MEASURED VALUES: FRAMEGEN', '  nd-base (2 runs)', '  nd-wait2 (2 runs)', '  nd-load (2 runs)', 'against nd-base:', 'network to decode P95 1.80 ms', 'dominant cause none')
     'input-no-core' = @('MEASURED VALUES: INPUT', 'input: not in this build (no [slipstream-input] line in any run')

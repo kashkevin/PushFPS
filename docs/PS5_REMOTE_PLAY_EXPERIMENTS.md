@@ -3491,3 +3491,54 @@ admission). Unverified on Windows; nothing measured; nothing changes for a user 
   100 MB at a 1440p work size, 175 MB at 4K (two RGBA16F at the chain size, two RGBA16F and one RG16F at the flow size;
   arithmetic). Kit arms: `nrp-*` / `nrpc-*` (docs/HARDWARE_TEST_PROCEDURE.md, the neural layer with and without frame
   generation).
+
+## The delay of 30 FPS at 90 FPS: working sizes and the delay part by part (stream "delay90", 23 Nov 2026)
+
+Analysis: docs/drafts/DELAY_90.md. Unverified on Windows; nothing here was measured; no switch here changes a default.
+- `[slipstream-sizes]` (always on, like `[slipstream-config]`; `engine/PushSizes.h` + `PushSizesHook.h`, tests
+  `tests/remoteplay/SizesTests.inc`): written when the live graph is built and whenever a value changes, looked at no
+  more than once a second (a few integer comparisons; it decides nothing). Keys: `source srInput srEvaluated base nr
+  flow fg output` (the graph's own sizes; `base` after any shrink; `nr` / `fg` `-` when that stage is off), `backBuffer`
+  (the swap chain), `client` (the video window's client area), `display` (the monitor), `mode` / `modeHz` (Windows'
+  current display mode), `sr srTarget srTargetAsked hdr`, `srDisplay` / `fitDisplay` (the two switches that lower the SR
+  target), `fit=0|1` (whether NR, frame generation and the output work within the box that covers the display) and
+  `fitReason=within-display|sr-lowered|sr-smallest-box|as-set|double-sr|source-size|display-unknown` (facts
+  about the sizes in force, not advice: at the owner's 4K setting on a 1440p panel the line reads `fit=0`, which is
+  his choice).
+- With `VEYRA_EXP_RP_STATS=1` the `[slipstream-smooth]` line splits a real frame's delay (frames on an FG phase whose
+  first generated frame was seen ready; `PushFgLatencyWindow::parts`): `pickupWaitP50/P95Ms` (decode or capture callback
+  -> engine pickup), `baseObsP50/P95Ms` (pickup -> the real frame seen ready), `fg1ObsP50/P95Ms` (real frame ready ->
+  first generated frame ready), `interpWaitP50Ms` ((M-1)/M x T of the pair, a formula on the pair's own timestamps),
+  `marginP50Ms` (phase minus first-ready minus that wait), `realLateP50Ms` (Present call minus deadline),
+  `partsSumP50Ms` (the six P50s added: an approximation), `delayToCallP50Ms` (the same frames' Present call minus decode
+  / callback, measured), `partsFps`. Software times on the PC; never input-to-photon. The kit shows them in the group
+  "where the delay goes" and the sizes in "processing sizes" (measures.csv, smoothness and capture sessions).
+- `VEYRA_EXP_RP_FIT_DISPLAY=1` (exactly 1, read once per process with the other `VEYRA_EXP_RP_SMOOTH_*` switches in
+  `engine/PushSmoothHook.h`; off by default): a DIAGNOSTIC switch, never a recommendation (the owner's rule of 23 Nov
+  2026: 4K processing is kept). Its only use is a labelled kit reference arm that shows what the working size itself
+  costs. Live playback evaluates super resolution into the smallest SR target box that covers the monitor (the SAME
+  code path as `VEYRA_EXP_RP_SMOOTH_SR_DISPLAY=1`, which keeps working unchanged; either switch turns it on). Not for
+  exports or still images, not with double SR. It does not reduce a source that is itself larger than the display
+  (a 4K capture), and no such pass will be built. A switch line `[slipstream-sizes] event=switch fitDisplay=1` is
+  written at the first read.
+- 4K levers (the owner's 4K rule, 23 Nov 2026; analysis DELAY_90.md; each off by default, unverified on Windows, nothing
+  measured):
+  - `[slipstream-smooth] gpuFg1P50Ms / gpuFg1P95Ms` (`VEYRA_EXP_RP_STATS=1` only): the GPU-timestamped time of the FIRST
+    generated frame of a pair (`GpuStage::Fg1`; VFG: the copy into CUDA's buffer, the semaphore wait, the inference
+    and the copy back; the DLSS path: its first evaluation; PushFlow and AMD FRC record the whole group there). With
+    `fg1ObsP50Ms` (the CPU's view) it shows whether fg1 at 4K is GPU work or waiting. `uploadCpuCopyFps`: capture
+    frames whose upload buffer was still being read when the next callback wrote it, so the callback wrote its CPU
+    planes and the graph copied the 12-25 MB picture again on the engine thread (expected 0; the counter tells).
+  - `VEYRA_EXP_RP_UPLOAD_EARLY_RELEASE=1` (exactly 1; `EnhanceGraph.cpp`, where the graph records the upload buffer's
+    read fence): a capture frame's upload buffer is released at the fence of the base list that copied from it, not
+    at the pair's last generated frame. Removes the CPU-plane fallback above when it happens; no effect when
+    `uploadCpuCopyFps` is 0.
+  - `VEYRA_EXP_RP_GRAPH_QUEUE_PRIORITY=high` (exactly "high"; `D3D12DeviceContext.cpp`): the graph's direct queue is
+    created at HIGH priority when the device supports it (`[graph-priority] requested=HIGH supported= selected=`), as
+    `VEYRA_TEST_PRESENT_QUEUE_PRIORITY=high` does for the presentation queue; a HIGH queue the device refuses at creation is
+    created again at NORMAL (`[graph-priority] ... selected=NORMAL fallback=1`), never a device failure. Hypothesis: base and generated-frame
+    lists win GPU time slices against other processes; VFG's CUDA inference is not on this queue. Risk: the
+    presentation blits (normal priority unless that test switch is set too) can wait behind graph work: watch
+    `[slipstream-cadence]` and `presentLateP99Ms`.
+  - `VEYRA_EXP_RP_FG_ULL` at 3X for 90 FPS: use the parts `hold,phase,grace`, not `1`/`headroom`: the headroom part
+    starts Smoothness Mode, which may step 3X down to 2X under load (60 FPS), against the owner's stable 90.

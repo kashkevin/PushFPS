@@ -429,8 +429,11 @@ inline PushSmoothShared& pushSmoothShared() {
 
 // --- the [slipstream-smooth] window --------------------------------------------------------------------------
 // GPU stages the line reports (indices into PushSmoothWindow's sample arrays).
-enum class PushSmoothStage : std::uint8_t { Color, Clean, Sr, Nr, Flow, Fg, Blit, Span, Count };
-inline constexpr std::array<std::string_view, 8> kPushSmoothStageNames{{"Color", "Clean", "Sr", "Nr", "Flow", "Fg", "Blit", "Span"}};
+// Fg1 (stream "delay90"): the GPU time of the FIRST generated frame of a pair (GpuStage::Fg1: for VFG from before the
+// copy into CUDA's input buffer to after its output's copy back, CUDA's own work and semaphore waits included), the only
+// generated frame on a real frame's critical path. Appended last so every earlier field keeps its place.
+enum class PushSmoothStage : std::uint8_t { Color, Clean, Sr, Nr, Flow, Fg, Blit, Span, Fg1, Count };
+inline constexpr std::array<std::string_view, 9> kPushSmoothStageNames{{"Color", "Clean", "Sr", "Nr", "Flow", "Fg", "Blit", "Span", "Fg1"}};
 
 // Session totals the engine keeps (cumulative); the window reports their change per second.
 struct PushSmoothCounters {

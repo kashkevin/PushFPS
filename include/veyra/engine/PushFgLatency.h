@@ -179,17 +179,44 @@ inline std::int64_t pushUllGeneratedGrace(std::int64_t grace100ns, std::int64_t 
 // outside the PC), realHoldP95/P99Ms, phaseMs (P50), phaseLearned, firstReadyP50/P95Ms, presentLateP95/P99Ms,
 // deadPhaseFps (real frames presented on an FG phase with no generated frame of their pair presented: delay paid for
 // nothing), fallbackFps. Unknown values are -1. Not thread-safe: the engine thread only.
+//
+// Stream "delay90" ("where the delay goes", docs/drafts/DELAY_90.md): a real frame presented on an FG phase after at least
+// one generated frame of its pair was seen ready is split into six parts, every one from that frame's own times (so the
+// parts of one frame add up, to within microseconds, to its Present call minus its decode / capture callback):
+//   pickup   decode/callback -> the engine picked the frame up (the wait before pickup: the mailbox, the previous
+//            generation group still on the GPU);
+//   base     pickup -> the real frame seen ready (its own processing: the CPU submit and the base GPU work);
+//   fg1      the real frame seen ready -> the first generated frame of its pair seen ready (the first generated frame's
+//            GPU time as the engine thread saw it);
+//   interp   (M-1)/M x T of its pair: the interpolation wait, from the pair's own timestamps and frame count (a formula
+//            applied to this pair, not a reading);
+//   margin   phase - (first + interp): what the phase in force holds beyond the inherent minimum (the learned phase's
+//            0.5 ms and 0-1 ms deadline margins on a card; T/M + base P95 - base - fg1 with Remote Play's fixed phase);
+//            negative when the phase was too short for the first generated frame;
+//   late     the Present call minus the frame's deadline (how late the engine thread presented it).
+// Readiness is what the engine thread saw when it looked: it can be late by the thread's own work, never early, so a late
+// look moves time from fg1 into base or from margin into fg1; the sum is unchanged (to within microseconds: the call and the deadline are read a few instructions apart).
+// Fields (after the earlier ones): pickupWaitP50/P95Ms, baseObsP50/P95Ms, fg1ObsP50/P95Ms, interpWaitP50Ms, marginP50Ms,
+// realLateP50Ms, partsSumP50Ms (the sum of those six P50s, an approximation of the next field: a sum of medians is not the
+// median of sums), delayToCallP50Ms (the same frames' Present call minus decode / callback, measured), partsFps (frames
+// split per second). Software times; never input-to-photon.
 class PushFgLatencyWindow {
 public:
-    enum class Metric : std::uint8_t { Age, Hold, Phase, First, Late, Count };
+    enum class Metric : std::uint8_t { Age, Hold, Phase, First, Late, Pickup, Base, Fg1, Interp, Margin, RealLate, Call, Count };
     static constexpr std::size_t kMax = 1024;   // samples per metric and window (5 s at 200 frames/s)
     void clear() {
         for (auto& n : count_) n = 0;
-        deadPhase_ = fallback_ = real_ = 0;
+        deadPhase_ = fallback_ = real_ = parts_ = 0;
     }
     void add(Metric m, double ms) {
         const auto i = static_cast<std::size_t>(m);
         if (!std::isfinite(ms) || ms < 0.0 || ms > 10000.0 || count_[i] >= kMax) return;
+        values_[i][count_[i]++] = ms;
+    }
+    // Margin and lateness can be negative (a phase too short; a frame presented before its deadline).
+    void addSigned(Metric m, double ms) {
+        const auto i = static_cast<std::size_t>(m);
+        if (!std::isfinite(ms) || ms < -10000.0 || ms > 10000.0 || count_[i] >= kMax) return;
         values_[i][count_[i]++] = ms;
     }
     void real(double ageMs, double holdMs, double phaseMs, double firstMs, bool onPhase, unsigned generatedShown, bool fallback) {
@@ -201,6 +228,23 @@ public:
         if (onPhase && generatedShown == 0) ++deadPhase_;
         if (fallback) ++fallback_;
     }
+    // Stream "delay90": one real frame's parts. Times in ms from its decode / capture callback: pickup, ready (seen
+    // ready), first (its pair's first generated frame seen ready), phase (its deadline), call (its Present call); interp
+    // = (M-1)/M x T of its pair; late = call - deadline. Only frames on an FG phase whose times are in order are split.
+    void parts(bool onPhase, double pickupMs, double readyMs, double firstMs, double interpMs, double phaseMs, double lateMs, double callMs) {
+        if (!onPhase || !(pickupMs >= 0.0) || !(readyMs >= pickupMs) || !(firstMs >= readyMs) || !(interpMs >= 0.0) || !(phaseMs >= 0.0) ||
+            !std::isfinite(lateMs) || !(callMs >= 0.0))
+            return;
+        ++parts_;
+        add(Metric::Pickup, pickupMs);
+        add(Metric::Base, readyMs - pickupMs);
+        add(Metric::Fg1, firstMs - readyMs);
+        add(Metric::Interp, interpMs);
+        addSigned(Metric::Margin, phaseMs - firstMs - interpMs);
+        addSigned(Metric::RealLate, lateMs);
+        add(Metric::Call, callMs);
+    }
+    std::uint64_t splitFrames() const { return parts_; }
     void presented(double lateMs) { add(Metric::Late, lateMs); }
     std::size_t samples(Metric m) const { return count_[static_cast<std::size_t>(m)]; }
     std::uint64_t realFrames() const { return real_; }
@@ -239,13 +283,33 @@ public:
         num("presentLateP99Ms", percentile(Metric::Late, 99));
         num("deadPhaseFps", perSecond > 0 ? double(deadPhase_) * perSecond : -1.0);
         num("fallbackFps", perSecond > 0 ? double(fallback_) * perSecond : -1.0);
+        // Stream "delay90": where the delay goes.
+        const Metric partList[] = {Metric::Pickup, Metric::Base, Metric::Fg1, Metric::Interp, Metric::Margin, Metric::RealLate};
+        double sum = 0.0;
+        bool complete = true;
+        for (const Metric m : partList) {
+            if (!samples(m)) complete = false;
+            else sum += percentile(m, 50);
+        }
+        num("pickupWaitP50Ms", percentile(Metric::Pickup, 50));
+        num("pickupWaitP95Ms", percentile(Metric::Pickup, 95));
+        num("baseObsP50Ms", percentile(Metric::Base, 50));
+        num("baseObsP95Ms", percentile(Metric::Base, 95));
+        num("fg1ObsP50Ms", percentile(Metric::Fg1, 50));
+        num("fg1ObsP95Ms", percentile(Metric::Fg1, 95));
+        num("interpWaitP50Ms", percentile(Metric::Interp, 50));
+        num("marginP50Ms", samples(Metric::Margin) ? percentile(Metric::Margin, 50) : -1.0);
+        num("realLateP50Ms", samples(Metric::RealLate) ? percentile(Metric::RealLate, 50) : -1.0);
+        num("partsSumP50Ms", complete ? sum : -1.0);
+        num("delayToCallP50Ms", percentile(Metric::Call, 50));
+        num("partsFps", perSecond > 0 ? double(parts_) * perSecond : -1.0);
         return s;
     }
 
 private:
     std::array<std::array<double, kMax>, static_cast<std::size_t>(Metric::Count)> values_{};
     std::array<std::size_t, static_cast<std::size_t>(Metric::Count)> count_{};
-    std::uint64_t deadPhase_ = 0, fallback_ = 0, real_ = 0;
+    std::uint64_t deadPhase_ = 0, fallback_ = 0, real_ = 0, parts_ = 0;
 };
 
 }  // namespace veyra::engine

@@ -61,7 +61,7 @@ permissions:
 jobs:
   checks:
     runs-on: windows-2022
-    timeout-minutes: 45   # the kit dry runs alone take about a quarter of an hour since every session runs
+    timeout-minutes: 60   # the kit dry runs take about 40 minutes since every session and set runs (39-43 min on 23 Nov 2026)
     steps:
       - uses: actions/checkout@v4
       - uses: ilammy/msvc-dev-cmd@v1
@@ -166,6 +166,7 @@ jobs:
             '#include "veyra/engine/PushCaptureStats.h"',
             '#include "veyra/engine/PushFgLatency.h"',
             '#include "veyra/engine/PushNrAdapt.h"',
+            '#include "veyra/engine/PushSizes.h"',
             'int main() { return 0; }') | Set-Content -Encoding ascii out\headers.cpp
           $log = cl /nologo /std:c++20 /EHsc /utf-8 /W4 /WX /permissive- /DNOMINMAX /DUNICODE /D_UNICODE /Iinclude /c /Foout\ out\headers.cpp 2>&1 | ForEach-Object { "$_" }
           $code = $LASTEXITCODE

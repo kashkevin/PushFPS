@@ -6,22 +6,20 @@
 # so that no package ships with a blank. Plain ASCII, lines of at most 100 characters, two spaces of indent.
 # Rule: say what was compiled, run and tested and on which machine; anything that only passed checks on GitHub's
 # Windows machine has NOT run on a gaming PC. Never write "validated" or a latency figure here.
-  Experimental build: build-windows number 66 (run 44980732479), 22 November 2026, compiled by
-  MSVC with warnings as errors and every step passed; the source is archived as
-  archive/c41755fe. Package 12A is the same program: only the test kit changed after it (the
-  [fg-ull] and [present-priority] log lines are kept, and the new frame generation latency test).
+  Experimental build: build-windows number 70 (run 45255513074), 23 November 2026, compiled by
+  MSVC with warnings as errors, and every step below passed; its source is archived as
+  archive/cd1ac414. One change came after it, to this text file only (a line of step 4).
   On GitHub's Windows machine (software renderer, no graphics card, no PS5, no capture card): the
-  unit tests, the controller test on a virtual gamepad, the GPU tests, 394 QML tests in 27
-  suites, the install test, remoteplay-checks number 201 (986 core tests on Linux, plain and
-  with sanitizers, and with MSVC; the kit's dry runs of every session) and checks number 218:
-  all passed. After the kit changes: remoteplay-checks numbers 204 and 207 and checks numbers
-  222 and 227 passed, with 242 kit tests and a dry run of the new latency test.
-  Independent reviews (a reviewer who did not write the code): the frame generation delay work
-  and the "DLSS 5" stutter work were each accepted, and their minor findings were fixed. The
-  merged Package 12 was checked line by line against Package 11 and both parts (no line lost or
-  doubled; nothing new on without a choice) and accepted with one fix to the test kit. The new
-  latency test was reviewed on its own and accepted with fixes (one more run so that each
-  low-latency part is measured alone), all made before packaging.
+  unit tests, the controller test on a virtual gamepad, the GPU tests, the strict QML tests (none
+  failed), the install test; remoteplay-checks number 218 (995 of 995 core tests on Linux, plain
+  and with sanitizers, and 995 of 995 compiled by MSVC; the kit's dry runs including the new
+  30 to 90 sets) and checks number 239: all passed. 270 kit tests pass.
+  Independent reviews (a reviewer who did not write the code): the new work was accepted; the
+  reviewer traced every reader of the capture upload buffer to confirm the early release is
+  safe, and confirmed that with no switch set the program behaves as Package 12A, apart from one
+  new log line. Six fixes were asked for and made (labels that read as if lower quality were an
+  option, a fallback when the graphics card refuses the priority setting, log details), then
+  checked again and accepted. A last fix to this package's text was made before packaging.
   The builds were compiled, installed and started on GitHub's Windows build machine (no graphics
   card, no PS5, no screen to measure). On a real PC only these have run: package 6 once (19 November
   2026, PS5 over Wi-Fi, software counters) and package 7 twice (20 November 2026, PS5 over Wi-Fi:

@@ -178,7 +178,7 @@ class KitFiles(unittest.TestCase):
         line = "2026-11-21T08:00:00.000Z t=1 [INFO ] [slipstream-smooth] window=5.0 backend=vfg ceiling=3X chosen=3X"
         self.assertEqual(report.safe_lines([line]), [line])
         for name in ("run-tests.ps1", "collect-diagnostics.ps1"):
-            with open(os.path.join(self.kit, name), encoding="ascii") as f: self.assertIn("|cadence|net|smooth|capture)", f.read())
+            with open(os.path.join(self.kit, name), encoding="ascii") as f: self.assertIn("|cadence|net|smooth|capture|sizes)", f.read())
 
     def test_the_ull_lines_are_copied_by_the_kit(self):
         # Stream fglat: the [fg-ull] lines FG_LATENCY.md tells the reader to look for must pass the kit's allowlist
@@ -202,17 +202,19 @@ class KitFiles(unittest.TestCase):
         for name, row in table.items():
             self.assertRegex(name, r"^[A-Za-z0-9-]+$")
             self.assertEqual(set(row), {"name", "exe", "set", "compare", "switches", "note", "fg", "differs"}, name)       # a comma in a note would add a column
-            self.assertIn(row["exe"], ("original", "modified", "experimental", "previous")); self.assertIn(row["set"], ("quick", "standard", "experimental", "versus", "switches", "quality", "probe", "network", "network-builds", "network-wifi-mode", "clarity", "netdiag", "nrperf", "nrperf-capture", "fglat") + report.MEASURE_SESSIONS)
+            self.assertIn(row["exe"], ("original", "modified", "experimental", "previous")); self.assertIn(row["set"], ("quick", "standard", "experimental", "versus", "switches", "quality", "probe", "network", "network-builds", "network-wifi-mode", "clarity", "netdiag", "nrperf", "nrperf-capture", "fglat", "d90", "d90-capture") + report.MEASURE_SESSIONS)
             if row["exe"] == "previous": self.assertEqual(row["set"], "builds", name)                    # Package 7's build only in the regression session
             if row["set"] in ("switches", "quality", "probe", "network", "network-wifi-mode", "netdiag"): self.assertEqual(row["exe"], "experimental", name)
             self.assertIn(row["fg"], ("off", "on"), name); self.assertEqual(row["fg"] == "on", "frame generation on" in row["note"].lower(), name)
-            if row["set"] != "probe": self.assertNotIn("STREAM_DEDUP", row["switches"], name)          # duplicate detection only in the optional diagnostic
+            # duplicate detection only in the optional diagnostic, and in the Remote Play arms of stream delay90 (a 30 FPS game
+            # is shown at an even 90 over Remote Play only with the stream's own duplicate removal: pairs 33.4 ms apart)
+            if row["set"] not in ("probe", "d90"): self.assertNotIn("STREAM_DEDUP", row["switches"], name)
             self.assertIn(row["compare"], table); self.assertTrue(row["note"])
             for pair in filter(None, row["switches"].split(";")): self.assertRegex(pair, r"^(VEYRA_(EXP|TEST)_(RP|PRESENT|SR|PIPE)_[A-Z0-9_]+=[^=;]+|pref:(pushAutoFullscreen|vrr|fgAdaptive|pacingRepair)=(true|false)|pref:captureBufferMode=[012]|pipeline:[A-Za-z0-9]+=[A-Za-z0-9.-]+(\|[A-Za-z0-9]+=[A-Za-z0-9.-]+)*)$")
         self.assertEqual([n for n, r in table.items() if r["set"] == "quick"], ["original", "mod-legacy", "mod-all"])
         self.assertEqual(table["original"]["switches"], ""); self.assertEqual(table["mod-all"]["switches"], "")
-        self.assertTrue(all(r["set"] in ("experimental", "versus", "switches", "probe", "network", "network-wifi-mode", "input", "audiofix", "pacing", "smoothness", "neural", "clarity", "netdiag", "retest", "capture", "nrperf", "nrperf-capture", "fglat") for n, r in table.items() if "VEYRA_EXP_" in r["switches"]))   # experiments only when asked
-        self.assertEqual([n for n, r in table.items() if "STREAM_DEDUP" in r["switches"]], ["p-dedup"])
+        self.assertTrue(all(r["set"] in ("experimental", "versus", "switches", "probe", "network", "network-wifi-mode", "input", "audiofix", "pacing", "smoothness", "neural", "clarity", "netdiag", "retest", "capture", "nrperf", "nrperf-capture", "fglat", "d90", "d90-capture") for n, r in table.items() if "VEYRA_EXP_" in r["switches"]))   # experiments only when asked
+        self.assertEqual([n for n, r in table.items() if "STREAM_DEDUP" in r["switches"]], ["p-dedup"] + [n for n, r in table.items() if r["set"] == "d90"])
         versus = {n: r for n, r in table.items() if r["set"] == "versus"}
         self.assertEqual(versus["stable"]["exe"], "modified"); self.assertEqual(versus["x-base"]["compare"], "stable")
         named = {r["switches"].split("=")[0] for n, r in versus.items() if r["switches"]}

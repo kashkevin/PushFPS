@@ -12,6 +12,23 @@ has no graphics card (software renderer), no PS5 and no screen to measure (see "
 in the other documents that come from Linux models and simulators are models. Software timestamps are
 not proof of input-to-photon latency: only a camera or a light sensor on the screen is.
 
+## Package 13 (23 November 2026): the delay of a 30 FPS game at a steady 90 FPS, at 4K
+
+The owner's rule (23 November 2026): 4K (3840x2160) processing is kept; the delay is reduced by scheduling, buffering,
+GPU use and frame generation efficiency; lower sizes appear only as labelled diagnostic runs. Everything of Package 12A
+(below) plus the rows here. **None of it has run on a gaming PC, a graphics card, a capture card or a PS5.** Nothing new
+changes behaviour by default; the one always-on addition is a log line.
+
+| Part | Default? | Tested where | Review | Physically validated |
+|---|---|---|---|---|
+| Analysis docs/drafts/DELAY_90.md (the working size is 4K at every stage; the delay part by part; the floor of today's interpolation at 4K: 22.2 ms + the frame's own processing + the first generated frame; other scheduling approaches are the next investigation) | doc | code reading | see CHECKED.txt | no: your step 2 zip |
+| `[slipstream-sizes]` log line (real size of every stage; `include/veyra/engine/PushSizes.h`) | always on, changes nothing | unit tests, kit dry run | see CHECKED.txt | no |
+| The delay split and `gpuFg1P50/P95Ms`, `uploadCpuCopyFps` in `[slipstream-smooth]` | only with `VEYRA_EXP_RP_STATS=1` | unit tests (plain, TSan, ASan+UBSan), kit dry run | see CHECKED.txt | no |
+| `VEYRA_EXP_RP_UPLOAD_EARLY_RELEASE=1` (capture upload buffer released after the base work) | off | code reading; compiled by MSVC | see CHECKED.txt | no |
+| `VEYRA_EXP_RP_GRAPH_QUEUE_PRIORITY=high` (the graph's GPU queue at high priority, `[graph-priority]`) | off | compiled by MSVC | see CHECKED.txt | no |
+| `VEYRA_EXP_RP_FIT_DISPLAY=1` | off; DIAGNOSTIC only, never a recommendation | unit tests | see CHECKED.txt | no |
+| Kit sets `d90` (Remote Play) and `d90-capture`, about 30 minutes each, all at 4K except the labelled diagnostic runs | test-only | kit tests, Windows dry run | see CHECKED.txt | no |
+
 ## Package 12A (23 November 2026): frame generation latency, part by part (test kit only)
 
 The same program as Package 12 (experimental build 66, `archive/c41755fe`); only the test kit changed. New arm set

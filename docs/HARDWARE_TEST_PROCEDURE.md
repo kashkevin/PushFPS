@@ -196,6 +196,22 @@ frames decoded against frames the engine received and the decoded frames replace
 internal: not input-to-photon), and the inference size and reuse level. docs/drafts/NR_STUTTER.md section 7 says what
 each result means; the adaptive arm is judged by eye too (a reused frame carries the previous inference's change).
 
+### The delay of 30 FPS at 90 FPS at 4K (the d90 sets, inside the smoothness and capture sessions)
+
+Where each millisecond of a 30 FPS game shown at 90 FPS (3x) goes, at 4K (docs/drafts/DELAY_90.md). Windows at 180 Hz,
+VRR on, a game running at 30 FPS, the camera moving steadily, the same scene in every run. Every arm works at 4K unless
+its note says DIAGNOSTIC; the diagnostic arms (3x at the screen's size, 2x) are references, not recommendations.
+- Remote Play (DLSS upscaling to 4K, the experimental stream duplicate removal `VEYRA_EXP_RP_STREAM_DEDUP` on):
+  `Run-First-Test.cmd -Session smoothness -Pass 180 -Arms d90-off,d90-fg3,d90-fg3-ull,d90-fg3-prio,d90-fg3-pprio,d90-fg3-all,d90-fg3-low,d90-fg3-dlss,d90-fg3-flow,d90-fg3-fit,d90-fg2`
+  (about 30 minutes).
+- 4K capture card (card format 3840x2160):
+  `Run-First-Test.cmd -Session capture -Pass 180 -Arms d90c-off,d90c-fg3,d90c-fg3-ull,d90c-fg3-early,d90c-fg3-prio,d90c-fg3-pprio,d90c-fg3-all,d90c-fg3-low,d90c-fg3-dlss,d90c-fg3-flow,d90c-fg2`
+  (about 30 minutes).
+Read "where the delay goes" (pickup wait, base, first generated frame, the 22.2 ms interpolation wait, margin, present
+lateness, their sum and the measured total), "first generated frame on the GPU" and "processing sizes". The `-dlss` arms
+are the same 4K output made by another method: compare the picture by eye and keep your current method unless it looks at
+least as good. The `-low` and `-flow` arms are DIAGNOSTIC references (lower frame generation quality), not solutions.
+
 ### Frame generation latency, part by part (the fglat set, inside the smoothness session)
 
 What frame generation adds, and how much of it each part of `VEYRA_EXP_RP_FG_ULL` takes back (docs/drafts/FG_LATENCY.md

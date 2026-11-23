@@ -290,7 +290,7 @@ function Get-UtcStamp {
 # --- redaction -----------------------------------------------------------------------------------
 # The same rules are in tools/remoteplay_latency_bench/report.py (redact_line), which is tested on Linux
 # and checks every received evidence folder again. Change both together.
-$allowedLine = '\[(INFO |WARN |ERROR|TRACE)\] \[(push-(latency|quality|benchmark|mode|hardware|profile|adaptive-fg)|remoteplay(-[a-z0-9-]+)?|slipstream-(governor|gpu-budget|watch|config|latency|latency-test|press|delivery|sr|fg|autorun|smartlink|swapchain|present|pipeline|nr|clean|quality|input|input-poll|scanout|cadence|net|smooth|capture)|capture-(driver-age|buffer)|nr-(runtime-status|adapt|reuse|model)|frame-(flow|rate)|pacing|present-deviation|present-contract|present-priority|qml-window|ui-(dialog|fullscreen|window|resume)|fg-(validity|drops|ull)|display-(vrr|refresh|latency|query)|gpu-(failure|reconnect)|reset-lifecycle|engine-(hang|test)|crash|overlay-hooks|log-backpressure|qml\] \[update-check)\] '
+$allowedLine = '\[(INFO |WARN |ERROR|TRACE)\] \[(push-(latency|quality|benchmark|mode|hardware|profile|adaptive-fg)|remoteplay(-[a-z0-9-]+)?|slipstream-(governor|gpu-budget|watch|config|latency|latency-test|press|delivery|sr|fg|autorun|smartlink|swapchain|present|pipeline|nr|clean|quality|input|input-poll|scanout|cadence|net|smooth|capture|sizes)|capture-(driver-age|buffer)|nr-(runtime-status|adapt|reuse|model)|frame-(flow|rate)|pacing|present-deviation|present-contract|present-priority|graph-priority|qml-window|ui-(dialog|fullscreen|window|resume)|fg-(validity|drops|ull)|display-(vrr|refresh|latency|query)|gpu-(failure|reconnect)|reset-lifecycle|engine-(hang|test)|crash|overlay-hooks|log-backpressure|qml\] \[update-check)\] '
 $refusedLine = '\[remoteplay-discovery\]|registration|regist[_ -]?key|rp[_ -]?key|account|psn(?!r=)|token|secret|passw|ssid|morning|nickname'
 
 function Protect-Text([string]$Line) {
@@ -426,11 +426,11 @@ function Get-ArmPrefs($Arm) {
     $table = @{}
     # pushSmoothTarget 0: the fixed arms never inherit a Smoothness Mode chosen earlier in this folder (Package 9 integration
     # review); the sm-mode-* arms set it through VEYRA_EXP_RP_SMOOTH_TARGET.
-    # the nrperf sets (stream nrperf) and the fglat set (FG latency part by part) run inside the smoothness and capture sessions with -Arms and are treated as their arms
-    if (@('smoothness', 'nrperf', 'fglat') -contains [string]$Arm.set) { $table['fgAdaptive'] = $false; $table['pacingRepair'] = $false; $table['pushSmoothTarget'] = 0 }
+    # the nrperf sets (stream nrperf), the fglat set (FG latency part by part) and the d90 sets (the delay of 30 -> 90 FPS at 4K) run inside the smoothness and capture sessions with -Arms and are treated as their arms
+    if (@('smoothness', 'nrperf', 'fglat', 'd90') -contains [string]$Arm.set) { $table['fgAdaptive'] = $false; $table['pacingRepair'] = $false; $table['pushSmoothTarget'] = 0 }
     # the capture session (stream capture): automatic buffering unless the arm names it; Smoothness Mode, the adaptive multiplier
     # and pacing repair off, so no arm inherits them from the shared capture settings folder
-    if (@('capture', 'nrperf-capture') -contains [string]$Arm.set) { $table['captureBufferMode'] = 0; $table['fgAdaptive'] = $false; $table['pacingRepair'] = $false; $table['pushSmoothTarget'] = 0 }
+    if (@('capture', 'nrperf-capture', 'd90-capture') -contains [string]$Arm.set) { $table['captureBufferMode'] = 0; $table['fgAdaptive'] = $false; $table['pacingRepair'] = $false; $table['pushSmoothTarget'] = 0 }
     if (-not $Arm.switches) { return $table }
     foreach ($pair in ($Arm.switches -split ';')) {
         if ($pair -match '^pref:(pushAutoFullscreen)=(true|false)$') { $table[$Matches[1]] = ($Matches[2] -eq 'true') }
@@ -1119,7 +1119,7 @@ function Invoke-ArmRun($Arm, [string]$Exe, [string]$Purpose, [int]$LimitSeconds,
         $plan = Get-AutorunPlan $Purpose $trials $testsWanted
         # the capture session starts the remembered capture card instead of connecting to the PS5 (stream capture)
         $startSwitch = 'VEYRA_TEST_RP_AUTOCONNECT'
-        if (@('capture', 'nrperf-capture') -contains [string]$Arm.set) { $startSwitch = 'VEYRA_TEST_RP_CAPTURE' }
+        if (@('capture', 'nrperf-capture', 'd90-capture') -contains [string]$Arm.set) { $startSwitch = 'VEYRA_TEST_RP_CAPTURE' }
         foreach ($pair in @(('VEYRA_EXP_RP_STATS', '1'), ($startSwitch, '1'), ('VEYRA_TEST_RP_AUTORUN', $plan))) {
             if (-not $switches.ContainsKey($pair[0])) { Set-Item -Path ('Env:' + $pair[0]) -Value $pair[1]; $kitSwitches += ($pair[0] + '=' + $pair[1]) }
         }
@@ -1130,8 +1130,8 @@ function Invoke-ArmRun($Arm, [string]$Exe, [string]$Purpose, [int]$LimitSeconds,
     # settings folder, so the plain test profile of the other sessions never inherits them.
     $profileKind = [string]$Arm.exe
     if ($switches.ContainsKey('VEYRA_TEST_RP_PIPELINE')) { $profileKind += '-pipeline' }
-    if (@('smoothness', 'nrperf', 'fglat') -contains [string]$Arm.set) { $profileKind += '-smoothness' }   # its prefs (vrr, adaptive, repair) stay out of the other sessions' folders
-    if (@('capture', 'nrperf-capture') -contains [string]$Arm.set) { $profileKind = [string]$Arm.exe + '-capture' }   # the folder that remembers the capture card (Invoke-CaptureSetup)
+    if (@('smoothness', 'nrperf', 'fglat', 'd90') -contains [string]$Arm.set) { $profileKind += '-smoothness' }   # its prefs (vrr, adaptive, repair) stay out of the other sessions' folders
+    if (@('capture', 'nrperf-capture', 'd90-capture') -contains [string]$Arm.set) { $profileKind = [string]$Arm.exe + '-capture' }   # the folder that remembers the capture card (Invoke-CaptureSetup)
     if ($profiled) { $exeArgs = '--data-dir "' + (Write-TestProfile $profileKind (-not $automatic) (Get-ArmPrefs $Arm)) + '"' }
     $before = Get-LogSizes $logFolder
     $traceSince = (Get-Date).ToUniversalTime().AddSeconds(-2)   # trace files written after this belong to this run
@@ -1192,7 +1192,7 @@ function Invoke-ArmRun($Arm, [string]$Exe, [string]$Purpose, [int]$LimitSeconds,
     if ($profiled) { Write-Host '  Started with the kit''s test profile (low-latency queue, V-Sync, smooth pacing, full screen on connect); your own settings are untouched.' }
 
     if ($automatic) {
-        if (@('capture', 'nrperf-capture') -contains [string]$Arm.set) { Write-Host ('  Automatic: PushFPS starts your capture card (no PS5 connection) and runs ' + $plan + ' by itself. Keep the game moving as the session asks.') -ForegroundColor Green }
+        if (@('capture', 'nrperf-capture', 'd90-capture') -contains [string]$Arm.set) { Write-Host ('  Automatic: PushFPS starts your capture card (no PS5 connection) and runs ' + $plan + ' by itself. Keep the game moving as the session asks.') -ForegroundColor Green }
         elseif ($Purpose -eq 'network') { Write-Host ('  Automatic: PushFPS connects to the last console and runs ' + $plan + ' by itself.') -ForegroundColor Green }
         else { Write-Host ('  Automatic: PushFPS connects to the last console and runs ' + $plan + ' by itself. Do not touch the controller.') -ForegroundColor Green }
         Write-Host '  If it cannot (no console paired in this copy, or a build without automation), the kit says so and shows the steps to do by hand.'
@@ -1916,6 +1916,29 @@ function Add-DryRunLog([string]$LogFolder, [string]$Purpose, [string]$ArmName, [
         $interval = 1000.0 / $shown
         for ($i = 0; $i -lt 3; $i++) { $made += ('[INFO ] [slipstream-cadence] window=5 submittedFps=' + $shown.ToString('F2', $inv) + ' realFps=' + $real.ToString('F2', $inv) + ' generatedFps=' + ($shown - $real).ToString('F2', $inv) + ' intervals=300 intervalP50Ms=' + $interval.ToString('F2', $inv) + ' intervalP95Ms=' + ($interval + 0.8).ToString('F2', $inv) + ' intervalP99Ms=' + ($interval + 1.5).ToString('F2', $inv) + ' intervalMaxMs=' + ($interval + 4.0).ToString('F2', $inv) + ' offPct=0.5 refreshHz=179.95 vrr=1 fixedHold1=0 fixedHold2=0 fixedHold3=0 fixedUnevenPct=0.0 fixedShownFps=' + $shown.ToString('F2', $inv) + ' evenFps=' + $shown.ToString('F2', $inv) + ' evenDivisor=1 overflow=0 pauses=0 (made up)') }
         for ($i = 0; $i -lt 3; $i++) { $made += ('[INFO ] [slipstream-smooth] window=5.0 backend=vfg ceiling=' + $mult + 'X chosen=' + $mult + 'X chosenMin=' + $mult + 'X chosenMax=' + $mult + 'X changes=0 why=user contentFps=29.97 capFps=179.95 refreshHz=179.950 vrr=1 source=1920x1080 work=1920x1080 flow=1920x1080 display=2560x1440 srTarget=-1 srTargetAsked=-1 receivedFps=59.94 uniqueFps=' + $pairs.ToString('F2', $inv) + ' rejectedPairsFps=0.00 generatedFps=' + $gen.ToString('F2', $inv) + ' dropCapFps=0.00 dropDeadlineFps=0.10 holds=0 gpuSpanP95Ms=9.50 gpuFgP95Ms=7.20 gpuSrP95Ms=-1 pairBudgetMs=33.33 realAgeP50Ms=-1.000 realAgeP95Ms=-1.000 realAgeP99Ms=-1.000 addedEstMs=24.500 realHoldP95Ms=26.000 realHoldP99Ms=27.200 phaseMs=29.500 phaseLearned=1 firstReadyP50Ms=7.500 firstReadyP95Ms=9.000 presentLateP95Ms=0.200 presentLateP99Ms=0.400 deadPhaseFps=0.000 fallbackFps=0.000 (made up)') }
+    }
+    # stream delay90 (sets d90 / d90-capture): the working sizes and the delay part by part, made up. 3x at 4K: T = 33.4 ms, so
+    # (M-1)/M x T = 22.27 ms; 2x 16.70 ms; frame generation off: no split (-1). The parts add up to delayToCallP50Ms.
+    if ($ArmName -like 'd90*') {
+        $inv = [System.Globalization.CultureInfo]::InvariantCulture
+        $dMult = 1
+        if (($ArmSwitches -match '\|fg=(vfg|dlss|pushflow)') -and ($ArmSwitches -match '\|fgMultiplier=([0-9])')) { $dMult = [int]$Matches[1] }
+        $dSource = '3840x2160'; $dSr = '0'; $dTarget = '-1'; $dWork = '3840x2160'; $dReason = 'source-size'
+        if ($ArmName -like 'd90-*') { $dSource = '1920x1080'; $dSr = '1'; $dTarget = '1'; $dReason = 'as-set' }
+        if ($ArmSwitches -match 'VEYRA_EXP_RP_FIT_DISPLAY=1') { $dTarget = '0'; $dWork = '2560x1440'; $dReason = 'sr-lowered' }
+        $dFit = '0'
+        if ($dReason -eq 'sr-lowered') { $dFit = '1' }
+        $dFg = '-'
+        if ($dMult -gt 1) { $dFg = $dWork }
+        $made += ('[INFO ] [slipstream-sizes] source=' + $dSource + ' srInput=' + $dSource + ' srEvaluated=' + $dWork + ' base=' + $dWork + ' nr=- flow=' + $dSource + ' fg=' + $dFg + ' output=' + $dWork + ' backBuffer=2560x1440 client=2560x1440 display=2560x1440 mode=2560x1440 modeHz=180 sr=' + $dSr + ' srTarget=' + $dTarget + ' srTargetAsked=' + $dTarget.Replace('0', '1') + ' hdr=0 srDisplay=0 fitDisplay=0 fit=' + $dFit + ' fitReason=' + $dReason)
+        $parts = ' pickupWaitP50Ms=-1.000 pickupWaitP95Ms=-1.000 baseObsP50Ms=-1.000 baseObsP95Ms=-1.000 fg1ObsP50Ms=-1.000 fg1ObsP95Ms=-1.000 interpWaitP50Ms=-1.000 marginP50Ms=-1.000 realLateP50Ms=-1.000 partsSumP50Ms=-1.000 delayToCallP50Ms=-1.000 partsFps=0.000'
+        if ($dMult -gt 1) {
+            $interp = 1000.0 / 29.97 * ($dMult - 1) / $dMult
+            $sum = 0.6 + 2.4 + 6.6 + $interp + 1.0 + 0.1
+            $parts = ' pickupWaitP50Ms=0.600 pickupWaitP95Ms=0.900 baseObsP50Ms=2.400 baseObsP95Ms=3.100 fg1ObsP50Ms=6.600 fg1ObsP95Ms=7.400 interpWaitP50Ms=' + $interp.ToString('F3', $inv) +
+                ' marginP50Ms=1.000 realLateP50Ms=0.100 partsSumP50Ms=' + $sum.ToString('F3', $inv) + ' delayToCallP50Ms=' + $sum.ToString('F3', $inv) + ' partsFps=29.970'
+        }
+        for ($i = 0; $i -lt 3; $i++) { $made += ('[INFO ] [slipstream-smooth] window=5.0 backend=vfg ceiling=' + $dMult + 'X chosen=' + $dMult + 'X chosenMin=' + $dMult + 'X chosenMax=' + $dMult + 'X changes=0 why=user contentFps=29.97 capFps=0.00 refreshHz=179.950 vrr=1 source=' + $dSource + ' work=' + $dWork + ' display=2560x1440 gpuFg1P50Ms=6.400 gpuFg1P95Ms=7.100 uploadCpuCopyFps=0.00' + $parts + ' (made up)') }
     }
     # kit 5: two more seconds of display timing well after the first one, so the steady state (after 3 s) has values too
     for ($i = 0; $i -lt 2; $i++) { $made += '[INFO ] [display-latency] presentToScanoutP50Ms=1.200 presentToScanoutP95Ms=3.900 presentToScanoutMaxMs=5.100 samples=9 replacedAtLeast=0 compositionMode=2 refreshHz=180.000 (made up)' }

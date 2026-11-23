@@ -33,6 +33,11 @@ static_assert(unsigned(pipeline::SrTarget::Qhd) == 0 && unsigned(pipeline::SrTar
 struct PushSmoothSwitches {
     bool srDisplay = false, capFit = false, steady = false, stats = false;
     int envTarget = 0;
+    // Stream "delay90": VEYRA_EXP_RP_FIT_DISPLAY=1 (PushSizes.h), a DIAGNOSTIC switch only (a kit reference arm: what the
+    // working size itself costs; 4K stays the owner's setting): the SR target follows the display exactly as
+    // VEYRA_EXP_RP_SMOOTH_SR_DISPLAY does (the same code path); either switch turns it on.
+    bool fitDisplay = false;
+    bool followDisplay() const { return srDisplay || fitDisplay; }
 };
 inline const PushSmoothSwitches& pushSmoothSwitches() {
     static const PushSmoothSwitches switches = [] {
@@ -43,6 +48,10 @@ inline const PushSmoothSwitches& pushSmoothSwitches() {
         };
         PushSmoothSwitches s;
         s.srDisplay = one(L"VEYRA_EXP_RP_SMOOTH_SR_DISPLAY");
+        s.fitDisplay = one(L"VEYRA_EXP_RP_FIT_DISPLAY");
+        if (s.fitDisplay)
+            veyra::log::info("slipstream-sizes", std::format("event=switch fitDisplay=1 srDisplay={} (VEYRA_EXP_RP_FIT_DISPLAY, a diagnostic: live playback evaluates "
+                "super resolution into the smallest target that covers the display, to show what the working size itself costs)", s.srDisplay ? 1 : 0));
         s.capFit = one(L"VEYRA_EXP_RP_SMOOTH_CAP_FIT");
         s.steady = one(L"VEYRA_EXP_RP_SMOOTH_STEADY");
         s.stats = one(L"VEYRA_EXP_RP_STATS");
@@ -75,7 +84,7 @@ inline void pushSmoothMonitorSize(HWND hwnd, std::uint32_t& width, std::uint32_t
 // used, else the primary monitor. 0 x 0 without the switch (the prewarm keeps the saved SR target, as before).
 inline void pushSmoothPrewarmDisplay(std::uint32_t& width, std::uint32_t& height) {
     width = height = 0;
-    if (!pushSmoothSwitches().srDisplay) return;
+    if (!pushSmoothSwitches().followDisplay()) return;
     width = pushSmoothShared().displayW.load(std::memory_order_relaxed);
     height = pushSmoothShared().displayH.load(std::memory_order_relaxed);
     if (width && height) return;
@@ -105,8 +114,8 @@ public:
     bool wantsPairs() const { return sw_.capFit || window_ || wantsCosts() || mode_.applied() != 0; }
     // The monitor size describeStages may lower the SR target to (VEYRA_EXP_RP_SMOOTH_SR_DISPLAY), 0 x 0 without the
     // switch: the last one this hook read (see display()).
-    std::uint32_t followWidth() const { return sw_.srDisplay ? displayW_ : 0u; }
-    std::uint32_t followHeight() const { return sw_.srDisplay ? displayH_ : 0u; }
+    std::uint32_t followWidth() const { return sw_.followDisplay() ? displayW_ : 0u; }
+    std::uint32_t followHeight() const { return sw_.followDisplay() ? displayH_ : 0u; }
     const PushSmoothSwitches& switches() const { return sw_; }
     // Smoothness Mode may run (its target is set): only then are the budget's P95 costs worth computing per pair.
     bool wantsCosts() const {
@@ -119,12 +128,12 @@ public:
     // target with it). Remembered for the window line.
     void display(HWND hwnd, std::uint32_t& width, std::uint32_t& height) {
         width = height = 0;
-        if (!sw_.srDisplay && !window_) return;
+        if (!sw_.followDisplay() && !window_) return;
         std::uint32_t w = 0, h = 0;
         pushSmoothMonitorSize(hwnd, w, h);
         displayW_ = w;
         displayH_ = h;
-        if (sw_.srDisplay) {
+        if (sw_.followDisplay()) {
             width = w;
             height = h;
             // For the prewarm graph (PreviewGpuSession), which has no window: the size live playback last used.
@@ -146,6 +155,7 @@ public:
         window_->stage(PushSmoothStage::Nr, neural(timing));
         window_->stage(PushSmoothStage::Flow, measured(timing, diagnostics::GpuStage::Flow));
         window_->stage(PushSmoothStage::Fg, measured(timing, diagnostics::GpuStage::FgBatch));
+        window_->stage(PushSmoothStage::Fg1, measured(timing, diagnostics::GpuStage::Fg1));   // stream "delay90"
     }
     // A completed full generation group: its FG stage time and how many frames it generated (Smoothness Mode's cost
     // per level, PushSmoothCostModel: a fixed part per pair, the flow, plus a part per generated frame).
@@ -154,9 +164,13 @@ public:
     // Stream "fglat": the latency fields (PushFgLatency.h PushFgLatencyWindow), statistics switch only. The engine
     // checks wantsLatency() before it computes anything for them.
     bool wantsLatency() const { return latency_ != nullptr; }
-    void presentedReal(double ageMs, double holdMs, double phaseMs, double firstMs, double lateMs, bool onPhase, unsigned generatedShown, bool fallback) {
+    // Stream "delay90" (PushFgLatencyWindow::parts): from decode or callback, pickupMs = engine pickup, readyMs = the real
+    // frame seen ready, callMs = its Present call; interpMs = (M-1)/M x T of its pair; -1 unknown.
+    void presentedReal(double ageMs, double holdMs, double phaseMs, double firstMs, double lateMs, bool onPhase, unsigned generatedShown, bool fallback,
+                       double pickupMs = -1.0, double readyMs = -1.0, double interpMs = -1.0, double callMs = -1.0) {
         if (!latency_) return;
         latency_->real(ageMs, holdMs, phaseMs, firstMs, onPhase, generatedShown, fallback);
+        latency_->parts(onPhase, pickupMs, readyMs, firstMs, interpMs, phaseMs, lateMs, callMs);
         latency_->presented(lateMs);
     }
     void presentedGenerated(double lateMs) {
@@ -299,10 +313,10 @@ private:
         info.displayH = displayH_;
         if (p.sr && p.settings) {
             info.srTargetUser = static_cast<int>(p.settings->srTarget);
-            info.srTarget = sw_.srDisplay ? static_cast<int>(pushSmoothSrTarget(static_cast<std::uint32_t>(p.settings->srTarget), displayW_, displayH_))
+            info.srTarget = sw_.followDisplay() ? static_cast<int>(pushSmoothSrTarget(static_cast<std::uint32_t>(p.settings->srTarget), displayW_, displayH_))
                                           : info.srTargetUser;
         }
-        info.srFollow = sw_.srDisplay;
+        info.srFollow = sw_.followDisplay();   // either switch lowers the target (stream "delay90": FIT_DISPLAY too)
         info.capFit = sw_.capFit;
         info.steady = sw_.steady;
         return info;
@@ -316,6 +330,7 @@ private:
             info_ = describe(p);
             window_->restart(p.now100ns, counters(p));
             if (latency_) latency_->clear();
+            uploadCopiesBase_ = uploadCopies(p);
         }
         window_->pair(m, p.contentFps);
         phaseLearned_ = p.phaseLearned;
@@ -333,13 +348,22 @@ private:
             line_.smoothReason = mode_.applied() ? mode_.reason() : PushSmoothReason::Off;
             line_.smoothDowns = mode_.stepDowns();
             line_.smoothUps = mode_.stepUps();
-            line_.extra = latency_ ? latency_->fields(double(p.now100ns - window_->start()) / 1e7, phaseLearned_) : std::string();
+            const double seconds = double(p.now100ns - window_->start()) / 1e7;
+            line_.extra = latency_ ? latency_->fields(seconds, phaseLearned_) : std::string();
+            // Stream "delay90": capture frames this graph copied again because their upload buffer was still being read.
+            char upload[48];
+            const std::uint64_t copies = uploadCopies(p);
+            const int n = std::snprintf(upload, sizeof upload, " uploadCpuCopyFps=%.2f",
+                seconds > 0.001 && copies >= uploadCopiesBase_ ? double(copies - uploadCopiesBase_) / seconds : -1.0);
+            if (n > 0) line_.extra.append(upload, static_cast<std::size_t>(std::min(n, static_cast<int>(sizeof upload) - 1)));
             veyra::log::info("slipstream-smooth", pushSmoothLine(*window_, now, c, p.now100ns, line_));
         }
         info_ = now;
         window_->restart(p.now100ns, c);
         if (latency_) latency_->clear();
+        uploadCopiesBase_ = uploadCopies(p);
     }
+    static std::uint64_t uploadCopies(const Pair& p) { return p.graph ? p.graph->metrics().captureUploadCpuCopies : 0; }
 
     PushSmoothSwitches sw_;   // a copy of the process-wide switches (read once)
     std::unique_ptr<PushSmoothWindow> window_;
@@ -353,5 +377,6 @@ private:
     std::int64_t lastHold_ = 0;
     std::uint32_t displayW_ = 0, displayH_ = 0;
     bool ullHeadroom_ = false, phaseLearned_ = false;
+    std::uint64_t uploadCopiesBase_ = 0;   // stream "delay90"
 };
 }  // namespace veyra::engine

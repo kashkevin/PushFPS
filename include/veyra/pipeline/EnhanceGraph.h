@@ -692,6 +692,9 @@ public:
         uint64_t fgProviderDisabled = 0;
         uint64_t nrMotionFrames = 0, sceneCutCount = 0, resetCount = 0;
         uint64_t nrReuseFrames = 0, nrReuseChainedMotion = 0;
+        // PushFPS stream "delay90": live capture frames that came in an upload buffer the GPU still read when the
+        // callback wrote it, so the callback wrote its CPU planes and this graph copied them again on the engine thread.
+        uint64_t captureUploadCpuCopies = 0;
     };
     const Metrics& metrics() const { return metrics_; }
     const std::string& mvecSource() const { return mvecSource_; }

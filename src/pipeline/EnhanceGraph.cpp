@@ -3057,6 +3057,7 @@ bool EnhanceGraph::process(const AVFrame* frame, double ptsMs, bool reset, Frame
         if(auto* upload=(packed||desc_.yuy2Input)?captureUploadFrame(frame):nullptr;upload&&upload->direct&&upload->proxyValid&&upload->planes==1&&
            upload->device.Get()==context_.device()&&frame->data[0]==upload->mapped&&upload->width==srcW_&&upload->height==srcH_&&
            upload->pitch>=ingressTexels*4&&upload->pixelBytes==(packed&&desc_.packedInput>=6?4u:packed&&desc_.packedInput==1?3u:2u))gpuDirectFrame=upload;
+        if(!gpuDirectFrame)if(const auto* fallback=captureUploadFrame(frame);fallback&&!fallback->direct)++metrics_.captureUploadCpuCopies;   // stream "delay90"
         if(!gpuDirectFrame)for(uint32_t y=0;y<srcH_;++y){
             auto* dst=mappedRgb_[parity]+y*rgbPitch_;const auto* src=frame->data[0]+ptrdiff_t(y)*frame->linesize[0];
             if(packed||desc_.yuy2Input||frame->format==AV_PIX_FMT_RGBA)std::memcpy(dst,src,size_t(ingressRowBytes));
@@ -3177,6 +3178,7 @@ bool EnhanceGraph::process(const AVFrame* frame, double ptsMs, bool reset, Frame
         // CPU copy at all, the GPU copies from the frame's own buffer.
         if(auto* upload=sameLayout?captureUploadFrame(frame):nullptr;upload&&upload->direct&&upload->proxyValid&&upload->device.Get()==context_.device()&&
            frame->data[0]==upload->mapped&&upload->width==srcW_&&upload->height==srcH_&&upload->planes==2&&upload->pixelBytes==sampleBytes)gpuDirectFrame=upload;
+        if(!gpuDirectFrame)if(const auto* fallback=sameLayout?captureUploadFrame(frame):nullptr;fallback&&!fallback->direct)++metrics_.captureUploadCpuCopies;   // stream "delay90"
         if(gpuDirectFrame){
         }else if(sameLayout){
             // Native semiplanar capture already matches the upload textures.
@@ -4449,7 +4451,13 @@ bool EnhanceGraph::process(const AVFrame* frame, double ptsMs, bool reset, Frame
     uploadFences_[parity]=ring_.lastSignaledValue();
     // The capture callback must not rewrite this frame's buffer before the
     // lists submitted above have read it.
-    if(gpuDirectFrame)gpuDirectFrame->gpuRead(context_.fence(),uploadFences_[parity]);
+    // PushFPS stream "delay90": VEYRA_EXP_RP_UPLOAD_EARLY_RELEASE=1 (exactly 1, read once) releases the buffer at the
+    // fence of the base list that copied from it (out.videoFenceValue, signalled before any generated frame's list),
+    // not at the last list of the pair: every read of the upload buffer is the base list's CopyTextureRegion at its
+    // start, so the callback may write it once that list is done instead of falling back to its CPU planes (and this
+    // graph copying 12-25 MB again on the engine thread, counted in metrics_.captureUploadCpuCopies). Unset: as before.
+    static const bool uploadEarlyRelease=[]{wchar_t v[4]{};return GetEnvironmentVariableW(L"VEYRA_EXP_RP_UPLOAD_EARLY_RELEASE",v,4)==1&&v[0]==L'1';}();
+    if(gpuDirectFrame)gpuDirectFrame->gpuRead(context_.fence(),uploadEarlyRelease&&out.videoFenceValue?out.videoFenceValue:uploadFences_[parity]);
 
     prevPtsMs_ = ptsMs;
     prevValid_ = true;

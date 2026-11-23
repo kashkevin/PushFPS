@@ -255,6 +255,29 @@ frame generation latency,smoothness|capture,first generated frame ready P50,slip
 frame generation latency,smoothness|capture,present after its deadline P99,slipstream-smooth,,all,presentLateP99Ms,median,2,0,0,ms,1
 frame generation latency,smoothness|capture,real frames on an FG phase without a generated frame/s,slipstream-smooth,,all,deadPhaseFps,median,2,0,0,,1
 frame generation latency,smoothness|capture,real frames shown when ready by a hold/s,slipstream-smooth,,all,fallbackFps,median,2,0,0,,1
+where the delay goes,smoothness|capture,wait before pickup P50,slipstream-smooth,,all,pickupWaitP50Ms,median,2,0,0,ms,1
+where the delay goes,smoothness|capture,real frame's own processing (pickup to ready; CPU submit + base GPU) P50,slipstream-smooth,,all,baseObsP50Ms,median,2,0,0,ms,1
+where the delay goes,smoothness|capture,first generated frame (real ready to first generated ready; fg1) P50,slipstream-smooth,,all,fg1ObsP50Ms,median,2,0,0,ms,1
+where the delay goes,smoothness|capture,interpolation wait (M-1)/M x T (formula on the pair's own times) P50,slipstream-smooth,,all,interpWaitP50Ms,median,2,0,0,ms,1
+where the delay goes,smoothness|capture,phase margin beyond that minimum P50,slipstream-smooth,,all,marginP50Ms,median,2,0,0,ms,1
+where the delay goes,smoothness|capture,real frame presented after its deadline P50,slipstream-smooth,,all,realLateP50Ms,median,2,0,0,ms,1
+where the delay goes,smoothness|capture,sum of the six parts (sum of P50s),slipstream-smooth,,all,partsSumP50Ms,median,2,0,0,ms,1
+where the delay goes,smoothness|capture,measured: decode or capture to Present call P50 (software; not input-to-photon),slipstream-smooth,,all,delayToCallP50Ms,median,2,0,0,ms,1
+where the delay goes,smoothness|capture,real frames split per second,slipstream-smooth,,all,partsFps,median,2,0,0,,0
+first generated frame on the GPU,smoothness|capture,first generated frame GPU time (timestamps) P50,slipstream-smooth,,all,gpuFg1P50Ms,median,2,0,0,ms,1
+first generated frame on the GPU,smoothness|capture,P95,slipstream-smooth,,all,gpuFg1P95Ms,median,2,0,0,ms,1
+first generated frame on the GPU,smoothness|capture,capture pictures copied twice (upload buffer still in use)/s,slipstream-smooth,,all,uploadCpuCopyFps,median,2,0,0,,1
+processing sizes,smoothness|capture,source,slipstream-sizes,,all,source,last-word,0,0,0,,0
+processing sizes,smoothness|capture,upscaler result,slipstream-sizes,,all,srEvaluated,last-word,0,0,0,,0
+processing sizes,smoothness|capture,neural layer,slipstream-sizes,,all,nr,last-word,0,0,0,,0
+processing sizes,smoothness|capture,optical flow,slipstream-sizes,,all,flow,last-word,0,0,0,,0
+processing sizes,smoothness|capture,frame generation,slipstream-sizes,,all,fg,last-word,0,0,0,,0
+processing sizes,smoothness|capture,output,slipstream-sizes,,all,output,last-word,0,0,0,,0
+processing sizes,smoothness|capture,back buffer,slipstream-sizes,,all,backBuffer,last-word,0,0,0,,0
+processing sizes,smoothness|capture,window client area,slipstream-sizes,,all,client,last-word,0,0,0,,0
+processing sizes,smoothness|capture,display,slipstream-sizes,,all,display,last-word,0,0,0,,0
+processing sizes,smoothness|capture,working size compared with the display (fit),slipstream-sizes,,all,fit,last-word,0,0,0,,0
+processing sizes,smoothness|capture,reason,slipstream-sizes,,all,fitReason,last-word,0,0,0,,0
 network reception,input|visual|neural|framegen|audiofix|pacing|builds|smoothness|retest,packets missing per 5 s,slipstream-net,,all,missing,median,0,0,0,,0
 network reception,input|visual|neural|framegen|audiofix|pacing|builds|smoothness|retest,missing max,slipstream-net,,all,missing,max,0,0,0,,0
 network reception,input|visual|neural|framegen|audiofix|pacing|builds|smoothness|retest,late (given up) max,slipstream-net,,all,late,max,0,0,0,,0
