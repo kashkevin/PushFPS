@@ -11,6 +11,7 @@
 #include "veyra/engine/ColorSettings.h"
 #include "veyra/engine/AntiAliasSettings.h"
 #include "veyra/engine/BeautySettings.h"
+#include "veyra/engine/PushLowDelay.h"
 namespace veyra::engine {
 inline constexpr uint32_t kMaxColorInstances = 6;
 inline constexpr uint32_t kMaxNrInstances = 4;
@@ -488,6 +489,15 @@ struct EnhancementSettings {
     // PushFPS "实时 HUD 锁定": a per-pixel HUD mask found every frame, kept out of
     // frame generation (pipeline/PushHudLock.h).
     bool hudLock=false;
+    // Package 15 "Lower delay" (engine/PushLowDelay.h, pref pushLowDelay): the predicted-frame pass exists in the graph
+    // while it is on with VFG at 3X (lowDelayShapesGraph), so switching it there rebuilds the graph; the engine reads the
+    // row itself once a pair (pushLowDelayShared). A global control kept in shell preferences.
+    bool lowDelay=false;
+    bool lowDelayShapesGraph()const{return pushLowDelayShapesGraph(lowDelay,frameGenerationBackend==FrameGenerationBackend::Vfg,multiplier);}
+    // PushFPS restoration (engine/PushClean.h, pipeline/PushCleanPass.h): strength 0..100 of the compression
+    // clean-up before every upscaler and neural layer; 0 = the stage does not exist. A global control kept
+    // in shell preferences (pushClean). Only on/off changes the graph: the strength itself is read live.
+    uint8_t clean=0;
     ContentRate content=ContentRate::Transport;
     AudioSyncMode audioSync=AudioSyncMode::Automatic;
     int32_t audioOffsetMs=0;
@@ -572,6 +582,8 @@ struct EnhancementSettings {
         active.revision=target.revision;active.audioSync=target.audioSync;active.audioOffsetMs=target.audioOffsetMs;
         active.captureFlipVertical=target.captureFlipVertical;active.exportBitrateMbps=target.exportBitrateMbps;
         active.fgAdaptive=target.fgAdaptive;active.pacingRepair=target.pacingRepair;
+        active.clean=target.clean;
+        active.lowDelay=target.lowDelay;   // never a live parameter: a graph-shape change or nothing (sameVideoConfiguration)
         return active==target;
     }
     bool sameVideoConfiguration(const EnhancementSettings& other) const {
@@ -588,6 +600,10 @@ struct EnhancementSettings {
         // PushFPS adaptive multiplier: chosen per pair inside the running graph.
         video.fgAdaptive=target.fgAdaptive;
         video.pacingRepair=target.pacingRepair;
+        // PushFPS restoration: the strength is read live; only on/off needs another graph.
+        if((video.clean>0)==(target.clean>0))video.clean=target.clean;
+        // Package 15 "Lower delay": another graph only where the predicted-frame pass would exist (VFG at 3X).
+        if(video.lowDelayShapesGraph()==target.lowDelayShapesGraph())video.lowDelay=target.lowDelay;
         // Colour grade: parameters are uniform-only (never a rebuild), but the
         // master switch changes the graph shape, so it stays in the comparison.
         const auto oldColor=video.color;const auto oldAdditional=video.additionalColors;

@@ -11,7 +11,9 @@ enum class GpuStage { Color, Sr, Flow, Nr, Residual, Fg1, Fg2, Fg3, Fg4, Fg5, Fg
     NrLayer0, NrLayer1, NrLayer2, NrLayer3,
     ColorNode0, ColorNode1, ColorNode2, ColorNode3, ColorNode4, ColorNode5,
     AaNode0, AaNode1,
-    BeautyNode0, BeautyNode1, BeautyNode2, BeautyNode3, BeautyNode4, BeautyNode5, BeautyDetect, Count };
+    BeautyNode0, BeautyNode1, BeautyNode2, BeautyNode3, BeautyNode4, BeautyNode5, BeautyDetect,
+    Clean, // PushFPS restoration (pipeline/PushCleanPass.h)
+    Count };
 static_assert(unsigned(GpuStage::Fg5)-unsigned(GpuStage::Fg1)==4);
 static_assert(unsigned(GpuStage::FgBatch)>unsigned(GpuStage::Fg7));
 static_assert(unsigned(GpuStage::Count)<=64,"GpuTimer keeps one mask bit per stage");
@@ -78,6 +80,10 @@ struct FrameFlowMetrics {
     // 1% low of the present rate (FramePaceWindow); unknown until enough presents.
     std::optional<double> presentLow1Fps;
     std::optional<double> softwareLatencyMs,softwareLatencyP95Ms,slotWaitPerFrameMs;
+    // PushFPS Package 15: the readout's mean split into picture + first generated frame + schedule wait + margin over the
+    // same frames (engine/PushDelaySplit.h); the four add up to softwareLatencyMs. Share: frames whose readiness was seen.
+    std::optional<double> latencyPictureMs,latencyFirstGeneratedMs,latencyWaitMs,latencyMarginMs;
+    double latencySplitShare=0;
     uint64_t latencySamples=0;
     uint32_t pendingOutputFrames=0; // valid frame opportunities retained by presenter jobs
     std::array<TimingAggregate,size_t(GpuStage::Count)> gpuTiming;
