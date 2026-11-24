@@ -488,6 +488,10 @@ struct EnhancementSettings {
     // PushFPS "实时 HUD 锁定": a per-pixel HUD mask found every frame, kept out of
     // frame generation (pipeline/PushHudLock.h).
     bool hudLock=false;
+    // PushFPS restoration (engine/PushClean.h, pipeline/PushCleanPass.h): strength 0..100 of the compression
+    // clean-up before every upscaler and neural layer; 0 = the stage does not exist. A global control kept
+    // in shell preferences (pushClean). Only on/off changes the graph: the strength itself is read live.
+    uint8_t clean=0;
     ContentRate content=ContentRate::Transport;
     AudioSyncMode audioSync=AudioSyncMode::Automatic;
     int32_t audioOffsetMs=0;
@@ -572,6 +576,7 @@ struct EnhancementSettings {
         active.revision=target.revision;active.audioSync=target.audioSync;active.audioOffsetMs=target.audioOffsetMs;
         active.captureFlipVertical=target.captureFlipVertical;active.exportBitrateMbps=target.exportBitrateMbps;
         active.fgAdaptive=target.fgAdaptive;active.pacingRepair=target.pacingRepair;
+        active.clean=target.clean;
         return active==target;
     }
     bool sameVideoConfiguration(const EnhancementSettings& other) const {
@@ -588,6 +593,8 @@ struct EnhancementSettings {
         // PushFPS adaptive multiplier: chosen per pair inside the running graph.
         video.fgAdaptive=target.fgAdaptive;
         video.pacingRepair=target.pacingRepair;
+        // PushFPS restoration: the strength is read live; only on/off needs another graph.
+        if((video.clean>0)==(target.clean>0))video.clean=target.clean;
         // Colour grade: parameters are uniform-only (never a rebuild), but the
         // master switch changes the graph shape, so it stays in the comparison.
         const auto oldColor=video.color;const auto oldAdditional=video.additionalColors;

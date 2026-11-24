@@ -2,6 +2,7 @@
 #include "veyra/pipeline/VfgAmpereCompat.h"
 #include "veyra/pipeline/FrameBatch.h"
 #include "veyra/pipeline/GpuPassUtils.h"
+#include "veyra/pipeline/PushGpuPath.h"
 #include "veyra/core/SceneCadenceAnalyzer.h"
 #include "veyra/engine/EnhancementSettings.h"
 #include "veyra/gfx/D3D12DeviceContext.h"
@@ -142,7 +143,9 @@ struct VfgBackend::Impl {
     Microsoft::WRL::ComPtr<ID3D12PipelineState> cutPso;
     Microsoft::WRL::ComPtr<ID3D12Resource> cutResults;
     D3D12_RESOURCE_STATES cutState=D3D12_RESOURCE_STATE_COMMON;
-    struct Job {unsigned parity,sub,multiplier;bool reset;uint64_t revision,value;bool fast;};
+    // value: the completion value this job signals (and, unless chained, the producer value it waits for);
+    // wait: the producer value its CUDA work waits for (PushGpuPath.h pushVfgChainedWait).
+    struct Job {unsigned parity,sub,multiplier;bool reset;uint64_t revision,value;bool fast;uint64_t wait;};
     std::array<std::atomic<SubmissionState>,kOutputs> states{};
     std::atomic<bool> failed=false;
     std::mutex jobsMutex,profileMutex;
@@ -318,9 +321,9 @@ struct VfgBackend::Impl {
         buffer.resource.Reset();
     }
     bool cudaJob(const Job& job){
-        const auto [parity,sub,multiplier,reset,revision,value,fast]=job;
+        const auto [parity,sub,multiplier,reset,revision,value,fast,producerValue]=job;
         Current current(*this);if(!current.active)return false;
-        CUDA_EXTERNAL_SEMAPHORE_WAIT_PARAMS wait{};wait.params.fence.value=value;
+        CUDA_EXTERNAL_SEMAPHORE_WAIT_PARAMS wait{};wait.params.fence.value=producerValue;
         bool ok=cu(cpuCall(2,[&]{return cuWaitExternalSemaphoresAsyncFn(&inputSemaphore,&wait,1,stream);}),"cuWaitExternalSemaphoresAsync")&&!failed.load();
         bool profiling=false;const unsigned profileSlot=unsigned(profileHead%kProfileJobs);
         if(profileGpu){
@@ -399,12 +402,27 @@ struct VfgBackend::Impl {
             {std::lock_guard lock(jobsMutex);--outstanding;}
         }
     }
+    // Stream "gpupath" experiment VEYRA_EXP_RP_VFG_BACK_TO_BACK=1 (off by default): a later subframe of a pair waits
+    // for the pair's first producer value instead of a new one signalled after the previous subframe's copy back, so
+    // CUDA runs it straight after the previous Run (PushGpuPath.h pushVfgChainedWait for why that is safe and why it
+    // stays off: the copy back of the first generated frame may then share the GPU with the second Run).
+    bool backToBack=false;
+    uint64_t pairProducerValue=0;
+    // Signals the producer when this job needs a new value; returns the value its CUDA work waits for, 0 on failure.
+    uint64_t producerFor(unsigned sub,bool reset,uint64_t value){
+        const uint64_t chained=pushVfgChainedWait(backToBack,sub,reset,pairProducerValue);
+        if(chained)return chained;
+        if(!hr(cpuCall(1,[&]{return context->directQueue()->Signal(producer.Get(),value);}),"signal VFG producer"))return 0;
+        pairProducerValue=sub==1?value:0;
+        return value;
+    }
     bool handoff(unsigned parity,unsigned sub,unsigned multiplier,bool reset,bool fast){
         const unsigned slot=parity+2*(sub-1);
         if(!asynchronous){
             const uint64_t value=++signalValue;
-            if(!hr(cpuCall(1,[&]{return context->directQueue()->Signal(producer.Get(),value);}),"signal VFG producer"))return false;
-            const bool ok=cudaJob({parity,sub,multiplier,reset,inputRevision,value,fast});
+            const uint64_t waitValue=producerFor(sub,reset,value);
+            if(!waitValue)return false;
+            const bool ok=cudaJob({parity,sub,multiplier,reset,inputRevision,value,fast,waitValue});
             if(!ok){
                 failed.store(true);Current current(*this);
                 if(current.active&&stream)cu(cuStreamSynchronizeFn(stream),"rejected synchronous job drain");
@@ -419,10 +437,11 @@ struct VfgBackend::Impl {
             log::error("vfg","bounded VFG submission rejected; no GPU wait queued");return false;
         }
         const uint64_t value=++signalValue;
-        if(!hr(cpuCall(1,[&]{return context->directQueue()->Signal(producer.Get(),value);}),"signal VFG producer"))return false;
+        const uint64_t waitValue=producerFor(sub,reset,value);
+        if(!waitValue)return false;
         // Allocate the queue entry before adding a GPU dependency. Even a host
         // allocation exception cannot leave a wait with no job to signal it.
-        jobs.push_back({parity,sub,multiplier,reset,inputRevision,value,fast});
+        jobs.push_back({parity,sub,multiplier,reset,inputRevision,value,fast,waitValue});
         if(!hr(cpuCall(11,[&]{return context->directQueue()->Wait(completion.Get(),value);}),"queue wait VFG completion")){
             jobs.pop_back();return false;
         }
@@ -467,6 +486,8 @@ bool VfgBackend::initialize(gfx::D3D12DeviceContext& context,const std::wstring&
     BIND_CU(cuWaitExternalSemaphoresAsync,"cuWaitExternalSemaphoresAsync");BIND_CU(cuSignalExternalSemaphoresAsync,"cuSignalExternalSemaphoresAsync");
     BIND_CU(cuGetErrorName,"cuGetErrorName");BIND_CU(cuGetErrorString,"cuGetErrorString");
     p.profileGpu=GetEnvironmentVariableW(L"VEYRA_TEST_VFG_GPU_PROFILE",nullptr,0)>0;
+    {wchar_t chain[4]{};p.backToBack=GetEnvironmentVariableW(L"VEYRA_EXP_RP_VFG_BACK_TO_BACK",chain,4)==1&&chain[0]==L'1';}
+    if(p.backToBack)log::info("vfg","experiment VEYRA_EXP_RP_VFG_BACK_TO_BACK=1: later subframes of a pair wait for its first producer value (CUDA runs them back to back; off by default)");
     if(p.profileGpu){
         BIND_CU(cuEventCreate,"cuEventCreate");BIND_CU(cuEventRecord,"cuEventRecord");BIND_CU(cuEventQuery,"cuEventQuery");
         BIND_CU(cuEventElapsedTime,"cuEventElapsedTime");BIND_CU(cuEventDestroy,"cuEventDestroy_v2");
@@ -661,6 +682,20 @@ bool VfgBackend::copyOutput(ID3D12GraphicsCommandList* list,ID3D12Resource* text
     list->ResourceBarrier(2,barriers.data());return true;
 #else
     (void)list;(void)texture;(void)slot;return false;
+#endif
+}
+ID3D12Resource* VfgBackend::inputBuffer(unsigned parity)const{
+#ifdef VEYRA_HAVE_CUDA_DRIVER_HEADERS
+    return impl_->ready&&parity<2?impl_->inputs[parity].resource.Get():nullptr;
+#else
+    (void)parity;return nullptr;
+#endif
+}
+uint32_t VfgBackend::inputRowPitch()const{
+#ifdef VEYRA_HAVE_CUDA_DRIVER_HEADERS
+    return impl_->ready?impl_->footprint.Footprint.RowPitch:0;
+#else
+    return 0;
 #endif
 }
 ID3D12Resource* VfgBackend::shotChangeResultsForTest()const{

@@ -48,6 +48,11 @@ public:
     // D3D12_RESOURCE_STATE_PREDICATION; uint32 layout: cut flag per parity at
     // 0/2, last SAD/histogram/compare per parity at 4/8, cut count at 12.
     ID3D12Resource* shotChangeResultsForTest() const;
+    // Stream "predict": the pair's input buffers as capture() leaves them (COMMON, pitch-linear 32-bit words of the
+    // encoded format, inputRowPitch() bytes per row): B = inputBuffer(parity), A = inputBuffer(1 - parity). Read-only
+    // for the caller, and only after this pair's last copyOutput (CUDA has finished with them then).
+    ID3D12Resource* inputBuffer(unsigned parity) const;
+    uint32_t inputRowPitch() const;
     void shutdown();
 private:
     struct Impl;

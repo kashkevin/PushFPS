@@ -6,6 +6,7 @@
 #include "veyra/pipeline/ColorGradeInstance.h"
 #include "veyra/pipeline/AntiAliasPass.h"
 #include "veyra/pipeline/NisPass.h"
+#include "veyra/pipeline/PushCleanPass.h"
 #include "veyra/pipeline/PushHudLock.h"
 #include "veyra/pipeline/PushHudLock.h"
 #include "veyra/pipeline/BeautyPass.h"
@@ -45,6 +46,7 @@
 #include "veyra/pipeline/GpuPassUtils.h"
 #include "veyra/core/SceneCadenceAnalyzer.h"
 #include "veyra/pipeline/FrameBatch.h"
+#include "veyra/pipeline/PushPredictPass.h"   // stream "predict"; nothing is created unless VEYRA_EXP_RP_FG_SCHEDULE=onepredicted
 #include "veyra/engine/EnhancementSettings.h"
 #include "veyra/engine/ContentCadence.h"
 #include "veyra/diagnostics/GpuTimer.h"
@@ -54,7 +56,7 @@ struct SwsContext;
 struct NVSDK_NGX_Parameter;
 struct NVSDK_NGX_Handle;
 namespace veyra::guidance { class AmdOpticalFlow; class GpuDisOpticalFlow; }
-namespace veyra::pipeline { class VfgBackend; class VfxSrBackend; }
+namespace veyra::pipeline { class VfgBackend; class VfxSrBackend; class StreamChangeRunner; struct StreamChangeOutcome; }
 
 namespace veyra::gfx {
 class D3D12DeviceContext;
@@ -162,6 +164,7 @@ struct EnhanceGraphDesc {
     // DLSS-G performance mode (ngx/DlssgLite.h): DLSS frame generation only.
     bool dlssgLite=false;
     bool hudLock=false; // PushFPS Live HUD Lock (PushHudLock.h), graph frame generation only
+    uint8_t clean=0; // PushFPS restoration (PushCleanPass.h): above 0 the stage exists; its strength is read live
     engine::ContentRate contentRate=engine::ContentRate::Transport;
     engine::NrSettings model;
     engine::ResidualSettings residual;
@@ -609,6 +612,8 @@ public:
         }
         uint64_t realFrameIndex = 0;
         bool passthrough = false;          // VEYRA_GRAPH_OFF: metadata only, no GPU work
+        // Stream "predict": this pair ran I(2/3), B, P (PushPredict.h); the batch holds them in that display order.
+        bool predictedPair = false;
     };
 
     // Processes one decoded frame. `ptsMs` is the frame PTS in the source
@@ -642,9 +647,19 @@ public:
     }
     uint64_t presentationReadyFence(unsigned slot,bool generated)const {
         if(generated&&slot<kGeneratedPoolSlots){if(auto lease=generatedLeases_[slot].lock())return lease->readyFence;}
-        return uploadFences_[slot%2];
+        // Stream "gpupath" (PushGpuPath.h): the real frame's own lists' fence where no later list of its pair touches it.
+        return realPresentFences_[slot%2]?realPresentFences_[slot%2]:uploadFences_[slot%2];
     }
     ID3D12Fence* presentationReadyFenceObject(unsigned slot,bool generated)const;
+    // Stream "predict" (PushPredict.h, docs/drafts/PREDICT_GPU.md). The scheduler asks for the next pair's schedule
+    // BEFORE process(); the graph runs it only when every condition holds (lastPredictRefusal() says why not) and
+    // otherwise runs today's pair. Without VEYRA_EXP_RP_FG_SCHEDULE=onepredicted nothing is created and the request is
+    // ignored (SwitchOff).
+    void setPairSchedule(PushPairSchedule schedule){requestedSchedule_=schedule;}
+    bool predictAvailable()const{return predict_&&predict_->ready()&&predict_->flowReady();}
+    PushPredictRefusal lastPredictRefusal()const{return lastPredictRefusal_;}
+    // The counters of the predicted frame of parity `parity`; only after that pair's genFenceValue has completed.
+    bool predictCounters(unsigned parity,PushPredictCounters& out)const{return predict_&&predict_->counters(parity%2,out);}
     void presentationSubmitted(unsigned slot,ID3D12Fence* fence,uint64_t value){
         presentationFences_[slot%2]=fence;presentationValues_[slot%2]=value;
     }
@@ -690,6 +705,13 @@ public:
         uint64_t fgProviderDisabled = 0;
         uint64_t nrMotionFrames = 0, sceneCutCount = 0, resetCount = 0;
         uint64_t nrReuseFrames = 0, nrReuseChainedMotion = 0;
+        // PushFPS stream "delay90": live capture frames that came in an upload buffer the GPU still read when the
+        // callback wrote it, so the callback wrote its CPU planes and this graph copied them again on the engine thread.
+        uint64_t captureUploadCpuCopies = 0;
+        // PushFPS stream "gpupath": real frames whose presentation-queue wait is their own lists' fence instead of the
+        // pair's last list (PushGpuPath.h). Counts frames, not time saved: only frames shown before that list mattered.
+        uint64_t realPresentOwnFence = 0;
+        uint64_t predictedPairs = 0;   // stream "predict": pairs that ran I(2/3), B, P
     };
     const Metrics& metrics() const { return metrics_; }
     const std::string& mvecSource() const { return mvecSource_; }
@@ -702,11 +724,12 @@ public:
     uint32_t nrWidth() const {return nrW_;}
     uint32_t nrLayerCount() const {return uint32_t(nrInstances_.size());}
     uint32_t nrHeight() const {return nrH_;}
+    bool nrBeforeSr() const {return desc_.nrBeforeSr;} // PushFPS: read by the [slipstream-nr] statistics (engine/PushNrStatsHook.h)
     uint32_t flowWidth() const {return nvofW_;}
     uint32_t flowHeight() const {return nvofH_;}
     uint32_t actualFlowPerf() const;
     diagnostics::FrameMetrics gpuMetrics(){gpuTimer_.collect(contextFence());return gpuTimer_.last();}
-    std::vector<diagnostics::GpuFrameTiming> takeGpuTimings(){gpuTimer_.collect(contextFence());return gpuTimer_.takeCompleted();}
+    std::vector<diagnostics::GpuFrameTiming> takeGpuTimings(){gpuTimer_.collect(contextFence());auto timings=gpuTimer_.takeCompleted();noteSrTimings(timings);if(cleanPass_)cleanPass_->noteTimings(timings);return timings;}
     void recordGpuTimings(){gpuTimer_.recordCompleted();}
     ID3D12Fence* contextFence() const;
     ID3D12Resource* baseReference(unsigned slot=0)const{return baseReferences_[slot%2].Get();}
@@ -751,6 +774,19 @@ public:
     // could not be created (frame generation runs without it), 3 asked for but this frame generation
     // has no graph frames to lock (off, or XeSS generating inside its presenter).
     int hudLockState() const { if(!desc_.hudLock)return 0; if(hudLock_)return 1; if(!fgEnabled_||presentSinkFg())return 3; return 2; }
+    // PushFPS experiment VEYRA_EXP_RP_STREAM_DEDUP (pipeline/StreamChangePass.h): how much a
+    // hardware-decoded (D3D12VA, 8-bit NV12) picture differs from the one measured before it.
+    // Called by the engine before it decides whether to keep the frame; waits for the GPU until
+    // deadline100ns at the latest (pipeline::streamChangeDeadline on the engine's clock: 4 ms, and
+    // never past its next presentation; a deadline already passed: nothing is dispatched). The pass
+    // exists only when the switch was set at graph creation. An outcome without a valid `now`
+    // means: no number for this picture, keep the frame.
+    StreamChangeOutcome measureStreamChange(const AVFrame* frame,int64_t deadline100ns);
+    // Lets go of a decoder picture held for a measurement that has finished meanwhile. Called by
+    // the engine for frames it does not measure, so the picture is not held while measuring rests.
+    void settleStreamChange();
+    // measured / timed out / failed since this graph was created (for the engine's log line).
+    void streamChangeCounters(uint64_t& measured,uint64_t& timeouts,uint64_t& failures,double& waitMsMax,double& waitMsMean) const;
     // AMD FSR upscaling replaces the SR stage; it is a FidelityFX effect, not
     // an NGX feature, so it also works on non-NVIDIA adapters.
     // Double SR may run FSR in either pass; each pass is its own FidelityFX context.
@@ -762,6 +798,8 @@ public:
     // Without its pass (shader failure) the stage falls back to the ordinary resize.
     bool nisRequested() const { return desc_.enableSr && !desc_.dualSr && desc_.videoSrQuality==engine::kVideoSrNis; }
     bool nisEnabled() const { return nisPass_ != nullptr; }
+    // PushFPS restoration: the stage exists in this graph (it runs while the live strength is above 0).
+    bool cleanEnabled() const { return cleanPass_ != nullptr; }
     // Requested output multiplier (2 = one generated frame). Consumed by the
     // present sink so the XeSS provider knows how many frames to generate.
     uint32_t fgMultiplier() const { return desc_.fgMultiplier; }
@@ -826,6 +864,7 @@ public:
     bool colorGradeActive() const { return colorActive_||additionalColorActiveCount_!=0||tailColorActiveCount_!=0||preNrColorActiveCount_!=0||preSrColorActiveCount_!=0||interNrColorActiveCount_!=0||sourcePostColorActiveCount_!=0; }
     // Effective dither step for the 8/10-bit output paths (0 = no dither).
     float outputDitherStep() const;
+    float cleanDitherSteps() const;
     // Isolated diagnostics only: existing constant guidance, borrowed lifetime.
     // A caller writing before the first real frame must restore COMMON state.
     ID3D12Resource* diagnosticDepthResource(bool frameGeneration) const { return frameGeneration?depthTex_.Get():nrZeroDepth_.Get(); }
@@ -859,6 +898,9 @@ public:
     engine::FailedBackend failedBackend() const { return failedBackend_; }
 
 private:
+    // PushFPS sprint 4: [slipstream-sr] statistics and VEYRA_EXP_SR_BUDGET_MS (EnhanceGraph.cpp; returns at once
+    // without VEYRA_EXP_RP_STATS=1 or the budget switch).
+    void noteSrTimings(const std::vector<diagnostics::GpuFrameTiming>& timings);
     engine::FailedBackend failedBackend_=engine::FailedBackend::None;
     bool createResources();
     bool initZeroAndDepthTextures();
@@ -866,6 +908,8 @@ private:
     bool initNgxFeatures();
     bool initFsrSr();
     bool initNis();
+    bool initClean();
+    void runClean(ID3D12GraphicsCommandList* list,unsigned parity,bool retainReferences);
     bool initFsrFg();
     bool initVfg();
     bool initAmfFrc();
@@ -1164,7 +1208,20 @@ private:
     std::unique_ptr<pushflow::PushFlowBackend> pushFlow_;
     std::unique_ptr<gfx::FsrSrBackend> fsrSrBackend_;
     std::unique_ptr<NisPass> nisPass_;  // PushFPS: NVIDIA Image Scaling SR
+    std::unique_ptr<PushCleanPass> cleanPass_;  // PushFPS: restoration before every upscaler and neural layer
+    uint64_t cleanFrame_=0;            // seed of the debanding noise (engine::pushCleanFrameSeed)
+    bool cleanKeptReference_=false;    // this frame's comparison reference was taken before the clean-up
+    bool cleanRanLast_=false;          // the stage changed the last picture (final-write dither)
     std::unique_ptr<PushHudLock> hudLock_;  // PushFPS: Live HUD Lock
+    // Stream "predict": created only when VEYRA_EXP_RP_FG_SCHEDULE=onepredicted and VFG can feed it (initPredict).
+    std::unique_ptr<PushPredictPass> predict_;
+    PushPairSchedule requestedSchedule_=PushPairSchedule::Interpolate;
+    PushPredictRefusal lastPredictRefusal_=PushPredictRefusal::SwitchOff;
+    bool initPredict();
+    std::unique_ptr<StreamChangeRunner> streamChange_;  // PushFPS experiment: change of the decoded picture
+    std::shared_ptr<AVFrame> streamChangeFrame_;        // the decoder picture its last list reads
+    bool streamChangeFailed_=false;
+    bool initStreamChange();
     bool initHudLock();
     void composeHudLock(ID3D12GraphicsCommandList* list,unsigned generatedSlot,unsigned heldParity);
     // Double SR first passes on DLSS SR / FSR (the final pass keeps the members above).
@@ -1184,6 +1241,8 @@ private:
     uint32_t dlssgLiteState_ = 0;
     std::wstring dlssgDirectory_;
     uint32_t nrSeh_ = 0;
+    // Init1Ext succeeded: Shutdown1 is owed before the snippet DLL is unloaded.
+    bool nrSnippetInitialized_ = false;
     bool fgCapsAvailable_ = false;
     int fgMultiFrameMax_ = 0;
 
@@ -1202,6 +1261,7 @@ private:
     std::weak_ptr<FrameLease> realLeases_[2],generatedLeases_[kGeneratedPoolSlots];
     uint32_t nextListSlot_ = 0;
     uint64_t uploadFences_[2] = {};
+    uint64_t realPresentFences_[2] = {};   // stream "gpupath": the presentation queue's wait for a real frame (PushGpuPath.h)
     std::array<Microsoft::WRL::ComPtr<ID3D12Fence>,2> presentationFences_;
     std::array<uint64_t,2> presentationValues_{};
     // FFmpeg may recycle a hardware surface as soon as its AVFrame is freed.
