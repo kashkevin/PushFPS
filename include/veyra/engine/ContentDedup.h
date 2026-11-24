@@ -49,6 +49,12 @@ public:
         double maxShiftMs = 0;    // largest sample-to-content correction
     };
 
+    // PushFPS stream "capture", experiment VEYRA_EXP_RP_CAPTURE_DEDUP_SPAN=1 (EngineController): samples further apart
+    // than six transport periods break the cadence, which is 100 ms at 60 Hz but only 50 ms in a 120 Hz signal, where an
+    // engine stall of about 60-100 ms then made the content rate unknown for about a quarter of a second (the output-cap
+    // reduction is off while it is unknown). A floor in time keeps a 120 Hz signal as tolerant as a 60 Hz one. 0 (the
+    // default): six transport periods, as before. Kept across reset().
+    void setMinimumContinuity(int64_t span100ns) { minContinuous_ = span100ns > 0 ? span100ns : 0; }
     void reset() {
         haveKept_ = haveContent_ = skipSpan_ = holding_ = false; prevSample_ = 0; lastKeptSample_ = 0; lastContent_ = 0;
         timeCount_ = 0; timeHead_ = 0; period_ = 0; misses_ = 0;
@@ -64,7 +70,7 @@ public:
         ++stats_.observed;
         if (transport <= 0) transport = 166667;
         const int64_t previous = prevSample_;
-        const bool continuous = haveKept_ && !boundary && pts > previous && pts - previous <= transport * 6;
+        const bool continuous = haveKept_ && !boundary && pts > previous && pts - previous <= std::max(transport * 6, minContinuous_);
         prevSample_ = pts;
         if (!picture) {
             // No CPU picture (hardware-decoded streams): keep everything. A
@@ -203,6 +209,7 @@ private:
     bool haveKept_ = false, haveContent_ = false, skipSpan_ = false, holding_ = false;
     int64_t prevSample_ = 0, lastKeptSample_ = 0, lastContent_ = 0, period_ = 0, holdDue_ = 0;
     int64_t observedPeriod_ = 0;
+    int64_t minContinuous_ = 0;
     Stats stats_;
 };
 }
