@@ -48,8 +48,13 @@ Rectangle {
             color: Theme.t3; font.family: Theme.fontMono; font.pixelSize: 11
         }
         Text {
+            objectName: "pushfps-latency-fps"
             visible: badge.stats.submitFps !== undefined && badge.stats.submitFps !== null
-            text: qsTr("%1 FPS").arg(Number(badge.stats.submitFps).toFixed(0))
+            // Shown FPS when the presenter knows it (PushLiveCadence), otherwise named as submitted; "uneven" when
+            // the presents do not reach the screen evenly (no variable refresh: holds of 1 and 2 refreshes).
+            text: (badge.stats.shownFpsKnown ? qsTr("显示 %1 FPS").arg(Number(badge.stats.shownFps).toFixed(0))
+                                             : qsTr("提交 %1 FPS").arg(Number(badge.stats.submitFps).toFixed(0)))
+                  + (badge.stats.uneven ? qsTr(" · 不均匀") : "")
                   + (badge.stats.submitLowFps !== undefined && badge.stats.submitLowFps !== null ? qsTr(" · 1% %1").arg(Number(badge.stats.submitLowFps).toFixed(0)) : "")
             color: Theme.t2; font.family: Theme.fontMono; font.pixelSize: 11
         }
