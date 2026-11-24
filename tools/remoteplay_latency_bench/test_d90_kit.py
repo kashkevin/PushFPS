@@ -32,15 +32,16 @@ FIT = "VEYRA_EXP_RP_FIT_DISPLAY=1"
 # switch alone.
 SETS = {
     "d90": ["d90-off", "d90-fg3", "d90-fg3-pprio", "d90-fg3-low", "d90-fg3-dlss", "d90-fg3-flow", "d90-fg3-fit", "d90-fg2"],
-    "d90-capture": ["d90c-off", "d90c-fg3", "d90c-p13", "d90c-l-robust", "d90c-l-grid", "d90c-l-cadence", "d90c-l-gpuwaits",
+    "d90-capture": ["d90c-off", "d90c-fg3", "d90c-p13", "d90c-ld", "d90c-l-robust", "d90c-l-grid", "d90c-l-cadence", "d90c-l-gpuwaits",
                     "d90c-l-upload", "d90c-l-nrhold", "d90c-fg3-pprio", "d90c-fg3-low", "d90c-fg3-dlss", "d90c-fg3-flow", "d90c-fg2"],
 }
-MINUTES = {"d90": 22, "d90-capture": 39}
+MINUTES = {"d90": 22, "d90-capture": 42}
 # What each arm adds to its pair: (pipeline keys added, pipeline keys removed, other switches added, differs)
 ADDS = {
     "fg3": (["fg=vfg", "fgMultiplier=3", "fgTier=1"], ["fg=off"], set(), ""),
     "fg3-pprio": ([], [], {PRESENT}, ""),
     "p13": ([], [], {"VEYRA_TEST_RP_LEGACY_PACKAGE13=1"}, ""),
+    "ld": ([], [], {"VEYRA_EXP_RP_FG_SCHEDULE=onepredicted"}, ""),
     "l-robust": ([], [], {"VEYRA_TEST_RP_LEGACY_ROBUST_ADMIT=1"}, ""),
     "l-grid": ([], [], {"VEYRA_TEST_RP_LEGACY_GRID_EARLY=1"}, ""),
     "l-cadence": ([], [], {"VEYRA_TEST_RP_LEGACY_DEDUP_CADENCE=1"}, ""),
@@ -169,7 +170,7 @@ class D90Kit(unittest.TestCase):
         with open(os.path.join(ROOT, "docs", "drafts", "DELAY_90.md"), encoding="utf-8") as f:
             text = f.read()
         self.assertIn("about 22 minutes", text)
-        self.assertIn("about 39 minutes", text)
+        self.assertIn("about 42 minutes", text)
 
     def test_no_arm_tests_only_an_inert_switch(self):
         # Since Package 14 these change nothing: an arm with only them would read as "the experiment did not help".

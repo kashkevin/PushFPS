@@ -318,7 +318,10 @@ bool QmlPlayerBridge::setPreference(const QString& key, const QVariant& value) {
                                    // PushFPS encoder tuning (NVENC): psycho-visual AQ for recordings and streams.
                                    "recordPsychoAq", "streamPsychoAq",
                                    // PushFPS restoration: protect HUD, text and fine lines (unset = on).
-                                   "pushCleanHud"};
+                                   "pushCleanHud",
+                                   // Package 15 "Lower delay" (PushLowDelayRow.qml): one predicted frame per real frame
+                                   // on a capture card with VFG at 3X. Unset = off.
+                                   "pushLowDelay"};
     QVariant stored;
     if (ranges.contains(key)) {
         bool ok = false; const int n = value.toInt(&ok);
@@ -634,6 +637,7 @@ void QmlPlayerBridge::applyPreference(const QString& key) {
     }
     else if (key == QLatin1String("pushLanProfile")) applyPushLanProfile();
     else if (key == QLatin1String("pushSmoothTarget")) applyPushSmoothTarget();
+    else if (key == QLatin1String("pushLowDelay")) applyPushLowDelay();
     else if (key == QLatin1String("pushSmartLink")) applyPushSmartLink();
     else if (key.startsWith(QLatin1String("kbm"))) applyPushKbm();
     else if (key == QLatin1String("nisSharpness"))

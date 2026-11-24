@@ -49,7 +49,7 @@ on:
       package_label:
         description: 'Label of this download (8A, 8B, 8C; 8 = the complete Package 8): in the zip name, START-HERE.txt, every installed copy''s Slipstream-INSTALL.txt and the kit''s RESULT.txt'
         required: false
-        default: '14'
+        default: '15'
       build_workflow:
         description: 'Workflow file that built them'
         required: false
@@ -77,7 +77,7 @@ jobs:
       - name: Package name
         id: name
         env:
-          PACKAGE_LABEL: ${{ inputs.package_label || '14' }}
+          PACKAGE_LABEL: ${{ inputs.package_label || '15' }}
         run: |
           if ! printf '%s' "$PACKAGE_LABEL" | grep -Eq '^[0-9][0-9A-Za-z]{0,7}$'; then echo "::error::package_label must be a digit then up to 7 letters or digits (8A, 8B, 8C)"; exit 1; fi
           name="Slipstream-test-package-${PACKAGE_LABEL}-$(date -u +%Y-%m-%d)-${GITHUB_RUN_NUMBER}"
@@ -99,7 +99,7 @@ jobs:
           ORIGINAL_RUN: ${{ inputs.original_run }}
           STABLE_RUN: ${{ inputs.stable_run }}
           EXPERIMENTAL_RUN: ${{ inputs.experimental_run }}
-          PACKAGE_LABEL: ${{ inputs.package_label || '14' }}
+          PACKAGE_LABEL: ${{ inputs.package_label || '15' }}
           # Package 8: Package 7's own experimental build as the fourth copy (rollback, and the kit's -Session builds).
           PREVIOUS_RUN: ${{ inputs.previous_run || '44780265264' }}
           BUILD_WORKFLOW: ${{ inputs.build_workflow || 'build-windows.yml' }}
@@ -117,7 +117,7 @@ jobs:
       - name: Assemble the package
         env:
           PACKAGE_NAME: ${{ steps.name.outputs.name }}
-          PACKAGE_LABEL: ${{ inputs.package_label || '14' }}
+          PACKAGE_LABEL: ${{ inputs.package_label || '15' }}
           MADE_BY: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           python3 -B packaging/slipstream/slipstream_package.py assemble --artifacts art --repo . --out dist \

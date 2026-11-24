@@ -83,3 +83,12 @@ TEST(lagfix_scheduling_switches_never_come_from_slipstream_ini) {
     CHECK(!veyra::engine::slipstreamFileMayApply("VEYRA_EXP_RP_FG_SCHED"));
     CHECK(!veyra::engine::slipstreamFileMayApply("VEYRA_TEST_RP_FG_SCHED_LEGACY"));
 }
+
+// Package 15: the rollback switch of the "Lower delay" policy is accepted from slipstream.ini like the LEGACY_ ones.
+TEST(lowdelay_leave_on_unusable_rollback_comes_from_slipstream_ini) {
+    CHECK(veyra::engine::slipstreamFileMayApply("VEYRA_TEST_RP_LOWDELAY_LEAVE_ON_UNUSABLE"));
+    CHECK(veyra::engine::slipstreamPresenceSwitch("VEYRA_TEST_RP_LOWDELAY_LEAVE_ON_UNUSABLE"));
+    CHECK(!veyra::engine::slipstreamFileMayApply("VEYRA_TEST_RP_LOWDELAY_SOMETHING_ELSE"));
+    CHECK(!veyra::engine::slipstreamFileMayApply("VEYRA_EXP_RP_FG_SCHEDULE"));   // the mode itself: never from the file
+}
+

@@ -6,6 +6,7 @@
 #include "veyra/engine/PushHardwareProfiles.h"
 #include "veyra/engine/PushStreamOverlay.h"
 #include "veyra/engine/PushClean.h"
+#include "veyra/engine/PushLowDelay.h"
 #include "veyra/engine/PushDeviceLossResume.h"
 #include "veyra/engine/MicrophoneCapture.h"
 #include "veyra/ui/NvidiaVrrProfileController.h"
@@ -331,6 +332,13 @@ QmlPlayerBridge::QmlPlayerBridge(engine::EngineController& engine, std::filesyst
         if (p.contains(QStringLiteral("hudLock"))) {
             const bool on = p.value(QStringLiteral("hudLock")).toBool();
             if (s.hudLock != on) { s.hudLock = on; changed = true; }
+        }
+        {
+            // Package 15 "Lower delay" (PushLowDelay.h, pref pushLowDelay; unset = off): the engine's per-pair flag and the
+            // graph-shape setting that makes the predicted-frame pass exist (applyPushLowDelay keeps both in step later).
+            const bool on = p.value(QStringLiteral("pushLowDelay")).toBool();
+            engine::pushLowDelayShared().wanted.store(on, std::memory_order_relaxed);
+            if (s.lowDelay != on) { s.lowDelay = on; changed = true; }
         }
         if (p.contains(QStringLiteral("fgAdaptive"))) {
             const bool on = p.value(QStringLiteral("fgAdaptive")).toBool();

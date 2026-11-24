@@ -687,6 +687,8 @@ VGroup {
     PushSmartLinkRow { objectName: "pushfps-smartlink-rows" }
     // Smoothness Mode (PushSmoothnessRow.qml), experimental: shown while frame generation is on. Off by default.
     PushSmoothnessRow { objectName: "pushfps-smoothness-rows" }
+    // Package 15 "Lower delay" (PushLowDelayRow.qml), experimental: a capture card with NVIDIA VFG and 3X. Off by default.
+    PushLowDelayRow { objectName: "pushfps-lowdelay-rows" }
 
     VRow {
         objectName: "pushfps-game-fps-row"

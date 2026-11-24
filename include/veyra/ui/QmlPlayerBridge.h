@@ -1475,6 +1475,12 @@ public:
     // --- PushFPS (src/ui/bridge/PushFps.cpp) --------------------------------
     // Live numbers for the latency readout and "Optimise for my PC".
     Q_INVOKABLE QVariantMap pushLiveStats() const;
+    // Stream "present" R1 (engine/PushVideoOverlay.h, qml/Veyra/PushInPicture.js): an interface item's picture (a QImage from
+    // grabToImage; null removes the item) at x, y (logical pixels from the picture's top left) for the window's pixel ratio,
+    // composed with the other items into the one picture the presenter draws; and, per item, whether the presenter has drawn
+    // its latest picture within the last second ({enabled, drawn: {key: bool}}). UI thread.
+    Q_INVOKABLE bool pushSetVideoOverlay(const QString& key, const QVariant& image, double x, double y, double dpr);
+    Q_INVOKABLE QVariantMap pushVideoOverlayState() const;
     // Measurement window over every Present (engine/PushBenchmarkProbe.h).
     Q_INVOKABLE void pushBenchmarkBegin();
     Q_INVOKABLE QVariantMap pushBenchmarkEnd();
@@ -1595,6 +1601,10 @@ public:
     // { available, target, targetFromSwitch, chosen, preferred, reason, stepDowns, loadPercent } of the running stream
     // (chosen 0 = the mode is not deciding). Reads only.
     Q_INVOKABLE QVariantMap pushSmoothState() const;
+    // Package 15 "Lower delay" row (qml/Veyra/PushLowDelayRow.qml, PushSlipstream.cpp): the engine's state for it
+    // (state: idle / calm / active / starting / not-here / unavailable) and whether the kit's own switch was set before
+    // PushFPS started (fromSwitch).
+    Q_INVOKABLE QVariantMap pushLowDelayState() const;
     // PushFPS SmartLink "Connection" row (PushSmartLink.cpp, qml/Veyra/PushSmartLinkRow.qml): the running PS5 stream's
     // latest SmartLink decision, numbers only: available (Slipstream build with PS5 Remote Play), active (fresh),
     // mode, profile, regime, risk, rttMs, rttMaxMs, targetKbps, measuredKbps, signalPercent, reorderMs,
@@ -1752,6 +1762,7 @@ private:
     const char* pushSmartLinkConfigMode() const;   // [slipstream-config] smartlink= off | observe | apply (PushSmartLink.cpp)
     void pushFlowBudgetWatch();   // PushFlow too slow for the frame budget -> a faster tier (PushFps.cpp)
     void applyPushSmoothTarget();   // pref pushSmoothTarget -> engine::pushSmoothShared() (PushSlipstream.cpp)
+    void applyPushLowDelay();   // pref pushLowDelay -> engine::pushLowDelayShared() and EnhancementSettings::lowDelay (a graph rebuild with VFG at 3X; PushSlipstream.cpp)
     bool pushSlipstreamWatch();   // VEYRA_EXP_RP_GOVERNOR / _GPU_BUDGET, once a second; true = the budget applies (PushSlipstream.cpp)
     void pushGpuBudgetRestore(const char* why);   // =apply: the user's frame generation choice back (PushSlipstream.cpp)
     engine::PushCanvas pushCanvas(int fit) const;   // PushFPS canvas preferences (Recording.cpp)

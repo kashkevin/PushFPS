@@ -483,11 +483,11 @@ jobs:
 
       - name: QML component tests (PushFPS quick setup)
         run: |
-          cmake --build $env:BUILD --target veyra_qml_quick_tests veyra_qml_easing_tests --parallel
+          cmake --build $env:BUILD --target veyra_qml_quick_tests veyra_qml_easing_tests veyra_push_in_picture_tests --parallel
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $stage = Join-Path $env:RUNNER_TEMP 'qml-tests-stage'
           New-Item -ItemType Directory -Force $stage | Out-Null
-          foreach ($t in 'veyra_qml_quick_tests', 'veyra_qml_easing_tests') {
+          foreach ($t in 'veyra_qml_quick_tests', 'veyra_qml_easing_tests', 'veyra_push_in_picture_tests') {
             $exe = Get-ChildItem $env:BUILD -Recurse -Filter "$t.exe" | Select-Object -First 1
             if (-not $exe) { Write-Host "::error::$t.exe not built"; exit 1 }
             Copy-Item $exe.FullName $stage
@@ -501,7 +501,11 @@ jobs:
           $env:QML_DISABLE_DISK_CACHE = '1'
           Push-Location $stage
           $failed = 0
-          foreach ($t in 'tst_push_quick_setup', 'tst_push_smoothness', 'tst_push_picture_sound', 'tst_push_nis', 'tst_push_optimize', 'tst_push_presets', 'tst_push_appearance', 'tst_push_hud', 'tst_push_plug_and_play', 'tst_push_intro', 'tst_push_stream', 'tst_push_ps5_pairing', 'tst_push_compare', 'tst_push_studio', 'tst_push_watch', 'tst_push_layout', 'tst_push_frame_input', 'tst_push_slipstream', 'tst_push_calibration', 'tst_push_latency_test', 'tst_push_smartlink', 'tst_push_profiles', 'tst_push_kbm', 'tst_push_neural', 'tst_push_network') {
+          # Stream "present": the in-picture composition (device pixel ratio, union, straight alpha).
+          & .\veyra_push_in_picture_tests.exe -platform offscreen 2>&1 | Out-Host
+          Write-Host "veyra_push_in_picture_tests exit $LASTEXITCODE"
+          if ($LASTEXITCODE -ne 0) { $failed++ }
+          foreach ($t in 'tst_push_quick_setup', 'tst_push_smoothness', 'tst_push_picture_sound', 'tst_push_nis', 'tst_push_optimize', 'tst_push_presets', 'tst_push_appearance', 'tst_push_hud', 'tst_push_plug_and_play', 'tst_push_intro', 'tst_push_stream', 'tst_push_ps5_pairing', 'tst_push_compare', 'tst_push_studio', 'tst_push_watch', 'tst_push_layout', 'tst_push_frame_input', 'tst_push_slipstream', 'tst_push_calibration', 'tst_push_latency_test', 'tst_push_smartlink', 'tst_push_profiles', 'tst_push_kbm', 'tst_push_neural', 'tst_push_network', 'tst_push_in_picture', 'tst_push_lowdelay') {
             & .\veyra_qml_quick_tests.exe -platform offscreen -input "qml-tests\$t.qml" -o "$t.txt,txt" 2>&1 | Out-Host
             $code = $LASTEXITCODE
             Get-Content "$t.txt" -ErrorAction SilentlyContinue | Out-Host

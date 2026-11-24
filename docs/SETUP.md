@@ -184,6 +184,9 @@ program wins over the file. A switch written in the file wins over what `mode` w
 | `VEYRA_TEST_RP_LEGACY_GPU_REAL_WAITS` | `1` | a real frame waits for its whole pair's GPU lists |
 | `VEYRA_TEST_RP_LEGACY_UPLOAD_RELEASE` | `1` | the capture upload buffer is released after the pair's last list |
 | `VEYRA_TEST_RP_LEGACY_NR_HOLD` | `1` | the neural layer's saved state is kept as it is (no hold marker) |
+| `VEYRA_TEST_RP_LEGACY_PACKAGE14` | `1` | **every change made after Package 14 behaves as in Package 14** (the two rows below at once; `_PACKAGE13` also restores them) |
+| `VEYRA_TEST_RP_LEGACY_VIDEO_OVERLAY` | `1` | the delay badge and the statistics overlay are cut out of the video window again instead of drawn in the picture |
+| `VEYRA_TEST_RP_LEGACY_REFLEX_SLEEP` | `1` | NVIDIA low latency's per-frame Sleep on a capture card with frame generation is not ended when it runs past the sample's arrival |
 | `VEYRA_TEST_RP_LEGACY_TIMING` | `1` / `0` | the original timing of all three changed parts (the rollback switch); also restores the original answer to an expired controller state (as `_INPUT_EXPIRY`) |
 | `VEYRA_TEST_RP_LEGACY_INPUT` | `1` / `0` | original controller dispatch and 8 ms poll only |
 | `VEYRA_TEST_RP_LEGACY_OWNER_WAIT` | `1` / `0` | original 1 ms polling of the session loop only |

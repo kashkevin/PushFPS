@@ -104,8 +104,12 @@ inline std::uint64_t pushUploadReleaseFence(std::uint64_t baseFence, std::uint64
 //    time slices, so the first generated frame (the one on the delay's critical path) could be ready LATER. Only the
 //    owner's PC can say which wins (gpuFg1P50/P95Ms, gpuFgP50Ms, VEYRA_TEST_VFG_GPU_PROFILE handoffIdle).
 // Returns the producer value a subframe's CUDA work waits for when it is chained, 0 when it needs its own new value.
-inline std::uint64_t pushVfgChainedWait(bool enabled, unsigned subframe, bool reset, std::uint64_t pairProducer) {
-    return enabled && subframe > 1 && !reset && pairProducer != 0 ? pairProducer : 0;
+// Package 15 review (SHOULD 3): the value is the pair's only when it was signalled for THIS pair's inputs
+// (pairRevision == inputRevision, VfgBackend's capture() count). A predicted pair runs subframe 2 alone; without this
+// check it waited for the previous pair's producer value, i.e. before this pair's B was copied in (a torn frame).
+inline std::uint64_t pushVfgChainedWait(bool enabled, unsigned subframe, bool reset, std::uint64_t pairProducer,
+                                        std::uint64_t pairRevision, std::uint64_t inputRevision) {
+    return enabled && subframe > 1 && !reset && pairProducer != 0 && pairRevision == inputRevision ? pairProducer : 0;
 }
 
 // A model of one D3D12 queue (the presentation queue): items run in submission order; each starts when it has been

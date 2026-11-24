@@ -46,6 +46,7 @@ public:
     PressTiming timing() const;
 
     bool record(ID3D12GraphicsCommandList* list, const Frame& frame) override;
+    bool capturing() const override { return collecting_.load(std::memory_order_relaxed); }
     void submitted(ID3D12Fence* fence, uint64_t value) override;
     void discarded() override;
 

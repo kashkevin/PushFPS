@@ -8,6 +8,12 @@
 #include <memory>
 #include <thread>
 #include "veyra/gfx/NvidiaVrrProfile.h"
+#include "veyra/engine/PushLegacyEnv.h"
+#include "veyra/engine/PushBlitAhead.h"
+#include "veyra/diagnostics/FrameMetrics.h"
+// [fg-health] names GPU stages by their index in diagnostics::GpuStage (PushFgHealth.h kPushHealthStages).
+static_assert(unsigned(veyra::diagnostics::GpuStage::Color)==0&&unsigned(veyra::diagnostics::GpuStage::Fg1)==5&&unsigned(veyra::diagnostics::GpuStage::Fg2)==6&&
+              unsigned(veyra::diagnostics::GpuStage::FgBatch)==12&&unsigned(veyra::diagnostics::GpuStage::Blit)==13,"PushFgHealth.h kPushHealthStages");
 namespace veyra::engine {
 bool VideoPresenter::beginSourceInput(uint64_t stallUs){
     if(!reflexInputFrame_&&reflex_.active())reflexInputFrame_=reflex_.begin(stallUs);
@@ -16,6 +22,35 @@ bool VideoPresenter::beginSourceInput(uint64_t stallUs){
     // until one accepted source has been submitted to the enhancement graph.
     if(!xessInputId_)xessInputId_=xess->beginInput();
     return xessInputId_!=0;
+}
+void VideoPresenter::sourceArrived(int64_t arrival100ns,bool physicalCapture,bool frameGeneration,uint64_t mailboxReplaced){
+    // Stream "present" R11. NVIDIA low latency calls NvAPI_D3D_Sleep once per source frame BEFORE the capture sample is
+    // read (beginSourceInput). The console and the card time the samples, not us; one pair is in flight (the pickup gate)
+    // and DXGI holds at most one present (maximum latency 1 with the waitable object), so there is no render queue for the
+    // Sleep to shorten (reasoning from the code, not a measurement). A Sleep that ends before the sample arrives overlaps
+    // the engine's idle wait; the part that ends AFTER the sample arrived delays our read of a sample that already exists,
+    // so up to that much is added to that real frame (slack before its deadline can absorb part of it).
+    // NVIDIA's documentation (nvapi.h, NvAPI_D3D_Sleep / NvAPI_D3D_SetSleepMode) says that with low latency mode on and the
+    // Sleep NOT called "after several frames, the driver would fallback to sleep at its less optimal spot", i.e. somewhere
+    // we do not control. So the Sleep is not skipped; it is BOUNDED: it keeps being called once per source frame, and only
+    // when it KEEPS running past the samples' arrival (PushReflexOverrunGuard: warm-up, then two consecutive blocks of 60
+    // measured sleeps with at least 4 over 0.5 ms each) does low latency end, for the rest of this source session (this
+    // presenter's life; a reconfiguration does not bring it back). Ending it is one SetSleepMode(off) call, as the existing
+    // stall guard does: the Sleep and the latency markers stop; the low queue, maximum latency 1, sync and VRR settings
+    // stay as they are (EngineController only changes the status line). Only a live capture card with frame generation;
+    // VEYRA_TEST_RP_LEGACY_REFLEX_SLEEP=1 (or PACKAGE14 / PACKAGE13) keeps Package 14's behaviour. The measurement is
+    // always on ([fg-health] reflex*). mailboxReplaced: the capture mailbox's replacement count (0 for other sources);
+    // when it moved since the last sample read, the sample that arrived during the Sleep may have been replaced by a later
+    // one, so the overrun is unknown (review N7), not 0.
+    const int64_t start=reflex_.lastSleepStart100ns(),end=reflex_.lastSleepEnd100ns();
+    const bool replaced=mailboxReplaced!=lastMailboxReplaced_;lastMailboxReplaced_=mailboxReplaced;
+    pushFgHealth().reflexState(reflex_.active()?1:(reflex_.stalled()||reflexGuard_.ended())?2:0);
+    if(!end||end==reflexSleepSeen100ns_)return;   // no Sleep since the last sample read
+    reflexSleepSeen100ns_=end;
+    const double overrun=replaced?-1.0:pushReflexOverrunMs(start,end,arrival100ns);
+    pushFgHealth().reflexSleep(double(end-start)/10000.0,overrun);
+    if(!reflex_.active()||!pushReflexGuardApplies(physicalCapture,frameGeneration,reflexGuardLegacy_))return;
+    if(reflexGuard_.observe(double(arrival100ns)/10000.0,overrun))reflex_.endForOverrun(PushReflexOverrunGuard::kBadBlocks*PushReflexOverrunGuard::kBlock,overrun);
 }
 bool VideoPresenter::beginSourceProcessing(){
     auto* xess=sink_.xess();return !xess||(beginSourceInput()&&xess->beginProcessing(xessInputId_));
@@ -87,6 +122,23 @@ bool VideoPresenter::open(gfx::D3D12DeviceContext& ctx,HWND window,pipeline::Enh
     }
     if(!reuse&&!sink_.initialize(ctx.device(),queue,d,st))return false;
     if(!reuse)openSlipstreamExperiments();
+    {
+        // Stream "present": the rollback switches of what is new since Package 14 (PushLegacy.h), named once per process.
+        overlayLegacy_=pushLegacyRestored(PushLegacyPart::VideoOverlay,pushEnvironment());
+        reflexGuardLegacy_=pushLegacyRestored(PushLegacyPart::ReflexSleep,pushEnvironment());
+        // Stream "present" R3: experiment, off unless "1" (read per chain creation).
+        {wchar_t v[4]{};blitAheadSwitch_=GetEnvironmentVariableW(L"VEYRA_EXP_RP_PRESENT_BLIT_AHEAD",v,4)==1&&v[0]==L'1';}
+        if(blitAheadSwitch_)veyra::log::info("present-path","experiment blitAhead=1 (VEYRA_EXP_RP_PRESENT_BLIT_AHEAD: a ready frame's blit is submitted before its deadline; Present at the deadline)");
+        if(overlayLegacy_)pushVideoOverlayBoard().stopped();
+        static bool named=false;
+        if(!named){
+            named=true;
+            veyra::log::info("present-path",std::format("defaults inPictureOverlay={} reflexOverrunGuard={} (the delay badge and statistics overlay are drawn in the swap chain so the video window keeps one rectangle; "
+                "NVIDIA low latency ends when its Sleep keeps running past the capture sample's arrival on a capture card with frame generation; "
+                "VEYRA_TEST_RP_LEGACY_VIDEO_OVERLAY=1 / VEYRA_TEST_RP_LEGACY_REFLEX_SLEEP=1, or VEYRA_TEST_RP_LEGACY_PACKAGE14=1 for both, restore Package 14)",
+                overlayLegacy_?"rollback":"on",reflexGuardLegacy_?"rollback":"on"));
+        }
+    }
     if(reuse)veyra::log::info("present-reuse",std::format("retained native swapchain generation={} format={} fg={} output={}x{}; rebinding drained graph descriptors",generation_,unsigned(graph.outputFormat()),graph.fgEnabled(),graph.workWidth(),graph.workHeight()));
     pass_={};rtvs_.Reset();compositeTarget_.Reset();exclusionUiTarget_.Reset();exclusionHudlessTarget_.Reset();
     exclusionUiEnabled_=graph.xessEnabled()&&graph.exclusionEnabled();
@@ -136,7 +188,7 @@ bool VideoPresenter::open(gfx::D3D12DeviceContext& ctx,HWND window,pipeline::Enh
 bool VideoPresenter::prepareGraphChange(){
     if(sink_.xess()){close();return true;}
     if(presentationRing_.initialized()&&!presentationRing_.drainQueue())return false;
-    hasPresented_=false;retainedFrame_.reset();gpuTimer_.close();
+    hasPresented_=false;retainedFrame_.reset();prepared_.reset();gpuTimer_.close();
     // Retain metadataSent_: a new graph disabling metadata must clear the
     // hint that is still attached to the retained DXGI chain.
     metadataDirty_=true;metadataAttempt_={};sourceMetadata_={};
@@ -192,9 +244,50 @@ bool VideoPresenter::refresh(ID3D12Device* device){
     }
     return true;
 }
-bool VideoPresenter::present(gfx::D3D12DeviceContext& ctx,gfx::CommandSlotRing& sharedRing,pipeline::EnhanceGraph& graph,unsigned slot,bool generated,bool referencesValid,int comparison,bool baseReference,float split,pipeline::FrameIdentity identity,PreviewView view,int64_t sourcePts100ns,bool retainUnchanged) {
+bool VideoPresenter::prepare(gfx::D3D12DeviceContext& ctx,gfx::CommandSlotRing& sharedRing,pipeline::EnhanceGraph& graph,unsigned slot,bool generated,bool referencesValid,int comparison,bool baseReference,float split,pipeline::FrameIdentity identity,PreviewView view,int64_t sourcePts100ns){
+    // Stream "present" R3 (VEYRA_EXP_RP_PRESENT_BLIT_AHEAD=1, off by default; engine/PushBlitAhead.h): record and submit this
+    // frame's blit now, while its deadline is still ahead, so that present() at the deadline only calls Present. Only the
+    // native chain with its own presentation queue; never with XeSS (it owns Present). Idempotent for the same frame.
+    if(!sink_.swapChain()||!pushBlitAheadAllowed(blitAheadSwitch_,presentationQueue_!=nullptr,sink_.xess()!=nullptr,capture_&&capture_->capturing())){
+        prepared_.reset();   // a consumer that started meanwhile: nothing prepared survives (the present path re-blits)
+        return false;
+    }
+    const PreparedKey key{slot,generated,referencesValid,baseReference,comparison,split,identity,view,sourcePts100ns};
+    if(prepared_&&prepared_->first==key)return true;
+    // The engine sets the Reflex frame just before present(); none is consumed here (the blit's markers go out with Present).
     const auto reflexFrame=reflexFrame_;reflexFrame_=0;
+    preparing_=true;
+    const bool ok=present(ctx,sharedRing,graph,slot,generated,referencesValid,comparison,baseReference,split,identity,view,sourcePts100ns,false);
+    preparing_=false;reflexFrame_=reflexFrame;
+    if(!ok||!prepared_||!(prepared_->first==key)){prepared_.reset();return false;}
+    ++blitAheadPrepared_;
+    return true;
+}
+bool VideoPresenter::present(gfx::D3D12DeviceContext& ctx,gfx::CommandSlotRing& sharedRing,pipeline::EnhanceGraph& graph,unsigned slot,bool generated,bool referencesValid,int comparison,bool baseReference,float split,pipeline::FrameIdentity identity,PreviewView view,int64_t sourcePts100ns,bool retainUnchanged) {
+    const PreparedKey key{slot,generated,referencesValid,baseReference,comparison,split,identity,view,sourcePts100ns};
     auto& ring=presentationQueue_?presentationRing_:sharedRing;
+    if(!preparing_&&prepared_){
+        // Stream "present" R3: the frame whose blit was submitted ahead. Present only the same frame, on the same chain, in a
+        // window of the same size; anything else re-blits normally into the same back buffer (the prepared blit, never
+        // presented, is simply overwritten on the same queue: the back buffer index changes only at Present).
+        auto taken=std::move(*prepared_);prepared_.reset();
+        RECT client{};GetClientRect(window_,&client);
+        const bool changing=GetPropW(window_,L"Veyra.InteractiveMove")||GetPropW(window_,L"Veyra.DpiTransition");
+        // A capture consumer that became active after the prepare re-blits too, so it records this frame as it would without
+        // the experiment (review S9).
+        if(taken.first==key&&!retainUnchanged&&!changing&&!(capture_&&capture_->capturing())&&unsigned(client.right)==taken.second.windowW&&unsigned(client.bottom)==taken.second.windowH&&
+           sink_.width()==taken.second.windowW&&sink_.height()==taken.second.windowH&&SUCCEEDED(ctx.device()->GetDeviceRemovedReason())){
+            auto& p=taken.second;
+            p.reflexFrame=reflexFrame_;reflexFrame_=0;
+            // The blit's Reflex markers go out with the Present they belong to (their protocol order: blit, then present).
+            reflex_.blitStart(p.reflexFrame);reflex_.blitEnd(p.reflexFrame);
+            p.presentStart=p.resizeEnd=p.beginEnd=std::chrono::steady_clock::now();p.slotWaitStart=ring.cpuWaitMilliseconds();p.resized=false;p.ahead=true;
+            ++blitAheadUsed_;
+            return dxgiPresent(p,ring);
+        }
+        ++blitAheadDiscarded_;
+    }
+    const auto reflexFrame=reflexFrame_;reflexFrame_=0;
     auto* fence=presentationFence_?presentationFence_.Get():ctx.fence();
     const auto presentStart=std::chrono::steady_clock::now();
     const auto slotWaitStart=ring.cpuWaitMilliseconds();
@@ -247,7 +340,9 @@ bool VideoPresenter::present(gfx::D3D12DeviceContext& ctx,gfx::CommandSlotRing& 
     applyHdrMetadata(graph,hdrMetadata,hdrCurve,identity);
     const RetainedFrame retained{graph.presentationReadyFenceObject(slot,generated),graph.presentationReadyFence(slot,generated),
         slot,unsigned(rc.right),unsigned(rc.bottom),generated,referencesValid,baseReference,IsWindowVisible(window_)!=FALSE,
-        comparison,split,view,identity,MonitorFromWindow(window_,MONITOR_DEFAULTTONEAREST),graph.hdrOutput()?hdrCurve:HdrCurveSettings{}};
+        comparison,split,view,identity,MonitorFromWindow(window_,MONITOR_DEFAULTTONEAREST),graph.hdrOutput()?hdrCurve:HdrCurveSettings{},
+        // Review S2: a paused picture is presented again when the in-picture readouts change (or go away).
+        sink_.xess()||overlayLegacy_?0:pushVideoOverlayBoard().version()};
     // Pausing keeps the last flip-model buffer visible. Re-submit only when
     // its producer fence, view, comparison, visibility, monitor or size changes.
     // Deferred resize must keep polling until the actual buffers match.
@@ -331,7 +426,7 @@ bool VideoPresenter::present(gfx::D3D12DeviceContext& ctx,gfx::CommandSlotRing& 
     if(probePending_&&pipeline::fenceComplete(fence,probeFenceValue_))publishLiveCoverage(hdrCurve,identity);
     if(!observe)liveCoverage_={};
     const auto probeNow=std::chrono::steady_clock::now();
-    if(observe&&!probePending_&&probeNow>=probeNext_&&!probeFailed_&&ensureCoverageProbe(ctx.device())){
+    if(observe&&!preparing_&&!probePending_&&probeNow>=probeNext_&&!probeFailed_&&ensureCoverageProbe(ctx.device())){
         probeNext_=probeNow+std::chrono::milliseconds(250);
         // One descriptor per outstanding probe; never rewrite it while in flight.
         pipeline::makeSrv(ctx.device(),source,graph.outputFormat(),probePass_.heap->GetCPUDescriptorHandleForHeapStart());
@@ -503,8 +598,15 @@ bool VideoPresenter::present(gfx::D3D12DeviceContext& ctx,gfx::CommandSlotRing& 
         previousXessView_=view;previousXessWidth_=rc.right;previousXessHeight_=rc.bottom;
     }
 
+    // Stream "present" R1: the interface items drawn in the picture (delay badge, statistics overlay), blended last: after
+    // the picture, after the comparison half and after the capture hook above, so recordings, comparison clips, streams and
+    // the clarity probe (captured.screen) never contain them. XeSS owns its Present and gets none (the QML items stay cut out).
+    bool overlayUploaded=false,overlayDrew=false;
+    if(!sink_.xess()&&!overlayLegacy_)recordOverlay(ctx.device(),list,graph,bb,backBufferIndex,unsigned(rc.right),unsigned(rc.bottom),overlayUploaded,overlayDrew);
+    overlayDrawing_=overlayDrew;   // what this frame carries; acknowledged to the UI only once it is presented (dxgiPresent)
     gpuTimer_.mark(list,diagnostics::GpuStage::Blit,true);gpuTimer_.resolve(list);
     if(!ring.submitAndSignal(commandSlot))return false;gpuTimer_.submitted(ring.lastSignaledValue());
+    overlay_.submitted(fence,ring.lastSignaledValue(),overlayUploaded,overlayDrew);
     reflex_.blitEnd(reflexFrame);
     if(captureRecorded){captureRecorded=false;capture_->submitted(fence,ring.lastSignaledValue());}
     if(probeIssued){probePending_=true;probeFenceValue_=ring.lastSignaledValue();}
@@ -516,16 +618,28 @@ bool VideoPresenter::present(gfx::D3D12DeviceContext& ctx,gfx::CommandSlotRing& 
     // one more at about 15 s while VRR reads not enabled; display worker, off this path. Once per chain.
     cadenceConfirm_.firstPresent(double(std::chrono::duration_cast<std::chrono::nanoseconds>(presentStart.time_since_epoch()).count())/1e6);
     if(presentationQueue_)graph.presentationSubmitted(slot,fence,ring.lastSignaledValue());
+    // Stream "present" R3 (VEYRA_EXP_RP_PRESENT_BLIT_AHEAD): prepare() stops here; the frame's blit is submitted and its
+    // back buffer holds it until present() is called for the same frame at its deadline (or another frame replaces it).
+    PendingPresent pending{reflexFrame,generated,presentStart,resizeEnd,beginEnd,slotWaitStart,identity,resized,unsigned(rc.right),unsigned(rc.bottom),retained,false,
+        overlayDrew?overlay_.pictureVersion():0};
+    if(preparing_){prepared_.emplace(key,pending);return true;}
+    return dxgiPresent(pending,ring);
+}
+bool VideoPresenter::dxgiPresent(PendingPresent& p,gfx::CommandSlotRing& ring){
+    Status st=Status::Ok;
     const auto dxgiStart=std::chrono::steady_clock::now();
     lastPresentCallHost100ns_=std::chrono::duration_cast<std::chrono::nanoseconds>(dxgiStart.time_since_epoch()).count()/100;
-    reflex_.presentStart(reflexFrame,generated);
+    reflex_.presentStart(p.reflexFrame,p.generated);
     const bool presented=sink_.present(st);
-    reflex_.presentEnd(reflexFrame,generated);
-    if(cadence_&&presented)cadence_->presented(double(lastPresentCallHost100ns_)/10000,generated); // STATS only
+    reflex_.presentEnd(p.reflexFrame,p.generated);
+    // Stream "present" R1: the UI learns that an item's picture is on screen only from a frame that was really presented
+    // (review: a prepared frame that is thrown away must not count; N2: after Present, not at the blit's submission).
+    if(presented&&p.overlayVersion)pushVideoOverlayBoard().drawn(p.overlayVersion,std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+    if(cadence_&&presented)cadence_->presented(double(lastPresentCallHost100ns_)/10000,p.generated); // STATS only
     if(liveCadence_&&presented){
         // The interface's FPS readout (PushCadence.h PushLiveCadence): once a second, what reaches the screen (INFERRED from our Present calls and the sync rule) and
         // how evenly. One store per present; the once-a-second summary sorts at most a second of intervals.
-        liveCadence_->presented(double(lastPresentCallHost100ns_)/10000,generated);
+        liveCadence_->presented(double(lastPresentCallHost100ns_)/10000,p.generated);
         if(lastPresentReturnHost100ns_>=nextLiveCadence100ns_){
             nextLiveCadence100ns_=lastPresentReturnHost100ns_+10000000;
             const auto grid=sink_.refreshGrid();
@@ -538,8 +652,11 @@ bool VideoPresenter::present(gfx::D3D12DeviceContext& ctx,gfx::CommandSlotRing& 
     }
     const auto presentEnd=std::chrono::steady_clock::now();
     lastPresentReturnHost100ns_=std::chrono::duration_cast<std::chrono::nanoseconds>(presentEnd.time_since_epoch()).count()/100;
+    // Stream "present" R2: every Present call for [fg-health]; the display path's facts for [present-path] (on change).
+    if(presented)pushFgHealth().presented(lastPresentCallHost100ns_,p.generated);
+    watchPresentPath(lastPresentReturnHost100ns_,p.windowW,p.windowH);
     const auto ms=[](auto d){return std::chrono::duration<double,std::milli>(d).count();};
-    const bool slow=ms(presentEnd-presentStart)>=80.0;
+    const bool slow=ms(presentEnd-p.presentStart)>=80.0;
     if(slow||presentEnd>=nextCostLog_){
         nextCostLog_=presentEnd+std::chrono::seconds(1);
         // Display-side sample (F4, review 2026-09-22): which submissions the
@@ -551,13 +668,83 @@ bool VideoPresenter::present(gfx::D3D12DeviceContext& ctx,gfx::CommandSlotRing& 
         const auto scanout=displayStats?sink_.takeDisplayLatency():gfx::PresentSink::DisplayLatencySummary{};
         if(scanout.samples||scanout.compositionMode>=0)veyra::log::info("display-latency",std::format("presentToScanoutP50Ms={:.3f} presentToScanoutP95Ms={:.3f} presentToScanoutMaxMs={:.3f} samples={} replacedAtLeast={} compositionMode={} refreshHz={:.3f} (DXGI frame statistics: Present call to the vblank that showed it, VSync and Automatic DXGI presents; Automatic dates only frames named as shown; compositionMode 0 composed 1 overlay 2 none 3 failure -1 unknown; not a photon measurement)",scanout.p50Ms,scanout.p95Ms,scanout.maxMs,scanout.samples,scanout.replacedAtLeast,scanout.compositionMode,sink_.displayRefreshHz()));
         const auto& timing=sink_.lastPresentTiming();
-        veyra::log::info("present-cost",std::format("generated={} totalMs={:.3f} recordSubmitMs={:.3f} slotWaitMs={:.3f} dxgiMs={:.3f} slow={} source={} epoch={} backend={} resized={} resizeMs={:.3f} beginMs={:.3f} commandsMs={:.3f} beforeMs={:.3f} presentCallMs={:.3f} bufferMs={:.3f} afterMs={:.3f} hr=0x{:X}",generated,
-            std::chrono::duration<double,std::milli>(presentEnd-presentStart).count(),
-            std::chrono::duration<double,std::milli>(dxgiStart-presentStart).count(),ring.cpuWaitMilliseconds()-slotWaitStart,
-            ms(presentEnd-dxgiStart),slow,identity.sourceFrameId,identity.epoch,sink_.xess()?"XeSS":"DXGI",resized,
-            ms(resizeEnd-presentStart),ms(beginEnd-resizeEnd),ms(dxgiStart-beginEnd),timing.beforeMs,timing.callMs,timing.bufferMs,timing.afterMs,unsigned(timing.result)));
+        veyra::log::info("present-cost",std::format("blitAhead={} generated={} totalMs={:.3f} recordSubmitMs={:.3f} slotWaitMs={:.3f} dxgiMs={:.3f} slow={} source={} epoch={} backend={} resized={} resizeMs={:.3f} beginMs={:.3f} commandsMs={:.3f} beforeMs={:.3f} presentCallMs={:.3f} bufferMs={:.3f} afterMs={:.3f} hr=0x{:X}",p.ahead?1:0,p.generated,
+            std::chrono::duration<double,std::milli>(presentEnd-p.presentStart).count(),
+            std::chrono::duration<double,std::milli>(dxgiStart-p.presentStart).count(),ring.cpuWaitMilliseconds()-p.slotWaitStart,
+            ms(presentEnd-dxgiStart),slow,p.identity.sourceFrameId,p.identity.epoch,sink_.xess()?"XeSS":"DXGI",p.resized,
+            ms(p.resizeEnd-p.presentStart),ms(p.beginEnd-p.resizeEnd),ms(dxgiStart-p.beginEnd),timing.beforeMs,timing.callMs,timing.bufferMs,timing.afterMs,unsigned(timing.result)));
     }
-    xessFailed_=sink_.xessFailed();if(presented)retainedFrame_=retained;return presented;
+    xessFailed_=sink_.xessFailed();if(presented)retainedFrame_=p.retained;return presented;
+}
+void VideoPresenter::recordOverlay(ID3D12Device* device,ID3D12GraphicsCommandList* list,pipeline::EnhanceGraph& graph,ID3D12Resource* backBuffer,unsigned backBufferIndex,unsigned windowW,unsigned windowH,bool& uploaded,bool& drew){
+    uploaded=drew=false;
+    auto& board=pushVideoOverlayBoard();
+    const auto version=board.version();
+    if(!version)return;   // nothing was ever published: one atomic load per present, nothing recorded
+    if(!overlay_.create(device,graph.outputFormat(),PushPresentOverlay::modeFor(graph.hdrOutput(),graph.hdr10Output())))return;
+    if(version!=overlay_.pictureVersion()){
+        uint64_t taken=0;
+        const auto image=board.take(taken);
+        if(!image){overlay_.clearPicture();overlay_.setPictureVersion(taken);}
+        else if(overlay_.upload(list,*image)){overlay_.setPictureVersion(taken);uploaded=true;}
+        // Otherwise the new picture waits for a later present (the previous upload or a reader is still in flight) and
+        // the picture already uploaded keeps being drawn.
+    }
+    if(!overlay_.hasPicture())return;
+    D3D12_RESOURCE_BARRIER b{};b.Type=D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;b.Transition.pResource=backBuffer;b.Transition.Subresource=D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    b.Transition.StateBefore=D3D12_RESOURCE_STATE_PRESENT;b.Transition.StateAfter=D3D12_RESOURCE_STATE_RENDER_TARGET;list->ResourceBarrier(1,&b);
+    const D3D12_CPU_DESCRIPTOR_HANDLE rtv{rtvs_->GetCPUDescriptorHandleForHeapStart().ptr+size_t(backBufferIndex)*inc_};
+    drew=overlay_.draw(list,rtv,windowW,windowH,sink_.bufferWidth(),sink_.bufferHeight());
+    std::swap(b.Transition.StateBefore,b.Transition.StateAfter);list->ResourceBarrier(1,&b);
+}
+void VideoPresenter::watchPresentPath(int64_t now100ns,unsigned windowW,unsigned windowH){
+    // Stream "present" R2: one [present-path] line whenever what decides the display path changes (checked at most four
+    // times a second; the driver's sleep status every 2 s; the hardware composition support once per monitor and chain).
+    // Values only: no window titles, no names of other programs, no device names.
+    if(!window_||now100ns<presentPathCheck100ns_)return;
+    presentPathCheck100ns_=now100ns+2500000;
+    // Stream "present" R3: the experiment's counters every 10 s while it is on (prepared, presented as prepared, re-blitted).
+    if(blitAheadSwitch_&&now100ns>=blitAheadLog100ns_){
+        blitAheadLog100ns_=now100ns+100000000;
+        veyra::log::info("present-path",std::format("blitAhead prepared={} presentedAsPrepared={} discarded={} (session totals; VEYRA_EXP_RP_PRESENT_BLIT_AHEAD)",blitAheadPrepared_,blitAheadUsed_,blitAheadDiscarded_));
+    }
+    if(now100ns>=sleepStatusCheck100ns_){sleepStatusCheck100ns_=now100ns+20000000;sleepStatus_=reflex_.driverStatus();}
+    const auto monitor=MonitorFromWindow(window_,MONITOR_DEFAULTTONEAREST);
+    if(monitor!=compositionMonitor_){
+        compositionMonitor_=monitor;compositionFlags_=-1;
+        Microsoft::WRL::ComPtr<IDXGIOutput> output;Microsoft::WRL::ComPtr<IDXGIOutput6> output6;
+        UINT flags=0;
+        if(sink_.swapChain()&&SUCCEEDED(sink_.swapChain()->GetContainingOutput(&output))&&SUCCEEDED(output.As(&output6))&&SUCCEEDED(output6->CheckHardwareCompositionSupport(&flags)))
+            compositionFlags_=int(flags);
+    }
+    DXGI_SWAP_CHAIN_DESC1 desc{};
+    if(sink_.swapChain())sink_.swapChain()->GetDesc1(&desc);
+    MONITORINFO mi{};mi.cbSize=sizeof(mi);
+    RECT wr{};
+    const bool coversMonitor=GetMonitorInfoW(monitor,&mi)&&GetWindowRect(window_,&wr)&&wr.left<=mi.rcMonitor.left&&wr.top<=mi.rcMonitor.top&&wr.right>=mi.rcMonitor.right&&wr.bottom>=mi.rcMonitor.bottom;
+    const HWND root=GetAncestor(window_,GA_ROOT);
+    const auto region=pushRegionBoard().get();
+    // Review S5: Windows' own answer beside the interface's decision (0 none/error, 1 empty, 2 one rectangle, 3 complex).
+    int windowRgn=0;
+    if(HRGN probe=CreateRectRgn(0,0,0,0)){windowRgn=GetWindowRgn(window_,probe);DeleteObject(probe);}
+    const auto& d=sleepStatus_;
+    std::string line=std::format("region={} windowRgn={} coversInPicture={} cineBand={} items={} inPictureOverlay={} overlayRollback={} swapEffect={} buffers={} format={} chainFlags=0x{:X} waitable={} maxLatency={} syncInterval={} tearingFlag={} tearingSupported={} "
+        "vrrSync={} vrrLevel={} vrrRequested={} vrrActive={} displayInVrrMode={} cadenceVrr={} hwCompositionFlags={} window={}x{} buffer={}x{} coversMonitor={} foreground={} xess={} hdrCopy={} "
+        "reflexActive={} reflexEnded={} reflexGuard={} driverStatus={} driverLowLatency={} driverFsVrr={} driverFullscreenIFlip={} driverGameSleep={} driverCplVsync={}",
+        pushRegionKindName(region.kind),windowRgn,region.coversInPicture,region.insetBand?1:0,region.items.empty()?std::string("none"):region.items,overlayDrawing_?1:0,overlayLegacy_?1:0,
+        unsigned(desc.SwapEffect),desc.BufferCount,unsigned(desc.Format),unsigned(desc.Flags),sink_.waitable()?1:0,sink_.queueLatency(),sink_.presentSyncInterval(),sink_.presentTearing()?1:0,sink_.tearingSupported()?1:0,
+        vrrSync_?1:0,gfx::vrrLevel(vrr_),vrr_.requested?1:0,vrr_.enabled?1:0,vrr_.inVrrMode?1:0,cadenceVrr(),compositionFlags_,windowW,windowH,sink_.bufferWidth(),sink_.bufferHeight(),coversMonitor?1:0,
+        root&&GetForegroundWindow()==root?1:0,sink_.xess()?1:0,copyBeforePresent_?1:0,
+        reflex_.active()?1:0,reflex_.stalled()?1:0,reflexGuardLegacy_?"rollback":"on",d.result,d.known?(d.lowLatency?1:0):-1,d.known?(d.fsVrr?1:0):-1,d.known?(d.fullscreenIFlip?1:0):-1,d.known?(d.useGameSleep?1:0):-1,d.known?(d.cplVsyncOn?1:0):-1);
+    // Review S6: at most one line per 5 s. A change is logged at once when the last line is 5 s old, otherwise with the
+    // latest state when 5 s have passed (changes= counts the states seen meanwhile); an unchanged state is repeated every 10 s.
+    if(line!=presentPathLine_){presentPathLine_=line;++presentPathChanges_;}
+    const bool changed=presentPathChanges_>0;
+    if(!(changed&&now100ns-presentPathLogged100ns_>=50000000)&&now100ns-presentPathLogged100ns_<100000000)return;
+    const unsigned changes=presentPathChanges_;presentPathChanges_=0;presentPathLogged100ns_=now100ns;
+    veyra::log::info("present-path",line+std::format(" changes={}",changes)+" (at most one line per 5 s, the latest state; changes = states seen since the last line; the video window's clipping region as the interface set it (full = none, rect = one rectangle), windowRgn = GetWindowRgn (0 none, 2 rectangle, 3 complex), items = the interface items cut out of it; "
+        "hwCompositionFlags = IDXGIOutput6::CheckHardwareCompositionSupport, -1 unknown; driver* = NvAPI_D3D_GetSleepStatus, -1 not read (low latency never enabled on this chain); "
+        "facts the program can see, not PresentMon's present mode)");
 }
 bool VideoPresenter::readPresentedFrameForTest(gfx::D3D12DeviceContext& ctx,gfx::CommandSlotRing& ring,sink::RgbaImage& image){
     if(presentationQueue_&&!presentationRing_.drainQueue())return false;
@@ -610,6 +797,11 @@ void VideoPresenter::close(){
     presentationRing_.shutdown();presentationFence_.Reset();presentationQueue_.Reset();
     if(presentationEvent_){CloseHandle(presentationEvent_);presentationEvent_=nullptr;}
     presentationDevice_=nullptr;presentationFormat_=DXGI_FORMAT_UNKNOWN;window_=nullptr;
+    // Stream "present": the in-picture items become cut-outs again at once; the display path is logged anew for the next chain.
+    overlay_.reset();overlayDrawing_=false;pushVideoOverlayBoard().stopped();
+    presentPathLine_.clear();presentPathCheck100ns_=sleepStatusCheck100ns_=presentPathLogged100ns_=0;presentPathChanges_=0;sleepStatus_={};compositionMonitor_=nullptr;compositionFlags_=-1;
+    reflexSleepSeen100ns_=0;   // the overrun guard keeps its state for this presenter's life (one source session)
+    prepared_.reset();preparing_=false;
 }
 void VideoPresenter::startDisplayState(){
     // A new presentation chain (session start): the monitor's stored state
@@ -790,7 +982,11 @@ PresentationSettings VideoPresenter::configurePresentation(gfx::D3D12DeviceConte
     // carries out-of-band markers, never another source-frame Sleep.
     std::wstring latency=L"低延迟队列：已开启";
     if(requested.nvidiaLowLatency!=NvidiaLowLatency::Off){
-        if(reflex_.enable(ctx.device(),fg,presentationQueue_.Get()))
+        // Stream "present" R11: a reconfiguration starts the guard's warm-up again; once the guard ended low latency it stays
+        // off for this source session (review S7), with its own status text.
+        reflexGuard_.restartWarmup(double(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count())/1e6);
+        if(reflexGuard_.ended()){effective.nvidiaLowLatency=NvidiaLowLatency::Off;latency=L"英伟达低延迟：等待多次晚于采集画面到达，本次播放已关闭";}
+        else if(reflex_.enable(ctx.device(),fg,presentationQueue_.Get()))
             latency=L"英伟达低延迟：开（已启用）";
         else{effective.nvidiaLowLatency=NvidiaLowLatency::Off;latency=L"英伟达低延迟不可用，当前使用低排队（详见日志）";}
     }

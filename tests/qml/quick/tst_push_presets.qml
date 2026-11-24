@@ -214,6 +214,32 @@ Item {
             compare(findChild(badge, "pushfps-latency-ms").text, qsTr("延迟 测量中"))
         }
 
+        // Package 15: where the delay goes (tooltip text model; engine/PushDelaySplit.h).
+        function test_latency_badge_split() {
+            veyra.preferences = ({ pushLatencyOverlay: true })
+            veyra.liveStats = ({ running: true, latencyMs: 31.4, latencyPictureMs: 2.4, latencyFirstGeneratedMs: 6.6,
+                                 latencyWaitMs: 22.2, latencyMarginMs: 0.2, latencySplitShare: 0.97 })
+            badge.refresh()
+            verify(badge.splitKnown, "split shown when most frames were split")
+            compare(badge.splitText, qsTr("%1 ms = %2 画面处理 + %3 第一个生成帧 + %4 等待前面要显示的帧（按排程计算，不是测量） + %5 余量").arg(31).arg(2).arg(7).arg(22).arg(0))
+            // The shown parts always add up to the shown total, rounding included.
+            const n = badge.splitText.match(/-?\d+/g).map(Number)
+            compare(n[1] + n[2] + n[3] + n[4], n[0])
+            verify(badge.tipText.indexOf(badge.splitText) === 0, "the tooltip starts with the split")
+            verify(badge.tipText.indexOf(qsTr("不包括游戏本身、主机的视频输出、采集卡和显示器的延迟。")) > 0, "and says what the number is not")
+            veyra.liveStats = ({ running: true, latencyMs: 31.4, latencyPictureMs: 2.4, latencyFirstGeneratedMs: 6.6,
+                                 latencyWaitMs: 22.2, latencyMarginMs: 0.2, latencySplitShare: 0.2 })
+            badge.refresh()
+            verify(!badge.splitKnown && badge.splitText === "", "too few frames split: no split")
+            verify(badge.tipText.length > 0, "the explanation stays")
+            veyra.liveStats = ({ running: true, latencyMs: 31.4 })
+            badge.refresh()
+            verify(badge.splitText === "", "an older engine without the split: nothing invented")
+            veyra.preferences = ({})
+            veyra.liveStats = ({ running: false })
+            badge.refresh()
+        }
+
         // --- capture card list -------------------------------------------------
         function test_capture_card_status() {
             const row = findChild(quick, "pushfps-card-row")

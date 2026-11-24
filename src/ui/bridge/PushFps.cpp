@@ -8,6 +8,12 @@
 #include "veyra/engine/PushArchivePaths.h"
 #include "veyra/engine/PushBenchmarkProbe.h"
 #include "veyra/engine/PushCadence.h"
+#include "veyra/engine/PushVideoOverlay.h"
+#include "veyra/ui/PushInPictureCompose.h"
+#include "veyra/engine/PushLegacyEnv.h"
+#include <map>
+#include <climits>
+#include <algorithm>
 #include "veyra/Brand.h"
 #include "veyra/RuntimePaths.h"
 #include "veyra/ngx/AnrProvider.h"
@@ -55,6 +61,44 @@ QVariant optionalNumber(const std::optional<double>& v) { return v && std::isfin
 constexpr qint64 kDiscordUploadLimit = 10ll * 1024 * 1024;
 }
 
+namespace {
+// Stream "present" R1: the items' pictures (UI thread only), composed into one for the presenter (ui/PushInPictureCompose.h).
+std::map<QString, InPictureLayer>& inPictureLayers() { static std::map<QString, InPictureLayer> layers; return layers; }
+bool inPictureEnabled() { return !engine::pushLegacyRestored(engine::PushLegacyPart::VideoOverlay, engine::pushEnvironment()); }
+int64_t steadyMs() { return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+}  // namespace
+
+bool QmlPlayerBridge::pushSetVideoOverlay(const QString& key, const QVariant& image, double x, double y, double dpr) {
+    if (!inPictureEnabled() || key.isEmpty() || key.size() > 32) return false;
+    auto& layers = inPictureLayers();
+    const QImage picture = image.canConvert<QImage>() ? image.value<QImage>() : QImage();
+    // Bounded: a picture larger than 2048 x 2048 or placed far outside any window is no overlay item; it is refused.
+    const bool usable = !picture.isNull() && picture.width() <= 2048 && picture.height() <= 2048 && std::isfinite(x) && std::isfinite(y) &&
+                        std::abs(x) < 16384 && std::abs(y) < 16384;
+    if (!usable) {
+        if (layers.erase(key) == 0) return picture.isNull();   // nothing to take away: no new version
+    } else {
+        const double ratio = std::isfinite(dpr) && dpr > 0 && dpr < 8 ? dpr : 1.0;
+        auto& layer = layers[key];
+        layer.image = inPictureNormalized(picture);   // review S1: ratio 1, drawn pixel for pixel
+        layer.x = int(std::lround(x * ratio));
+        layer.y = int(std::lround(y * ratio));
+    }
+    const auto composed = inPictureCompose(layers);
+    if (!layers.empty() && !composed) return false;
+    const uint64_t version = engine::pushVideoOverlayBoard().publish(composed);
+    if (usable) layers[key].version = version;
+    return true;
+}
+
+QVariantMap QmlPlayerBridge::pushVideoOverlayState() const {
+    QVariantMap drawn;
+    const bool enabled = inPictureEnabled();
+    const auto now = steadyMs();
+    for (const auto& [name, layer] : inPictureLayers()) drawn.insert(name, enabled && engine::pushVideoOverlayBoard().drawnSince(layer.version, now));
+    return {{"enabled", enabled}, {"drawn", drawn}};
+}
+
 QVariantMap QmlPlayerBridge::pushLiveStats() const {
     const auto& s = impl_->snapshot;
     const auto& flow = s.metrics.flow;
@@ -96,6 +140,12 @@ QVariantMap QmlPlayerBridge::pushLiveStats() const {
     m["latencyMs"] = optionalNumber(flow.softwareLatencyMs);
     m["latencyP95Ms"] = optionalNumber(flow.softwareLatencyP95Ms);
     m["latencySamples"] = QVariant::fromValue(qulonglong(flow.latencySamples));
+    // Package 15 (engine/PushDelaySplit.h): latencyMs = picture + first generated frame + wait + margin, same frames.
+    m["latencyPictureMs"] = optionalNumber(flow.latencyPictureMs);
+    m["latencyFirstGeneratedMs"] = optionalNumber(flow.latencyFirstGeneratedMs);
+    m["latencyWaitMs"] = optionalNumber(flow.latencyWaitMs);
+    m["latencyMarginMs"] = optionalNumber(flow.latencyMarginMs);
+    m["latencySplitShare"] = flow.latencySplitShare;
     m["fgActive"] = s.fgActive;
     // The multiplier the last pair used (adaptive mode, output cap or a reduced group).
     m["fgMultiplierNow"] = s.previewFgMultiplier;

@@ -12,6 +12,7 @@
 // shown as "not measured", never as 0 and never estimated. Unverified on Windows.
 import QtQuick
 import QtQuick.Layouts
+import "PushInPicture.js" as InPicture
 
 Rectangle {
     id: overlay
@@ -19,12 +20,29 @@ Rectangle {
     property var stats: ({})
     readonly property bool wanted: veyra.preferences.pushStatsOverlay === true
     visible: wanted && stats.running === true
-    readonly property bool videoCover: visible
+    // Stream "present" R1 (PushInPicture.js): while it plays this is drawn inside the swap chain, so the video window keeps
+    // one rectangle; it is cut out of the video window (a cover) only until the presenter has drawn it, and whenever it
+    // has not for up to about 2 s. videoOrigin: the picture's top left in the window (Main.qml).
+    property point videoOrigin: Qt.point(0, 0)
+    property bool inPicture: false
+    readonly property bool videoCover: visible && !inPicture
+    function publishPicture() { InPicture.publish(veyra, overlay, "stats", overlay.videoOrigin, Screen.devicePixelRatio) }
+    // At most 4 grabs a second, coalesced (review S4: never one per Qt frame while the item moves); hiding is immediate.
+    function schedulePicture() { if (!overlayGrabTimer.running) overlayGrabTimer.start() }
+    Timer { id: overlayGrabTimer; objectName: "pushfps-stats-grab-timer"; interval: 250; onTriggered: overlay.publishPicture() }
+    onVisibleChanged: { if (!visible) { overlay.inPicture = false; overlayGrabTimer.stop(); overlay.publishPicture() } else overlay.schedulePicture() }
+    onXChanged: overlay.schedulePicture()
+    onYChanged: overlay.schedulePicture()
+    onWidthChanged: overlay.schedulePicture()
+    onHeightChanged: overlay.schedulePicture()
+    onStatsChanged: overlay.schedulePicture()
     readonly property real coverRadius: 9
     implicitWidth: grid.implicitWidth + 24
     implicitHeight: grid.implicitHeight + 16
     radius: 9
-    color: Qt.rgba(0.04, 0.05, 0.04, 0.82)
+    // Drawn in the picture the backing covers the game, not the dark interface: 0.94 there (6 % of the game shows through),
+    // 0.82 as before where the items stay cut-outs (review S4).
+    color: Qt.rgba(0.04, 0.05, 0.04, InPicture.enabled(veyra) ? 0.94 : 0.82)
     border.width: 1
     border.color: Qt.rgba(1, 1, 1, 0.10)
 
@@ -40,7 +58,7 @@ Rectangle {
         interval: 1000; repeat: true
         running: overlay.wanted
         triggeredOnStart: true
-        onTriggered: overlay.refresh()
+        onTriggered: { overlay.refresh(); overlay.inPicture = InPicture.drawn(veyra, "stats") }
         onRunningChanged: if (!running) overlay.stats = ({})
     }
 

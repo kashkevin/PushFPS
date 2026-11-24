@@ -13,10 +13,14 @@
 #include "veyra/engine/DisplayStateService.h"
 #include "veyra/engine/PushPresentTiming.h"
 #include "veyra/engine/PushCadence.h"
+#include "veyra/engine/PushPresentOverlay.h"
+#include "veyra/engine/PushFgHealth.h"
+#include <string>
 #include <memory>
 #include <chrono>
 #include <array>
 #include <optional>
+#include <utility>
 namespace veyra::gfx { class D3D12DeviceContext; class CommandSlotRing; }
 namespace veyra::pipeline { class EnhanceGraph; }
 namespace veyra::sink { struct RgbaImage; }
@@ -33,6 +37,15 @@ public:
     // stay enabled or the provider refuses generation (result -15).
     bool open(gfx::D3D12DeviceContext&, HWND, pipeline::EnhanceGraph&, bool captureCompatible=false, bool mediaClockPaced=false);
     bool present(gfx::D3D12DeviceContext&,gfx::CommandSlotRing&,pipeline::EnhanceGraph&,unsigned slot,bool generated,bool referencesValid=true,int comparison=0,bool baseReference=false,float split=.5f,pipeline::FrameIdentity identity={},PreviewView view={},int64_t sourcePts100ns=-1,bool retainUnchanged=false);
+    // Stream "present" R3 (VEYRA_EXP_RP_PRESENT_BLIT_AHEAD=1, off by default): a frame that is GPU-ready before its deadline
+    // has its blit recorded and submitted now; present() with the same arguments at the deadline then only calls Present.
+    // False when it does not apply (switch off, XeSS, shared queue) or failed: present() then works as always.
+    bool prepare(gfx::D3D12DeviceContext&,gfx::CommandSlotRing&,pipeline::EnhanceGraph&,unsigned slot,bool generated,bool referencesValid=true,int comparison=0,bool baseReference=false,float split=.5f,pipeline::FrameIdentity identity={},PreviewView view={},int64_t sourcePts100ns=-1);
+    bool blitAheadEnabled()const{return blitAheadSwitch_&&presentationQueue_!=nullptr&&!sink_.xess();}
+    // Counters for the experiment's log: prepared, presented as prepared, discarded (another frame or a changed window).
+    uint64_t blitAheadPrepared()const{return blitAheadPrepared_;}
+    uint64_t blitAheadUsed()const{return blitAheadUsed_;}
+    uint64_t blitAheadDiscarded()const{return blitAheadDiscarded_;}
     void close();
     // Owner-thread graph replacement boundary. Native DXGI remains attached to
     // its HWND; provider-owned presentation must be shut down before its graph.
@@ -47,6 +60,12 @@ public:
     // stallUs > 0: a live source; a driver low-latency Sleep longer than this,
     // repeatedly, ends NVIDIA Low Latency for the session (ReflexSession).
     bool beginSourceInput(uint64_t stallUs=0);
+    // Stream "present" R11: the capture sample read after this source's low-latency Sleep arrived at arrival100ns (host
+    // steady clock, 100 ns). Measures how far the Sleep ran past it ([fg-health]) and, on a capture card with frame
+    // generation, ends low latency once it keeps doing so (PushReflexOverrunGuard). Owner thread; O(1).
+    void sourceArrived(int64_t arrival100ns,bool physicalCapture,bool frameGeneration,uint64_t mailboxReplaced=0);
+    // R11: the overrun guard ended NVIDIA low latency for this source session (EngineController's status line).
+    bool reflexOverrunEnded()const{return reflexGuard_.ended();}
     bool beginSourceProcessing();
     void sourceProcessed(pipeline::FrameIdentity);
     PresentationSettings configurePresentation(gfx::D3D12DeviceContext&,PresentationSettings,bool fg,std::wstring& status);
@@ -169,6 +188,22 @@ private:
     void watchWindow(int64_t now100ns);
     const char* tearingReason_=nullptr;
     void openSlipstreamExperiments();
+    // Stream "present" R1: the in-picture interface items (PushVideoOverlay.h); off with VEYRA_TEST_RP_LEGACY_VIDEO_OVERLAY.
+    PushPresentOverlay overlay_;
+    bool overlayLegacy_=false;
+    // Records the overlay into `list` after the picture; returns whether a copy was recorded / a draw was recorded.
+    void recordOverlay(ID3D12Device*,ID3D12GraphicsCommandList*,pipeline::EnhanceGraph&,ID3D12Resource* backBuffer,unsigned backBufferIndex,unsigned windowW,unsigned windowH,bool& uploaded,bool& drew);
+    // Stream "present" R2: [present-path], on change (checked at most 4 times a second, the driver's sleep status every 2 s).
+    std::string presentPathLine_;
+    int64_t presentPathCheck100ns_=0,sleepStatusCheck100ns_=0,presentPathLogged100ns_=0;unsigned presentPathChanges_=0;
+    gfx::ReflexSession::DriverStatus sleepStatus_{};
+    HMONITOR compositionMonitor_=nullptr;int compositionFlags_=-1;
+    bool overlayDrawing_=false;
+    void watchPresentPath(int64_t now100ns,unsigned windowW,unsigned windowH);
+    // Stream "present" R11.
+    PushReflexOverrunGuard reflexGuard_;
+    bool reflexGuardLegacy_=false;
+    int64_t reflexSleepSeen100ns_=0;uint64_t lastMailboxReplaced_=0;
     bool providerOwnedPresentation_=false;
     PresentCapture* capture_=nullptr;
     Microsoft::WRL::ComPtr<ID3D12CommandQueue> presentationQueue_;
@@ -213,9 +248,27 @@ private:
         pipeline::FrameIdentity identity{};
         HMONITOR monitor=nullptr;
         HdrCurveSettings displayCurve{};
+        uint64_t overlay=0;   // stream "present": the in-picture readouts' version drawn into it
         bool operator==(const RetainedFrame&)const=default;
     };
     std::optional<RetainedFrame> retainedFrame_;
+    // Stream "present" R3: what present() needs after the blit's submission, and the frame a prepared blit belongs to.
+    struct PendingPresent {
+        uint64_t reflexFrame=0;bool generated=false;
+        std::chrono::steady_clock::time_point presentStart{},resizeEnd{},beginEnd{};
+        double slotWaitStart=0;pipeline::FrameIdentity identity{};bool resized=false;
+        unsigned windowW=0,windowH=0;RetainedFrame retained{};bool ahead=false;
+        uint64_t overlayVersion=0;   // the in-picture readouts' version this frame carries (0: none)
+    };
+    struct PreparedKey {
+        unsigned slot=0;bool generated=false,referencesValid=false,baseReference=false;int comparison=0;float split=.5f;
+        pipeline::FrameIdentity identity{};PreviewView view{};int64_t sourcePts100ns=-1;
+        bool operator==(const PreparedKey&)const=default;
+    };
+    bool dxgiPresent(PendingPresent&,gfx::CommandSlotRing&);
+    std::optional<std::pair<PreparedKey,PendingPresent>> prepared_;
+    bool preparing_=false,blitAheadSwitch_=false;
+    uint64_t blitAheadPrepared_=0,blitAheadUsed_=0,blitAheadDiscarded_=0;int64_t blitAheadLog100ns_=0;
     HWND window_=nullptr;
     ID3D12Device* presentationDevice_=nullptr;
     DXGI_FORMAT presentationFormat_=DXGI_FORMAT_UNKNOWN;

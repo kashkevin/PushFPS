@@ -145,6 +145,15 @@ QtObject {
 )qml"
     // MSVC limits one string literal to about 16 KB (C2026); adjacent literals are joined.
     R"qml(    function pushLiveStats() { return liveStats }
+    // Stream "present" R1 (tst_push_in_picture.qml): what the in-picture items handed over, and what the presenter "drew".
+    property var videoOverlayCalls: []
+    property bool videoOverlayEnabled: true
+    property var videoOverlayDrawn: ({})
+    function pushSetVideoOverlay(key, image, x, y, dpr) {
+        videoOverlayCalls = videoOverlayCalls.concat([{key: key, image: image !== null && image !== undefined, x: x, y: y, dpr: dpr}])
+        return true
+    }
+    function pushVideoOverlayState() { return {enabled: videoOverlayEnabled, drawn: videoOverlayDrawn} }
     property int halfTests: 0
     function pushTestPushFlowHalf() { halfTests++; return true }
     function pushFlowHalfTesting() { return false }

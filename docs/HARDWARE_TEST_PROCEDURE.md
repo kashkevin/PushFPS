@@ -205,8 +205,9 @@ its note says DIAGNOSTIC; the diagnostic arms (3x at the screen's size, 2x) are 
   `Run-First-Test.cmd -Session smoothness -Pass 180 -Arms d90-off,d90-fg3,d90-fg3-pprio,d90-fg3-low,d90-fg3-dlss,d90-fg3-flow,d90-fg3-fit,d90-fg2`
   (about 22 minutes).
 - 4K capture card (card format 3840x2160):
-  `Run-First-Test.cmd -Session capture -Pass 180 -Arms d90c-off,d90c-fg3,d90c-p13,d90c-l-robust,d90c-l-grid,d90c-l-cadence,d90c-l-gpuwaits,d90c-l-upload,d90c-l-nrhold,d90c-fg3-pprio,d90c-fg3-low,d90c-fg3-dlss,d90c-fg3-flow,d90c-fg2`
-  (about 39 minutes). Package 14: `d90c-p13` is the same program with `VEYRA_TEST_RP_LEGACY_PACKAGE13=1` (every new default
+  `Run-First-Test.cmd -Session capture -Pass 180 -Arms d90c-off,d90c-fg3,d90c-p13,d90c-ld,d90c-l-robust,d90c-l-grid,d90c-l-cadence,d90c-l-gpuwaits,d90c-l-upload,d90c-l-nrhold,d90c-fg3-pprio,d90c-fg3-low,d90c-fg3-dlss,d90c-fg3-flow,d90c-fg2`
+  (about 42 minutes). Package 15: `d90c-ld` is the "Lower delay" schedule (`VEYRA_EXP_RP_FG_SCHEDULE=onepredicted`, the
+  quick-setup row's schedule) against `d90c-fg3`; alone: `-Arms d90c-fg3,d90c-ld` (about 6 minutes). Package 14: `d90c-p13` is the same program with `VEYRA_TEST_RP_LEGACY_PACKAGE13=1` (every new default
   as in Package 13) and each `d90c-l-*` one restore switch alone, all against `d90c-fg3` (the new defaults).
 Since Package 14 the arms of switches that became inert (`VEYRA_EXP_RP_FG_ULL`, the graph queue priority, the early upload
 release, which is now the default) are removed: they could only have read as "the experiment did not help".

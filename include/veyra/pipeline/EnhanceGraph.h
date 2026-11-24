@@ -46,6 +46,7 @@
 #include "veyra/pipeline/GpuPassUtils.h"
 #include "veyra/core/SceneCadenceAnalyzer.h"
 #include "veyra/pipeline/FrameBatch.h"
+#include "veyra/pipeline/PushPredictPass.h"   // stream "predict"; nothing is created unless VEYRA_EXP_RP_FG_SCHEDULE=onepredicted
 #include "veyra/engine/EnhancementSettings.h"
 #include "veyra/engine/ContentCadence.h"
 #include "veyra/diagnostics/GpuTimer.h"
@@ -163,6 +164,7 @@ struct EnhanceGraphDesc {
     // DLSS-G performance mode (ngx/DlssgLite.h): DLSS frame generation only.
     bool dlssgLite=false;
     bool hudLock=false; // PushFPS Live HUD Lock (PushHudLock.h), graph frame generation only
+    bool lowDelay=false; // Package 15 "Lower delay" row (EnhancementSettings::lowDelay): create the predicted-frame pass (initPredict)
     uint8_t clean=0; // PushFPS restoration (PushCleanPass.h): above 0 the stage exists; its strength is read live
     engine::ContentRate contentRate=engine::ContentRate::Transport;
     engine::NrSettings model;
@@ -611,6 +613,10 @@ public:
         }
         uint64_t realFrameIndex = 0;
         bool passthrough = false;          // VEYRA_GRAPH_OFF: metadata only, no GPU work
+        // Stream "predict": this pair ran I(2/3), B, P (PushPredict.h); the batch holds them in that display order.
+        bool predictedPair = false;
+        uint64_t predictSequence = 0;      // the pass's number of this pair's P (predictCountersOf); 0: none
+        bool predictFailed = false;        // P could not be recorded: its slot holds B (the pair counts as unusable)
     };
 
     // Processes one decoded frame. `ptsMs` is the frame PTS in the source
@@ -648,6 +654,22 @@ public:
         return realPresentFences_[slot%2]?realPresentFences_[slot%2]:uploadFences_[slot%2];
     }
     ID3D12Fence* presentationReadyFenceObject(unsigned slot,bool generated)const;
+    // Stream "predict" (PushPredict.h, docs/drafts/PREDICT_GPU.md). The scheduler asks for the next pair's schedule
+    // BEFORE process(); the graph runs it only when every condition holds (lastPredictRefusal() says why not) and
+    // otherwise runs today's pair. Without the "Lower delay" row (desc lowDelay) or VEYRA_EXP_RP_FG_SCHEDULE=onepredicted
+    // nothing is created and the request is ignored (SwitchOff).
+    void setPairSchedule(PushPairSchedule schedule){requestedSchedule_=schedule;}
+    bool predictAvailable()const{return predict_&&predict_->ready()&&predict_->flowReady();}
+    // Package 15: this graph was built wanting the pass (the row or the kit's switch), whether or not it could be created.
+    bool predictAsked()const{return predictAsked_;}
+    // Package 15: what a predicted pair would be refused for before any per-pair reason (no pass, not VFG, not 3X at
+    // `multiplier`, format, HUD Lock or exclusion boxes, present-sink FG): the scheduler does not ask while one holds.
+    PushPredictRefusal predictStaticRefusal(unsigned multiplier)const;
+    PushPredictRefusal lastPredictRefusal()const{return lastPredictRefusal_;}
+    // The counters of the predicted frame of parity `parity`; only after that pair's genFenceValue has completed.
+    bool predictCounters(unsigned parity,PushPredictCounters& out)const{return predict_&&predict_->counters(parity%2,out);}
+    // The counters of the P numbered `sequence` (FrameOutputs::predictSequence): false if its readback was reused since.
+    bool predictCountersOf(uint64_t sequence,PushPredictCounters& out)const{return predict_&&predict_->countersOf(sequence,out);}
     void presentationSubmitted(unsigned slot,ID3D12Fence* fence,uint64_t value){
         presentationFences_[slot%2]=fence;presentationValues_[slot%2]=value;
     }
@@ -699,6 +721,7 @@ public:
         // PushFPS stream "gpupath": real frames whose presentation-queue wait is their own lists' fence instead of the
         // pair's last list (PushGpuPath.h). Counts frames, not time saved: only frames shown before that list mattered.
         uint64_t realPresentOwnFence = 0;
+        uint64_t predictedPairs = 0;   // stream "predict": pairs that ran I(2/3), B, P
     };
     const Metrics& metrics() const { return metrics_; }
     const std::string& mvecSource() const { return mvecSource_; }
@@ -1200,6 +1223,14 @@ private:
     bool cleanKeptReference_=false;    // this frame's comparison reference was taken before the clean-up
     bool cleanRanLast_=false;          // the stage changed the last picture (final-write dither)
     std::unique_ptr<PushHudLock> hudLock_;  // PushFPS: Live HUD Lock
+    // Stream "predict": created only when the "Lower delay" row (desc_.lowDelay) or VEYRA_EXP_RP_FG_SCHEDULE=onepredicted
+    // asks for it and VFG can feed it (initPredict).
+    std::unique_ptr<PushPredictPass> predict_;
+    bool predictAsked_=false;
+    bool predictFailLogged_=false;
+    PushPairSchedule requestedSchedule_=PushPairSchedule::Interpolate;
+    PushPredictRefusal lastPredictRefusal_=PushPredictRefusal::SwitchOff;
+    bool initPredict();
     std::unique_ptr<StreamChangeRunner> streamChange_;  // PushFPS experiment: change of the decoded picture
     std::shared_ptr<AVFrame> streamChangeFrame_;        // the decoder picture its last list reads
     bool streamChangeFailed_=false;

@@ -3626,3 +3626,78 @@ This does NOT undo a setup whose saved session already has the layer on with a w
 future silent switch-on. `VEYRA_TEST_NR_KEEP_SAVED_ON=1` restores the old behaviour (no marker read or written).
 Tests: `laghunt_original_neural_layer_is_held_off_only_by_a_marker` (tests/remoteplay/LagHuntTests.inc). Unverified on
 Windows.
+
+## One predicted frame per pair, GPU half (stream "predict", 24 Nov 2026; capture card, VFG, 3X)
+
+`VEYRA_EXP_RP_FG_SCHEDULE=onepredicted` (environment only, never slipstream.ini; off by default): the graph creates the
+predicted-frame pass (`pipeline/PushPredictPass.h`, shaders `PushPredict.hlsl`, `PushPredictDownsample.hlsl`, GPU DIS flow
+at a quarter size) and, for a pair the scheduler asks for with `EnhanceGraph::setPairSchedule`, runs I(2/3) (VFG), B,
+P (B advanced by a third of the A -> B motion; untrusted pixels and still pixels are B). Unset: nothing is created and
+every pair is today's. The scheduling side is not wired yet, so the switch alone changes no pair. Design, API, estimates
+and what his PC must measure: `docs/drafts/PREDICT_GPU.md`. Nothing ran on a GPU other than WARP in CI; no picture-quality
+or delay claim.
+
+## "Lower delay" policy on a bad prediction (Package 15, 24 Nov 2026; capture card, VFG, 3X)
+
+`VEYRA_TEST_RP_LOWDELAY_LEAVE_ON_UNUSABLE` (rollback; present = set; also accepted from slipstream.ini). Only acts while
+the "Lower delay" row (or the kit's `VEYRA_EXP_RP_FG_SCHEDULE=onepredicted`) runs the mode, which is off by default.
+- Unset (the mode's behaviour): stay in. A predicted frame is always shown as the pass composed it (trusted pixels moved,
+  untrusted pixels B); an unusable verdict does not change the schedule. The schedule leaves on a sustained failure (45 of
+  the last 60 predictions unusable) and returns after 300 calm pairs (doubled up to 1800 if it fails again within about
+  8.5 s). Other exits (row off, not eligible, a hold, a skipped pair, a graph refusal) as before.
+- Set: Package 15's first policy, leave at once on an unusable prediction and return after 8 calm pairs (back-off up to 240).
+- Log: `[fg-sched] lowDelay ... policy=stay-in|leave-on-unusable unusableShown=N`. SIMULATED comparison:
+  `tools/remoteplay_latency_bench/lowdelay_three_way.cpp`. Nothing here is hardware-verified.
+
+## Stream "present" (24 Nov 2026): the picture's display path (capture card; unverified on Windows)
+
+Default ON, each restored by one `VEYRA_TEST_RP_LEGACY_*` line in slipstream.ini, all of them by
+`VEYRA_TEST_RP_LEGACY_PACKAGE14=1` (`VEYRA_TEST_RP_LEGACY_PACKAGE13=1` restores them too). The start-up log names both:
+`[present-path] defaults inPictureOverlay=on reflexOverrunGuard=on`.
+
+- **In-picture readouts** (`VEYRA_TEST_RP_LEGACY_VIDEO_OVERLAY`). The delay badge, the statistics overlay and the PS5
+  network panel were cut out of the native video window's region (`apps/veyra-qml/main.cpp` `syncVideoCovers`), which made
+  the region complex while he played with the badge on. In BENCH2 present-to-vblank was 7-9 ms with VRR inactive exactly
+  while the region was complex and about 1 ms once it was one rectangle (a correlation; the cause is not proven). Now each
+  of these items hands a picture of itself to the bridge (`qml/Veyra/PushInPicture.js`, `pushSetVideoOverlay`), the
+  presenter blends it after the picture (`engine/PushPresentOverlay.h`, `shaders/PushVideoOverlay.hlsl`; SDR, scRGB and
+  HDR10 with the interface's white at 203 nits: the presenter does not know Windows' SDR-white level, so the cut-out,
+  composed by Windows at that level, can differ in brightness) and the item stops being a cover once a frame carrying its
+  picture was presented. It is a cover again up to about 2 s after that stops (XeSS owning Present). A paused picture is
+  presented again when the readouts change. Grabs at most 4 a second. Backing alpha 0.94 in the picture (0.82 before, over
+  the dark interface). With the rollback switch the items never grab; R2's polling and R11's measurement stay (logs only). Recordings, comparison clips, streams and the clarity
+  probe are taken before this pass and never contain it. No picture pixel outside the items' rectangle changes (WARP test
+  `video-overlay*`). Items that stay cut-outs, and when they appear: the toast (2.6 s after a notice), the recording-saved
+  card (after a recording), the dock, menus, dialogs and tooltips (opened by the user), the update banner, the stream HUD
+  of Moonlight/Xbox streams (Ctrl+Alt+Shift+S) and the cinema transport controls: all are interactive or animated and
+  appear only on a user action or a notice, not during steady play.
+- **`[present-path]`** (always on, on change): region kind and the items that make it complex, swap-chain flags and
+  buffer count, sync interval, tearing flag and support, VRR as the app knows it, `CheckHardwareCompositionSupport`, the
+  window and buffer sizes, whether the window covers its monitor, foreground, NVIDIA low latency and what the driver
+  reports (`NvAPI_D3D_GetSleepStatus`: low latency, fullscreen VRR, fullscreen/iFlip, game Sleep, control panel V-Sync).
+- **`[fg-health]`** (always on, capture card, every 10 s): the real frame's delay (mean, P50, P95, P99, max), the spacing
+  of Present calls (P50 to max) and the 11.1 ms grid fields, drops by cause, duplicates, GPU stages P50/P95/P99, and
+  NVIDIA low latency's Sleep: how far it ran past the arrival of the sample read after it. Software timing, not photons.
+- **Bounded NVIDIA low-latency Sleep** (`VEYRA_TEST_RP_LEGACY_REFLEX_SLEEP`). On a live capture card with frame generation,
+  low latency ends only when its per-frame Sleep KEEPS ending after the capture sample had arrived: after a 3 s warm-up
+  (also after each presentation reconfiguration and after a gap of more than 250 ms between samples), in two consecutive
+  blocks of 60 measured sleeps with at least 4 sleeps more than 0.5 ms past the arrival in each (sustained over about
+  2-4 s; two isolated transients never trip it). A sleep whose overrun cannot be known (the capture mailbox replaced a
+  sample meanwhile) is not counted. Ending it is one SetSleepMode(off): the Sleep and the latency markers stop; the low
+  queue, maximum frame latency 1, sync and VRR settings stay. It stays off for the rest of that source session (a
+  reconfiguration does not bring it back; the next source starts with it on again), with its own status text. Up to the
+  overrun is added to that real frame (slack before its deadline can absorb part: reasoning, not a measurement). The Sleep
+  is not skipped outright because NVIDIA's nvapi.h says that with the mode on and no Sleep calls "the driver would fallback
+  to sleep at its less optimal spot". Other sources are unchanged.
+- **Blit ahead, Present at the deadline** (`VEYRA_EXP_RP_PRESENT_BLIT_AHEAD=1`, OFF by default; stream "present" R3). A
+  capture-card frame that is ready before its deadline has its present blit recorded and submitted at once
+  (`VideoPresenter::prepare`); at the deadline only Present is called (AMD's order: finish the composition, then Present).
+  Proven in models (`engine/PushBlitAhead.h`, tests `present_blit_ahead_*`): Present never before the deadline, frames in
+  order, the earliest flip never later than today's for any frame, one prepared frame at a time; with FLIP_DISCARD, 3
+  buffers and maximum frame latency 1 the blit never writes the buffer on screen or the queued one, and a frame dropped
+  after its blit is overwritten in the same buffer, never shown. WARP test `blit-ahead-order` on a real swap chain. Why
+  off: the blit runs earlier, so it can sit in front of the next pair's graph work and make that pair up to one blit later
+  (estimate ~0.1 ms at 4K -> 1440p); not provably never-later for every frame. Also with it: a generated frame dropped
+  after its blit (capacity or output cap) is in a recording although not shown; the coverage probe is not issued for a
+  prepared frame. Log: `[present-path] experiment blitAhead=1` and every 10 s `blitAhead prepared= presentedAsPrepared=
+  discarded=`; `[present-cost] blitAhead=1` for a frame presented as prepared.

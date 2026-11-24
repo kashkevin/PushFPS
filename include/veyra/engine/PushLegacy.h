@@ -13,6 +13,14 @@
 //   VEYRA_TEST_RP_LEGACY_UPLOAD_RELEASE = 1     the capture upload buffer is released after the pair's last list
 //   VEYRA_TEST_RP_LEGACY_NR_HOLD = 1            the neural layer's saved state is kept as it is (no hold marker)
 //
+// Since Package 14 (stream "present", 24 Nov 2026), restored together by ONE line:
+//
+//   VEYRA_TEST_RP_LEGACY_PACKAGE14 = 1          every part below as Package 14 (PACKAGE13 = 1 restores these too)
+//   VEYRA_TEST_RP_LEGACY_VIDEO_OVERLAY = 1      the delay badge and the statistics overlay are cut out of the video
+//                                               window again (a complex window region) instead of drawn in the picture
+//   VEYRA_TEST_RP_LEGACY_REFLEX_SLEEP = 1       NVIDIA low latency's per-frame Sleep on a capture card with frame
+//                                               generation is not watched for sleeping past the sample's arrival
+//
 // Each value is exactly "1" (anything else, "0" included, restores nothing). The earlier names keep working from the
 // environment as aliases: VEYRA_TEST_RP_FG_SCHED_LEGACY=<parts> (robustAdmit, gridEarly), VEYRA_TEST_RP_DEDUP_LEGACY_CADENCE,
 // VEYRA_TEST_GPU_REAL_WAITS_GROUP, VEYRA_TEST_UPLOAD_LATE_RELEASE, VEYRA_TEST_NR_KEEP_SAVED_ON (each "1"; the
@@ -26,11 +34,14 @@
 
 namespace veyra::engine {
 
-enum class PushLegacyPart : unsigned { RobustAdmit, GridEarly, DedupCadence, GpuRealWaits, UploadRelease, NrHold, Count };
+enum class PushLegacyPart : unsigned { RobustAdmit, GridEarly, DedupCadence, GpuRealWaits, UploadRelease, NrHold, VideoOverlay, ReflexSleep, Count };
+// The first part that Package 14 did not have: PACKAGE14 = 1 restores this one and every later one.
+inline constexpr PushLegacyPart kPushLegacyFirstAfter14 = PushLegacyPart::VideoOverlay;
 struct PushLegacyName {
     std::string_view part, name, alias;
 };
 inline constexpr std::string_view kPushLegacyMaster = "VEYRA_TEST_RP_LEGACY_PACKAGE13";
+inline constexpr std::string_view kPushLegacyMaster14 = "VEYRA_TEST_RP_LEGACY_PACKAGE14";
 inline constexpr std::array<PushLegacyName, static_cast<std::size_t>(PushLegacyPart::Count)> kPushLegacyNames{{
     {"robustAdmit", "VEYRA_TEST_RP_LEGACY_ROBUST_ADMIT", ""},
     {"gridEarly", "VEYRA_TEST_RP_LEGACY_GRID_EARLY", ""},
@@ -38,6 +49,8 @@ inline constexpr std::array<PushLegacyName, static_cast<std::size_t>(PushLegacyP
     {"gpuRealWaits", "VEYRA_TEST_RP_LEGACY_GPU_REAL_WAITS", "VEYRA_TEST_GPU_REAL_WAITS_GROUP"},
     {"uploadRelease", "VEYRA_TEST_RP_LEGACY_UPLOAD_RELEASE", "VEYRA_TEST_UPLOAD_LATE_RELEASE"},
     {"nrHold", "VEYRA_TEST_RP_LEGACY_NR_HOLD", "VEYRA_TEST_NR_KEEP_SAVED_ON"},
+    {"videoOverlay", "VEYRA_TEST_RP_LEGACY_VIDEO_OVERLAY", ""},
+    {"reflexSleep", "VEYRA_TEST_RP_LEGACY_REFLEX_SLEEP", ""},
 }};
 // Reads one variable: its value, or nothing when it is not set.
 using PushEnvLookup = std::function<std::optional<std::string>(std::string_view)>;
@@ -66,15 +79,18 @@ inline bool listed(const PushEnvLookup& env, std::string_view part) {
 }  // namespace push_legacy_detail
 
 inline bool pushLegacyMaster(const PushEnvLookup& env) { return push_legacy_detail::one(env, kPushLegacyMaster); }
-// True when this part runs as Package 13.
+inline bool pushLegacyMaster14(const PushEnvLookup& env) { return push_legacy_detail::one(env, kPushLegacyMaster14); }
+// True when this part runs as before its change (Package 13 for the first six, Package 14 for the later ones).
 inline bool pushLegacyRestored(PushLegacyPart part, const PushEnvLookup& env) {
     const auto& n = kPushLegacyNames[static_cast<std::size_t>(part)];
     if (pushLegacyMaster(env) || push_legacy_detail::one(env, n.name) || push_legacy_detail::one(env, n.alias)) return true;
+    if (static_cast<unsigned>(part) >= static_cast<unsigned>(kPushLegacyFirstAfter14) && pushLegacyMaster14(env)) return true;
     return (part == PushLegacyPart::RobustAdmit || part == PushLegacyPart::GridEarly) && push_legacy_detail::listed(env, n.part);
 }
-// For the start-up lines: "package13=0 restored=[robustAdmit gridEarly]" ("restored=[]" without any).
+// For the start-up lines: "package13=0 package14=0 restored=[robustAdmit gridEarly]" ("restored=[]" without any).
 inline std::string pushLegacyDescribe(const PushEnvLookup& env) {
-    std::string t = pushLegacyMaster(env) ? "package13=1 restored=[" : "package13=0 restored=[";
+    std::string t = pushLegacyMaster(env) ? "package13=1" : "package13=0";
+    t += pushLegacyMaster14(env) ? " package14=1 restored=[" : " package14=0 restored=[";
     bool first = true;
     for (unsigned i = 0; i < static_cast<unsigned>(PushLegacyPart::Count); ++i)
         if (pushLegacyRestored(static_cast<PushLegacyPart>(i), env)) {

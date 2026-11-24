@@ -916,6 +916,7 @@ Window {
         z: 31
         x: videoHost.x + 12
         y: videoHost.y + 12
+        videoOrigin: Qt.point(videoHost.x, videoHost.y)   // stream "present" R1: drawn in the picture (PushInPicture.js)
         visible: wanted && stats.running === true && videoHost.width > 200 && root.page !== "home" && root.page !== "set"
     }
     // PushFPS: the optional statistics overlay (quick setup switch, off by default), under the badge's place.
@@ -923,6 +924,7 @@ Window {
         z: 31
         x: videoHost.x + 12
         y: videoHost.y + 50
+        videoOrigin: Qt.point(videoHost.x, videoHost.y)   // stream "present" R1: drawn in the picture (PushInPicture.js)
         visible: wanted && stats.running === true && videoHost.width > 320 && videoHost.height > 260 && root.page !== "home" && root.page !== "set"
     }
     // PushFPS: network diagnostics of a PS5 stream (with the overlay, only when [slipstream-net] runs), top right.
@@ -930,6 +932,7 @@ Window {
         z: 31
         x: videoHost.x + videoHost.width - width - 12
         y: videoHost.y + 50
+        videoOrigin: Qt.point(videoHost.x, videoHost.y)   // stream "present" R1: drawn in the picture (PushInPicture.js)
         visible: wanted && available && videoHost.width > 760 && videoHost.height > 420 && root.page !== "home" && root.page !== "set"
     }
 

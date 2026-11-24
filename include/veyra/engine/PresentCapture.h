@@ -36,6 +36,10 @@ public:
     };
     // Whether the next frames should carry `raw` (the graph keeps it only when asked).
     virtual bool wantsRawFrames() const { return false; }
+    // Stream "present" R3 (review S9): whether this consumer may record the next presented frames. The blit-ahead
+    // experiment is refused while any consumer says yes, so recordings, streams and probes see exactly what they see with it
+    // off. Conservative default: yes.
+    virtual bool capturing() const { return true; }
     virtual ~PresentCapture()=default;
     // true: commands were recorded into `list`; submitted() or discarded() follows.
     virtual bool record(ID3D12GraphicsCommandList* list,const Frame& frame)=0;
@@ -59,6 +63,7 @@ public:
     void submitted(ID3D12Fence* fence,uint64_t value) override {first_.submitted(fence,value);second_.submitted(fence,value);}
     void discarded() override {first_.discarded();second_.discarded();}
     bool wantsRawFrames() const override {return first_.wantsRawFrames()||second_.wantsRawFrames();}
+    bool capturing() const override {return first_.capturing()||second_.capturing();}
 private:
     PresentCapture& first_;
     PresentCapture& second_;

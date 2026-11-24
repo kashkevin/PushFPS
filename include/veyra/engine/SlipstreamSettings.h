@@ -70,7 +70,8 @@ struct SlipstreamSettings {
 // On/off switches: read by the application as present or absent (LEGACY_*) or as "1" (ADAPTIVE_PHASE,
 // RESUME_AFTER_DEVICE_LOSS).
 constexpr bool slipstreamPresenceSwitch(std::string_view name) {
-    return name == "VEYRA_EXP_RP_ADAPTIVE_PHASE" || name == "VEYRA_EXP_RP_RESUME_AFTER_DEVICE_LOSS" || name.starts_with("VEYRA_TEST_RP_LEGACY_") || name == "VEYRA_TEST_RP_NO_SETTINGS_FILE";
+    return name == "VEYRA_EXP_RP_ADAPTIVE_PHASE" || name == "VEYRA_EXP_RP_RESUME_AFTER_DEVICE_LOSS" || name.starts_with("VEYRA_TEST_RP_LEGACY_") || name == "VEYRA_TEST_RP_NO_SETTINGS_FILE" ||
+           name == "VEYRA_TEST_RP_LOWDELAY_LEAVE_ON_UNUSABLE";
 }
 
 namespace slipstream_detail {
@@ -245,6 +246,7 @@ inline std::string describeSlipstreamSettings(const SlipstreamSettings& settings
 // The interface's modes set their own switches through the environment as before (pushInterfaceSwitches).
 constexpr bool slipstreamFileMayApply(std::string_view name) {
     if (name.starts_with("VEYRA_TEST_RP_LEGACY_")) return true;   // the original code for one part (rollback)
+    if (name == "VEYRA_TEST_RP_LOWDELAY_LEAVE_ON_UNUSABLE") return true;   // "Lower delay": Package 15's first policy (rollback)
     if (!name.starts_with("VEYRA_EXP_RP_")) return false;         // other VEYRA_TEST_RP_*: test switches, never from the file
     const std::string_view rest = name.substr(13);
     if (rest == "KBM" || rest.starts_with("KBM_") || rest.starts_with("AUDIO_")) return true;

@@ -19,6 +19,8 @@
 #include "veyra/remoteplay/SmartLinkShared.h"
 #include "veyra/engine/PushPerformanceMode.h"
 #include "veyra/engine/PushSmoothness.h"
+#include "veyra/engine/PushLowDelay.h"
+#include "veyra/pipeline/PushPredict.h"
 #include "veyra/ui/SlipstreamSettingsFile.h"
 #include <array>
 #include <chrono>
@@ -246,6 +248,54 @@ QVariantMap QmlPlayerBridge::pushAutoModeState() const {
 void QmlPlayerBridge::applyPushSmoothTarget() {
     const int target = impl_->prefs.value(QStringLiteral("pushSmoothTarget"), 0).toInt();
     engine::pushSmoothShared().targetFps.store(engine::pushSmoothTargetValid(target) ? target : 0, std::memory_order_relaxed);
+}
+// Package 15 "Lower delay" (include/veyra/engine/PushLowDelay.h, docs/drafts/LOW_DELAY_MODE.md). One click applies in
+// the running session: `wanted` is read by the engine once a pair (off stops asking for predicted pairs at once), and
+// EnhancementSettings::lowDelay is committed like any graph-shape setting, so with VFG at 3X the engine rebuilds the
+// graph with the predicted-frame pass (on) or without it (off), as switching HUD Lock does (requiresGraphRebuild,
+// pushLowDelayShapesGraph). Elsewhere the setting is stored and changes nothing in the graph. The kit's switch
+// VEYRA_EXP_RP_FG_SCHEDULE=onepredicted, set before PushFPS started, is read by the engine and the graph themselves;
+// the interface never writes the environment. At start the setting is restored with the other global controls
+// (QmlPlayerBridge.cpp), not here.
+void QmlPlayerBridge::applyPushLowDelay() {
+    const bool on = impl_->prefBool("pushLowDelay", false);
+    auto& shared = engine::pushLowDelayShared();
+    shared.wanted.store(on, std::memory_order_relaxed);
+    shared.vfgRefused.store(false, std::memory_order_relaxed);   // switching the row allows one new attempt (review 2, SHOULD 9)
+    // Until the engine's next pair reports: off is idle at once; on is starting (the rebuild), or the engine says otherwise.
+    shared.state.store(static_cast<std::uint8_t>(on ? engine::PushLowDelayState::Starting : engine::PushLowDelayState::Idle), std::memory_order_relaxed);
+    auto s = settings();
+    if (s.lowDelay == on) return;
+    s.lowDelay = on;
+    if (!impl_->commit(std::move(s))) {
+        // Review 2, MUST 3: undo everything this call set, so the row never claims to be starting something that will
+        // not start: the engine's flag and state, and the preference itself (the row then shows the switch off).
+        veyra::log::warn("fg-sched", std::format("lowDelay row={} not accepted by the engine; the graph keeps its shape and the row goes back", on));
+        shared.wanted.store(!on, std::memory_order_relaxed);
+        if (on) shared.state.store(static_cast<std::uint8_t>(engine::PushLowDelayState::Idle), std::memory_order_relaxed);
+        impl_->prefs[QStringLiteral("pushLowDelay")] = !on;
+        if (!impl_->savePrefs()) veyra::log::warn("ui-prefs", "pushLowDelay not restored");
+        emit preferencesChanged();
+        emit notice(tr("引擎未接受更低延迟设置，原补帧方式保留"), true);
+        return;
+    }
+    emit settingsChanged();
+}
+QVariantMap QmlPlayerBridge::pushLowDelayState() const {
+    const auto& shared = engine::pushLowDelayShared();
+    const auto state = static_cast<engine::PushLowDelayState>(shared.state.load(std::memory_order_relaxed));
+    static const bool fromSwitch = [] {
+        wchar_t value[32]{};
+        const DWORD n = GetEnvironmentVariableW(L"VEYRA_EXP_RP_FG_SCHEDULE", value, 32);
+        return n > 0 && n < 32 && pipeline::pushFgScheduleFromSwitch(std::wstring_view(value, n)) == pipeline::PushPairSchedule::OnePredicted;
+    }();
+    const auto refusal = static_cast<pipeline::PushPredictRefusal>(shared.refusal.load(std::memory_order_relaxed));
+    const auto paused = static_cast<engine::PushLowDelaySuspend>(shared.suspend.load(std::memory_order_relaxed));
+    return QVariantMap{{"available", true},
+                       {"state", QString::fromLatin1(engine::pushLowDelayStateName(state))},
+                       {"reason", QString::fromLatin1(pipeline::pushPredictRefusalName(refusal))},
+                       {"paused", QString::fromLatin1(engine::pushLowDelaySuspendName(paused))},
+                       {"fromSwitch", fromSwitch}};
 }
 QVariantMap QmlPlayerBridge::pushSmoothState() const {
     const auto& shared = engine::pushSmoothShared();

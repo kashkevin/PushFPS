@@ -59,6 +59,7 @@
 #include "veyra/engine/ExportJobManager.h"
 #include "veyra/engine/PresentationGeometry.h"
 #include "veyra/engine/PushCoverRegion.h"
+#include "veyra/engine/PushVideoOverlay.h"
 #include "veyra/gfx/PresentationHooks.h"
 #include "veyra/pipeline/AmdHipPreflight.h"
 #include "veyra/ui/InterfaceRenderer.h"
@@ -122,6 +123,7 @@ void blankVideo(const char* why) {
     g_videoBlanked = true;
     const int result = SetWindowRgn(g_video, CreateRectRgn(0, 0, 0, 0), TRUE);
     veyra::log::info("qml-window", std::format("blank video until the new source presents ({}) result={}", why, result));
+    veyra::engine::pushRegionBoard().set({veyra::engine::PushRegionKind::Empty, 0, false, "blank"});   // stream "present" [present-path]
 }
 
 const char* videoProbeName() {
@@ -403,6 +405,28 @@ void syncVideoCovers(QQuickWindow* window, QQuickItem* host, qreal inset) {
         key << QRect(0, 0, insetBand, 0) << QRect(0, 0, w, h);
         if (key == last) return;
         last = key;
+    }
+    {
+        // Stream "present" R2: what this call makes of the region, for the presenter's [present-path] line
+        // (engine/PushVideoOverlay.h pushRegionDecision follows the branches below). Covers wholly outside the window
+        // cut nothing; the names are this program's own QML types and object names.
+        std::size_t inPicture = 0;
+        std::string names;
+        qsizetype index = 0;
+        for (const Cover& c : covers) {
+            const QRect& hole = holes[index * 2];
+            ++index;
+            if (std::min(hole.left() + hole.width(), w) <= std::max(hole.left(), 0) || std::min(hole.top() + hole.height(), h) <= std::max(hole.top(), 0)) continue;
+            ++inPicture;
+            if (names.size() < 200) { if (!names.empty()) names += ','; names += coverName(c.item); }
+        }
+        veyra::engine::PushRegionInput in;
+        in.coversInPicture = inPicture;
+        in.insetBand = insetBand > 0;
+        in.rectExperiment = rectRegionSwitch() && covers.size() <= qsizetype(veyra::engine::kPushCoverLimit);
+        in.noRegionProbe = g_videoProbe == VideoProbeMode::NoRegion;
+        in.covers = std::size_t(covers.size());   // review S5: covers wholly outside the picture still install a rectangle region
+        veyra::engine::pushRegionBoard().set({veyra::engine::pushRegionDecision(in), unsigned(inPicture), in.insetBand, names.empty() ? std::string("none") : names});
     }
     if (g_videoProbe == VideoProbeMode::NoRegion) {
         SetLastError(0);

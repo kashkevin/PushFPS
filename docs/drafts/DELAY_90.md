@@ -183,7 +183,7 @@ No real avoidable extra specific to 3X was found beyond these; no new FG_ULL par
 
 Two sets, every arm at 4K unless its note says DIAGNOSTIC; switch arms against the 3X arm (`d90-fg3` / `d90c-fg3`); 2 rounds; with the
 kit's own arithmetic (2 rounds x arms x 83 s) the Remote Play set takes **about 22 minutes** (8 arms) and the capture set
-**about 39 minutes** (14 arms) since Package 14, which removed the arms of switches that became inert (FG_ULL, the graph
+**about 42 minutes** (15 arms; Package 15 added `d90c-ld`, the "Lower delay" schedule) since Package 14, which removed the arms of switches that became inert (FG_ULL, the graph
 queue priority, the early upload release, now the default) and added to the capture set the new defaults against
 `VEYRA_TEST_RP_LEGACY_PACKAGE13=1` (`d90c-p13`) and each restore switch alone (`d90c-l-*`):
 - Remote Play (smoothness session; DLSS SR to 4K; `dedup=auto` + the experimental stream duplicate removal

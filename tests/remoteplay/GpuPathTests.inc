@@ -127,12 +127,20 @@ TEST(gpupath_fifo_model_lowering_a_wait_never_delays_or_reorders_anything) {
 }
 
 TEST(gpupath_vfg_back_to_back_only_when_asked_and_only_for_later_subframes) {
-    CHECK(pushVfgChainedWait(false, 2, false, 41) == 0);   // off by default: every subframe signals its own value
-    CHECK(pushVfgChainedWait(true, 1, false, 41) == 0);    // the first subframe always signals
-    CHECK(pushVfgChainedWait(true, 2, false, 41) == 41);
-    CHECK(pushVfgChainedWait(true, 3, false, 41) == 41);
-    CHECK(pushVfgChainedWait(true, 2, true, 41) == 0);     // a reset pair runs one subframe; never chained
-    CHECK(pushVfgChainedWait(true, 2, false, 0) == 0);     // no first value of this pair known
+    // (enabled, subframe, reset, the pair's first producer value, the input revision it was signalled for, current revision)
+    CHECK(pushVfgChainedWait(false, 2, false, 41, 7, 7) == 0);   // off by default: every subframe signals its own value
+    CHECK(pushVfgChainedWait(true, 1, false, 41, 7, 7) == 0);    // the first subframe always signals
+    CHECK(pushVfgChainedWait(true, 2, false, 41, 7, 7) == 41);
+    CHECK(pushVfgChainedWait(true, 3, false, 41, 7, 7) == 41);
+    CHECK(pushVfgChainedWait(true, 2, true, 41, 7, 7) == 0);     // a reset pair runs one subframe; never chained
+    CHECK(pushVfgChainedWait(true, 2, false, 0, 7, 7) == 0);     // no first value of this pair known
+}
+
+// Package 15 review SHOULD 3: a predicted pair runs subframe 2 alone. The first producer value known is the PREVIOUS
+// pair's (signalled before this pair's B was copied in): it must never be waited for.
+TEST(gpupath_vfg_back_to_back_never_chains_to_another_pairs_value) {
+    CHECK(pushVfgChainedWait(true, 2, false, 41, 6, 7) == 0);
+    CHECK(pushVfgChainedWait(true, 3, false, 41, 6, 7) == 0);
 }
 
 }  // namespace gpupath_tests

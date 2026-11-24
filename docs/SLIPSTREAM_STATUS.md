@@ -12,6 +12,32 @@ has no graphics card (software renderer), no PS5 and no screen to measure (see "
 in the other documents that come from Linux models and simulators are models. Software timestamps are
 not proof of input-to-photon latency: only a camera or a light sensor on the screen is.
 
+## Package 15 (24 November 2026): a lower-delay schedule (opt-in) and the picture's path to the screen (capture card)
+
+The owner on Package 14: 31 ms at 90 FPS (30 real + 60 generated), 4K; he asked for a much lower and stable delay
+without picture loss, close to 15 ms if possible, and for the 3X pipeline, the alternatives and the display path to be
+researched. **None of this has run on a gaming PC, a graphics card or a capture card. Nothing is called fixed.**
+SIMULATED = the scheduling simulator (the program's own decision code, made-up 4K-like costs, 16 cost sets x seeds
+1, 2, 3, 7, 11, 99). TESTED = unit / QML tests and CI's Windows build on a software renderer (WARP).
+
+| Part | Default | Evidence | Undo | Hardware-verified |
+|---|---|---|---|---|
+| "Lower delay" row (`pushLowDelay`): per pair I(2/3) from NVIDIA VFG, the real frame one slot earlier, then a frame predicted from the A->B motion (own pass: GPU DIS flow at quarter size, warp by the true motion, untrusted pixels keep the real picture, whole frame = real picture on a cut or when more than half of the moving pixels fall back). Stay-in policy, sustained exit (45 of 60 unusable), late-frame / on-grid watch, pauses during the app's tests, exclusive with HUD Lock / exclusion boxes / Smoothness Mode, VFG refusal of the index-2-only request handled without stopping frame generation | OFF (one click, applies in the running session) | SIMULATED: mean delay 37.6 -> 28.3 ms over the sets, on-grid 91.1 -> 99.1 % with usable predictions; 99 % on-grid missed in 5 / 6 / 7 of 16 sets at a predicted-frame cost of 3 / 6 / 10 ms (Package 14: 8); later than Package 14 on some pairs near or over the GPU's limit. TESTED: schedule, policies, counters, QML row, WARP `predict*` (see START-HERE's "what has been checked" for the build that ran them). Two independent reviews. Picture: unknown | the row; `VEYRA_TEST_RP_LOWDELAY_LEAVE_ON_UNUSABLE` restores the first policy | no (the VFG request itself has never run on a GPU) |
+| Row off: every frame takes Package 14's path | - | review of every changed line; the simulator (this package's code) with the row off is unchanged by the mode's parameters, present by present | - | no |
+| Delay split: picture + first generated frame + wait (calculated from the schedule) + margin, in the badge tooltip, `pushLiveStats` and `[capture-timing]` | on (display / log only) | tested | - | no |
+| In-picture readouts: delay badge, statistics overlay and PS5 network panel drawn inside the swap chain, so the video window's region stays one rectangle (earlier logs: a complex region went with 7-9 ms present-to-vblank and VRR inactive; a correlation) | on | WARP `video-overlay*` (pixels outside the items bit-identical; SDR, scRGB, HDR10), QML and Qt composition tests, two reviews; benefit unmeasured and not visible in the readout | `VEYRA_TEST_RP_LEGACY_VIDEO_OVERLAY` | no |
+| NVIDIA low latency's per-frame Sleep measured against the sample's arrival; ended for the source session only on sustained overruns (3 s warm-up, 4 of 60 over 0.5 ms in two consecutive blocks) | on, capture card with frame generation | tested (transients do not trip it), two reviews | `VEYRA_TEST_RP_LEGACY_REFLEX_SLEEP` | no |
+| `[present-path]` (how the picture reaches the screen; at most one line per 5 s) and `[fg-health]` (every 10 s: delay mean / P50 / P95 / P99, Present spacing, drops by cause, duplicates, GPU stages, Sleep overrun), `triage.py` | always on (log only) | tested | - | no |
+| Blit ahead, Present at the deadline | OFF (`VEYRA_EXP_RP_PRESENT_BLIT_AHEAD=1`, environment) | model tests, WARP `blit-ahead-order`; not provably never-later for the next pair | - | no |
+| Parts 4 and 5 at once back to Package 14 | - | tested | `VEYRA_TEST_RP_LEGACY_PACKAGE14` (also implied by `_PACKAGE13`) | - |
+
+Research behind it (three reports, synthesis in `docs/drafts/LATENCY_RESEARCH_RANKING.md`): every interpolating frame
+generator holds the newest real frame, only prediction removes the wait; Streamline DLSS-G, Reflex 2 Frame Warp, FSR 3 /
+XeSS frame generation and NVIDIA's FRUC library are not usable for captured video; about 15 ms on the 90 FPS grid needs a
+first generated frame of about 1-3 ms (motion once per pair at reduced size feeding full-size warps for both extra
+frames, replacing VFG's run; estimate 14-20 ms, picture quality unproven): the next experimental branch. Known limits of
+the predicted frame (`docs/drafts/LOW_DELAY_MODE.md`): no leading-edge search, bilinear sampling, no seam-aware verdict.
+
 ## Package 14 (24 November 2026): the Package 13 lag, and frame generation that does not drop out (capture card)
 
 The owner reported Package 13 as worse on his PC (delay readout about 32 ms instead of about 30 ms, "lag mid frames").

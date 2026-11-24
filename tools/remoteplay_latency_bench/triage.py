@@ -185,6 +185,10 @@ def facts(start_lines, session_lines):
     f["timing"] = {k: field_median(L, "capture-timing", k) for k in ("callbackToPresentReturnP95Ms", "readAgeMs", "gpuFgBatchP95Ms")}
     f["timing"]["expiredGenerated"] = field_max(L, "capture-timing", "expiredGenerated")
     f["steady"] = steadiness(L)
+    f["health"] = fg_health(L)
+    f["path"] = present_path(L)
+    f["reflex_trip"] = [text for _t, _l, c, text in L if c == "reflex" and text.startswith("sleep overrun")]
+    f["overlay_errors"] = [text for _t, level, c, text in L if c == "present-overlay" and level in ("WARN", "ERROR")]
     f["stream"] = {"arrivalToPresentMs": field_median(L, "remoteplay-cadence", "arrivalToPresentMs"),
                    "sourceFps": field_median(L, "remoteplay-cadence", "sourceFps"),
                    "decodeFps": field_median(L, "remoteplay-progress", "decodeFps"),
@@ -202,6 +206,10 @@ def steadiness(lines):
     """Package 14's always-on [capture-timing] grid fields over a session: None when the build does not log them."""
     seen, intervals, on, half, shown, seconds = False, 0.0, 0.0, 0.0, 0.0, 0
     longest, run_max, robust, grid_early, skipped = 0.0, 0, 0, 0, 0
+    # Package 15 "Lower delay": appended to [capture-timing] only in a session where it was on.
+    low = None
+    # Package 15 TASK 3: the delay readout and its split (always on from Package 15; absent in older builds).
+    delay = None
     for _t, _l, c, text in lines:
         if c != "capture-timing": continue
         w = words(text)
@@ -211,6 +219,20 @@ def steadiness(lines):
         try:
             n = float(w["gridIntervals"])
             robust += int(float(w.get("robustAdmits", "0"))); grid_early += int(float(w.get("gridEarly", "0"))); skipped += int(float(w.get("skippedPairs", "0")))
+            if "delayMs" in w and float(w["delayMs"]) >= 0 and float(w.get("delayPictureMs", "-1")) >= 0:
+                if delay is None:
+                    delay = {"seconds": 0, "total": 0.0, "picture": 0.0, "first": 0.0, "wait": 0.0, "margin": 0.0, "split": 0.0}
+                delay["seconds"] += 1
+                delay["total"] += float(w["delayMs"]); delay["picture"] += float(w["delayPictureMs"])
+                delay["first"] += float(w.get("delayFirstGeneratedMs", "0")); delay["wait"] += float(w.get("delayWaitMs", "0"))
+                delay["margin"] += float(w.get("delayMarginMs", "0")); delay["split"] += float(w.get("delaySplitPct", "0"))
+            if "lowDelay" in w:
+                if low is None:
+                    low = {"seconds": 0, "predictedShown": 0, "predictedPairs": 0, "switches": 0, "unusable": 0, "state": "", "exits": ""}
+                low["seconds"] += 1
+                low["predictedShown"] += int(float(w.get("predictedShown", "0"))); low["predictedPairs"] += int(float(w.get("predictedPairs", "0")))
+                low["switches"] += int(float(w.get("lowDelaySwitches", "0"))); low["unusable"] += int(float(w.get("lowDelayUnusable", "0")))
+                low["state"] = w["lowDelay"]; low["exits"] = w.get("lowDelayExits", "")
             if n <= 0: continue
             intervals += n
             on += n * float(w["onGrid1msPct"]); half += n * float(w["onGridHalfPct"]); shown += n * float(w["shownPct"])
@@ -219,9 +241,85 @@ def steadiness(lines):
             continue
     if not seen: return None
     out = {"seconds": seconds, "intervals": intervals, "robustAdmits": robust, "gridEarly": grid_early, "skippedPairs": skipped,
-           "longestMs": longest, "offRunMax": run_max}
+           "longestMs": longest, "offRunMax": run_max, "lowDelay": low, "delay": delay}
     if intervals > 0:
         out.update(onGrid=on / intervals, onGridHalf=half / intervals, shown=shown / intervals)
+    return out
+
+
+def fg_health(lines):
+    """Stream "present" [fg-health] (one line per 10 s, always on with a capture card): None when the build does not log it."""
+    windows = []
+    for _t, _l, c, text in lines:
+        if c != "fg-health": continue
+        n = numbers(text)
+        if n: windows.append(n)
+    if not windows: return None
+    def med(key):
+        values = [w[key] for w in windows if key in w and w[key] >= 0]
+        return statistics.median(values) if values else None
+    def top(key):
+        values = [w[key] for w in windows if key in w and w[key] >= 0]
+        return max(values) if values else None
+    def total(key):
+        return sum(w.get(key, 0) for w in windows)
+    out = {"windows": len(windows)}
+    for key in ("realMeanMs", "realP50Ms", "realP95Ms", "realP99Ms", "intervalP50Ms", "intervalP99Ms", "onGrid1msPct", "shownPct",
+                "gpu_fg1P50Ms", "gpu_fg1P95Ms", "gpu_fg1P99Ms", "gpu_colorP95Ms", "gpu_blitP95Ms", "reflexSleepMeanMs", "reflexOverrunP95Ms", "reflexOverrunP99Ms"):
+        out[key] = med(key)
+    for key in ("realMaxMs", "intervalMaxMs", "reflexSleepMaxMs", "reflexOverrunMaxMs"):
+        out[key] = top(key)
+    for key in ("realFrames", "dropDeadline", "dropCapacity", "dropCap", "suppressed", "mailboxDropped", "duplicates", "reflexSleeps", "reflexOverruns"):
+        out[key] = total(key)
+    out["reflex"] = int(windows[-1].get("reflex", 0))
+    return out
+
+
+def present_path(lines):
+    """Stream "present" [present-path] (on change): the last state, how often it changed, and the items that made the
+    video window's region complex at any time. None when the build does not log it."""
+    states = [words(text) for _t, _l, c, text in lines if c == "present-path" and text.startswith("region=")]
+    if not states: return None
+    complex_items = sorted({w.get("items", "") for w in states if w.get("region") == "complex" and w.get("items", "none") != "none"})
+    return {"changes": len(states), "last": states[-1], "complex": any(w.get("region") == "complex" for w in states), "complexItems": complex_items}
+
+
+def health_lines(h, p):
+    """The [fg-health] and [present-path] facts in words."""
+    out = []
+    if h is None:
+        out.append("[fg-health]: " + NOT_LOGGED + " (a build before stream \"present\")")
+    else:
+        out.append("real frame's delay over %d windows of 10 s (median of the windows): mean %s, P50 %s, P95 %s, P99 %s; worst %s" % (
+            h["windows"], number_text(h["realMeanMs"], 2, " ms"), number_text(h["realP50Ms"], 2, " ms"), number_text(h["realP95Ms"], 2, " ms"),
+            number_text(h["realP99Ms"], 2, " ms"), number_text(h["realMaxMs"], 2, " ms")))
+        out.append("present spacing: P50 %s, P99 %s, longest %s; on the grid %s, shown %s" % (
+            number_text(h["intervalP50Ms"], 2, " ms"), number_text(h["intervalP99Ms"], 2, " ms"), number_text(h["intervalMaxMs"], 2, " ms"),
+            number_text(h["onGrid1msPct"], 1, " %"), number_text(h["shownPct"], 1, " %")))
+        out.append("dropped: deadline %d, capacity %d, output cap %d, suppressed %d, capture mailbox %d; duplicates removed %d" % (
+            h["dropDeadline"], h["dropCapacity"], h["dropCap"], h["suppressed"], h["mailboxDropped"], h["duplicates"]))
+        out.append("GPU: first generated frame P50 %s / P95 %s / P99 %s (P95 - P50 is the clock-ramp sign); colour P95 %s; present blit P95 %s" % (
+            number_text(h["gpu_fg1P50Ms"], 2, " ms"), number_text(h["gpu_fg1P95Ms"], 2, " ms"), number_text(h["gpu_fg1P99Ms"], 2, " ms"),
+            number_text(h["gpu_colorP95Ms"], 2, " ms"), number_text(h["gpu_blitP95Ms"], 2, " ms")))
+        if h["reflexSleeps"]:
+            out.append("NVIDIA low latency's Sleep: %d sleeps, mean %s, longest %s; ran past the sample's arrival %d times (P95 %s, P99 %s, worst %s, added 1:1 to that real frame)%s" % (
+                h["reflexSleeps"], number_text(h["reflexSleepMeanMs"], 2, " ms"), number_text(h["reflexSleepMaxMs"], 2, " ms"), h["reflexOverruns"],
+                number_text(h["reflexOverrunP95Ms"], 2, " ms"), number_text(h["reflexOverrunP99Ms"], 2, " ms"), number_text(h["reflexOverrunMaxMs"], 2, " ms"),
+                "; ended for the session by a guard" if h["reflex"] == 2 else ""))
+        else:
+            out.append("NVIDIA low latency's Sleep: not called in this session (low latency off, not an NVIDIA card, or ended)")
+    if p is None:
+        out.append("[present-path]: " + NOT_LOGGED + " (a build before stream \"present\")")
+    else:
+        w = p["last"]
+        out.append("display path (last of %d [present-path] lines): region %s, items over the picture %s, in-picture readouts %s, sync interval %s, VRR requested %s / active %s, "
+                   "driver fullscreen VRR %s, driver fullscreen/iFlip %s, hardware composition flags %s, window %s, buffer %s, covers its monitor %s" % (
+                       p["changes"], w.get("region", "?"), w.get("items", "?"), w.get("inPictureOverlay", "?"), w.get("syncInterval", "?"), w.get("vrrRequested", "?"),
+                       w.get("vrrActive", "?"), w.get("driverFsVrr", "?"), w.get("driverFullscreenIFlip", "?"), w.get("hwCompositionFlags", "?"), w.get("window", "?"),
+                       w.get("buffer", "?"), w.get("coversMonitor", "?")))
+        if p["complex"]:
+            out.append("the video window's region was COMPLEX at some point (cut out for: %s): the slow, composed present path is likely then" % (
+                ", ".join(p["complexItems"]) or "the cinema band"))
     return out
 
 
@@ -231,6 +329,8 @@ def steadiness_lines(st):
         return ["steadiness (on the 11.1 ms grid): " + NOT_LOGGED + " (a build before Package 14's [capture-timing] grid fields)"]
     out = ["Package 14 parts that acted: robustAdmit %d pairs, gridEarly %d pairs; pairs skipped %d (%.1f/s over %d s)" % (
         st["robustAdmits"], st["gridEarly"], st["skippedPairs"], st["skippedPairs"] / max(1, st["seconds"]), st["seconds"])]
+    out += low_delay_lines(st.get("lowDelay"))
+    out += delay_split_lines(st.get("delay"))
     if "onGrid" not in st:
         return out + ["steadiness: no frame-generation output in this session"]
     on, half, shown = st["onGrid"], st["onGridHalf"], st["shown"]
@@ -244,6 +344,29 @@ def steadiness_lines(st):
     if on < 99.0 and shown >= 99.0: why.append("frames were shown but %.1f %% of intervals were more than 1 ms off the grid (late frames: GPU spikes or present lateness)" % (100.0 - on))
     elif on < 99.0: why.append("%.1f %% of intervals were more than 1 ms off the grid" % (100.0 - on))
     return out + ["not steady (%.1f %% on grid, %.1f %% shown), because %s (%s)" % (on, shown, "; ".join(why), detail)]
+
+
+def low_delay_lines(low):
+    """Package 15 "Lower delay" (one predicted frame per real frame): what it did, from [capture-timing]. Nothing when off."""
+    if not low:
+        return []
+    secs = max(1, low["seconds"])
+    exits = ", ".join(part.replace(":", " ") for part in low["exits"].split(",") if part and not part.endswith(":0")) or "none"
+    return ["Lower delay (one predicted frame per real frame) was on: last state %s; predicted frames shown %d (%.1f/s), pairs run predicted %d, "
+            "schedule switches %d (%.1f a minute), predicted frames found mostly held %d; fallbacks by reason (session): %s" % (
+                low["state"] or "?", low["predictedShown"], low["predictedShown"] / secs, low["predictedPairs"], low["switches"],
+                low["switches"] * 60.0 / secs, low["unusable"], exits)]
+
+
+def delay_split_lines(delay):
+    """Package 15 TASK 3: where the delay readout goes (session means of the per-second [capture-timing] fields)."""
+    if not delay:
+        return ["delay split: " + NOT_LOGGED + " (a build before Package 15's [capture-timing] delay fields)"]
+    n = max(1, delay["seconds"])
+    return ["delay readout %.1f ms = %.1f picture + %.1f first generated frame + %.1f waiting for the frames shown before the real one "
+            "+ %.1f margin (session mean of %d one-second readings; %.0f %% of real frames split; capture callback -> the real frame's "
+            "Present returned: not the game, the console, the capture card or the display)" % (
+                delay["total"] / n, delay["picture"] / n, delay["first"] / n, delay["wait"] / n, delay["margin"] / n, delay["seconds"], delay["split"] / n)]
 
 
 def number_text(value, digits=1, unit=""):
@@ -323,6 +446,11 @@ def describe_session(f, title):
     out.append("slipstream.ini as the program accepted it: " + ("; ".join(f["settings_file"]) if f["settings_file"] else "no [remoteplay-settings] line (no slipstream.ini, or the line was not collected)"))
     out.append("Switches the program itself logged: " + ("; ".join(f["switch_lines"]) if f["switch_lines"] else "none"))
     out.extend(steadiness_lines(f.get("steady")))
+    out.extend(health_lines(f.get("health"), f.get("path")))
+    for text in f.get("reflex_trip", []):
+        out.append("NVIDIA low latency ENDED by the overrun guard: " + text[:300])
+    if f.get("overlay_errors"):
+        out.append("in-picture readouts FAILED %d time(s) (they stay cut out of the video window): %s" % (len(f["overlay_errors"]), f["overlay_errors"][0][:200]))
     out.append("Neural runtime: " + (f["nr_runtime"] or NOT_LOGGED))
     keys = ("fg", "fgMethod", "fgMultiplier", "fgTier", "fgBackend", "sr", "srTarget", "enhance", "nrRuntime", "nrSize", "hdr", "fullscreen", "window", "refreshHz", "vrrLevel", "stream", "smoothPacing")
     out.append("Settings ([slipstream-config]): " + (" ".join("%s=%s" % (k, f["config"][k]) for k in keys if k in f["config"]) or NOT_LOGGED))

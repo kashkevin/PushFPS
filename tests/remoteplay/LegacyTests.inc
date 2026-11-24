@@ -49,8 +49,23 @@ TEST(legacy_each_switch_alone_the_master_and_the_aliases) {
     CHECK(restoredMask(env({{"VEYRA_TEST_RP_FG_SCHED_LEGACY", "gridEarly"}})) == (1u << static_cast<unsigned>(PushLegacyPart::GridEarly)));
     CHECK(restoredMask(env({{"VEYRA_TEST_RP_FG_SCHED_LEGACY", "all"}})) == 3u);
     CHECK(veyra::engine::pushLegacyDescribe(env({{"VEYRA_TEST_RP_LEGACY_PACKAGE13", "1"}})) ==
-          "package13=1 restored=[robustAdmit gridEarly dedupCadence gpuRealWaits uploadRelease nrHold]");
-    CHECK(veyra::engine::pushLegacyDescribe(env({})) == "package13=0 restored=[]");
+          "package13=1 package14=0 restored=[robustAdmit gridEarly dedupCadence gpuRealWaits uploadRelease nrHold videoOverlay reflexSleep]");
+    CHECK(veyra::engine::pushLegacyDescribe(env({})) == "package13=0 package14=0 restored=[]");
+}
+
+TEST(legacy_package14_master_restores_only_what_came_after_package14) {
+    using namespace legacy_tests;
+    const unsigned first = static_cast<unsigned>(veyra::engine::kPushLegacyFirstAfter14);
+    const unsigned count = static_cast<unsigned>(PushLegacyPart::Count);
+    const unsigned after14 = ((1u << count) - 1) & ~((1u << first) - 1);
+    CHECK(after14 == ((1u << static_cast<unsigned>(PushLegacyPart::VideoOverlay)) | (1u << static_cast<unsigned>(PushLegacyPart::ReflexSleep))));
+    CHECK(restoredMask(env({{"VEYRA_TEST_RP_LEGACY_PACKAGE14", "1"}})) == after14);
+    CHECK(restoredMask(env({{"VEYRA_TEST_RP_LEGACY_PACKAGE14", "0"}})) == 0);
+    CHECK(restoredMask(fromFile("VEYRA_TEST_RP_LEGACY_PACKAGE14 = 1\n")) == after14);
+    CHECK(veyra::engine::pushLegacyDescribe(env({{"VEYRA_TEST_RP_LEGACY_PACKAGE14", "1"}})) ==
+          "package13=0 package14=1 restored=[videoOverlay reflexSleep]");
+    // Package 13's master still restores everything, the parts after Package 14 included.
+    CHECK(restoredMask(env({{"VEYRA_TEST_RP_LEGACY_PACKAGE13", "1"}})) == (1u << count) - 1);
 }
 
 TEST(legacy_switches_work_from_slipstream_ini) {

@@ -49,9 +49,11 @@
 #include "veyra/pipeline/PushCleanPass.h"
 #include "veyra/pipeline/StreamChangePass.h"
 #include "veyra/pipeline/PushGpuPath.h"
+#include "veyra/pipeline/PushPredictPass.h"
 #include "veyra/engine/RecordingCompare.h"
 #include "veyra/engine/PushStreamOverlay.h"
 #include "veyra/engine/PushCanvas.h"
+#include "veyra/engine/PushPresentOverlay.h"
 #include "veyra/pipeline/GpuPassUtils.h"
 
 #include <d3d12sdklayers.h>
@@ -651,6 +653,226 @@ void testStreamOverlay(Gpu& gpu, bool hdr) {
     engine::setPushStreamOverlay(nullptr);
     check(engine::pushStreamOverlay(version) == nullptr, tag + ": cleared");
     check(!gpu.debugErrors(), tag + ": no D3D12 debug errors");
+}
+
+// Stream "present" R1 (engine/PushPresentOverlay.h, shaders/PushVideoOverlay.hlsl): the in-picture interface picture blended onto a
+// back buffer after the present blit. Every pixel outside the picture's rectangle stays bit-identical; a transparent texel
+// leaves its pixel bit-identical too; an opaque white texel gives the format's white (SDR 255; scRGB 203 nits = 2.5375; HDR10
+// the PQ code of 203 nits); a half-transparent red blends as src*a + dst*(1-a) in the buffer's code values; the buffer's
+// alpha is kept. A new upload waits while the previous one is still in flight. A stretched (smaller) buffer places it by
+// the ratio.
+double pqCode(double nits) {
+    const double m1 = 2610.0 / 16384.0, m2 = 2523.0 / 32.0, c1 = 3424.0 / 4096.0, c2 = 2413.0 / 128.0, c3 = 2392.0 / 128.0;
+    const double y = std::pow(nits / 10000.0, m1);
+    return std::pow((c1 + c2 * y) / (1.0 + c3 * y), m2);
+}
+float halfToFloat(uint16_t h) {
+    const uint32_t sign = uint32_t(h >> 15) << 31, exp = (h >> 10) & 31u, man = h & 1023u;
+    uint32_t bits = 0;
+    if (exp == 0) { if (!man) bits = sign; else { float f = std::ldexp(float(man), -24); return (h >> 15) ? -f : f; } }
+    else if (exp == 31) bits = sign | 0x7F800000u | (man << 13);
+    else bits = sign | ((exp + 112u) << 23) | (man << 13);
+    float f; std::memcpy(&f, &bits, 4); return f;
+}
+void testVideoOverlay(Gpu& gpu, engine::PushPresentOverlay::Mode mode) {
+    using Mode = engine::PushPresentOverlay::Mode;
+    const std::string tag = mode == Mode::Sdr ? "video overlay SDR" : mode == Mode::ScRgb ? "video overlay scRGB" : "video overlay HDR10";
+    constexpr uint32_t W = 64, H = 48;
+    auto* device = gpu.device.Get();
+    const DXGI_FORMAT format = mode == Mode::Sdr ? DXGI_FORMAT_R8G8B8A8_UNORM : mode == Mode::ScRgb ? DXGI_FORMAT_R16G16B16A16_FLOAT : DXGI_FORMAT_R10G10B10A2_UNORM;
+    const uint32_t bpp = mode == Mode::ScRgb ? 8 : 4;
+    D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+    D3D12_RESOURCE_DESC td{}; td.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D; td.Width = W; td.Height = H; td.DepthOrArraySize = 1; td.MipLevels = 1;
+    td.Format = format; td.SampleDesc.Count = 1; td.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+    Plane target{nullptr, format, W, H, bpp};
+    check(SUCCEEDED(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &td, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&target.texture))), tag + ": target created");
+    if (!target.texture) return;
+    ComPtr<ID3D12DescriptorHeap> rtvHeap;
+    D3D12_DESCRIPTOR_HEAP_DESC hd{}; hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV; hd.NumDescriptors = 1;
+    if (FAILED(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&rtvHeap)))) { check(false, tag + ": rtv heap"); return; }
+    device->CreateRenderTargetView(target.texture.Get(), nullptr, rtvHeap->GetCPUDescriptorHandleForHeapStart());
+    // The "blit output": a pattern in every pixel, its alpha opaque (each format's own encoding, finite FP16 values).
+    std::vector<uint8_t> before(size_t(W) * H * bpp);
+    for (uint32_t y = 0; y < H; ++y)
+        for (uint32_t x = 0; x < W; ++x) {
+            uint8_t* p = &before[(size_t(y) * W + x) * bpp];
+            if (mode == Mode::Sdr) { p[0] = uint8_t(x * 4); p[1] = uint8_t(y * 5); p[2] = uint8_t((x + y) * 3); p[3] = 255; }
+            else if (mode == Mode::Pq) { const uint32_t v = ((x * 16) & 1023u) | (((y * 21) & 1023u) << 10) | ((((x + y) * 9) & 1023u) << 20) | (3u << 30); std::memcpy(p, &v, 4); }
+            else { const uint16_t c[4] = {uint16_t(0x3000 + x * 7), uint16_t(0x3400 + y * 5), uint16_t(0x2C00 + x + y), 0x3C00}; std::memcpy(p, c, 8); }
+        }
+    // The picture: 10 x 6 at (20, 10); columns 0-3 opaque white, 4-5 half-transparent red, 6-9 clear.
+    engine::PushVideoOverlayImage image;
+    image.x = 20; image.y = 10; image.width = 10; image.height = 6; image.rgba.assign(size_t(10) * 6 * 4, 0);
+    for (uint32_t y = 0; y < 6; ++y)
+        for (uint32_t x = 0; x < 6; ++x) {
+            uint8_t* p = &image.rgba[(size_t(y) * 10 + x) * 4];
+            if (x < 4) { p[0] = p[1] = p[2] = p[3] = 255; } else { p[0] = 255; p[1] = 0; p[2] = 0; p[3] = 128; }
+        }
+    engine::PushPresentOverlay overlay;
+    check(overlay.create(device, format, mode), tag + ": pass created");
+    if (!overlay.created()) return;
+    const auto run = [&](unsigned windowW, unsigned windowH, std::vector<uint8_t>& out) {
+        if (!gpu.begin()) return false;
+        auto fill = recordFill(gpu, target, before, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        const bool uploaded = !overlay.hasPicture() && overlay.upload(gpu.list.Get(), image);
+        const bool drew = overlay.draw(gpu.list.Get(), rtvHeap->GetCPUDescriptorHandleForHeapStart(), windowW, windowH, W, H);
+        auto read = recordRead(gpu, target, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        D3D12_RESOURCE_BARRIER b{}; b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION; b.Transition.pResource = target.texture.Get();
+        b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES; b.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        b.Transition.StateAfter = D3D12_RESOURCE_STATE_COMMON; gpu.list->ResourceBarrier(1, &b);
+        if (!gpu.submitAndWait()) return false;
+        overlay.submitted(gpu.fence.Get(), gpu.value, uploaded, drew);
+        out = mapRead(target, read.Get());
+        return drew && out.size() == before.size();
+    };
+    std::vector<uint8_t> after;
+    check(run(W, H, after), tag + ": uploaded and drawn");
+    if (after.size() != before.size()) return;
+    const auto inside = [](uint32_t x, uint32_t y) { return x >= 20 && x < 30 && y >= 10 && y < 16; };
+    size_t changedOutside = 0, changedClear = 0;
+    for (uint32_t y = 0; y < H; ++y)
+        for (uint32_t x = 0; x < W; ++x) {
+            const bool same = std::memcmp(&after[(size_t(y) * W + x) * bpp], &before[(size_t(y) * W + x) * bpp], bpp) == 0;
+            if (!inside(x, y) && !same) ++changedOutside;
+            if (inside(x, y) && x >= 26 && !same) ++changedClear;
+        }
+    check(changedOutside == 0, tag + ": every pixel outside the picture is bit-identical", std::to_string(changedOutside) + " changed", "0");
+    check(changedClear == 0, tag + ": a clear texel leaves its pixel bit-identical", std::to_string(changedClear) + " changed", "0");
+    // Channel values of one pixel: (r, g, b, a) as floats in code values 0..1 (SDR, HDR10) or linear scRGB.
+    const auto channels = [&](const std::vector<uint8_t>& b, uint32_t x, uint32_t y) {
+        const uint8_t* p = &b[(size_t(y) * W + x) * bpp];
+        std::array<double, 4> c{};
+        if (mode == Mode::Sdr) for (int i = 0; i < 4; ++i) c[i] = p[i] / 255.0;
+        else if (mode == Mode::Pq) { uint32_t v; std::memcpy(&v, p, 4); c = {double(v & 1023u) / 1023, double((v >> 10) & 1023u) / 1023, double((v >> 20) & 1023u) / 1023, double(v >> 30) / 3}; }
+        else { uint16_t h[4]; std::memcpy(h, p, 8); for (int i = 0; i < 4; ++i) c[i] = halfToFloat(h[i]); }
+        return c;
+    };
+    const double white = mode == Mode::Sdr ? 1.0 : mode == Mode::ScRgb ? 203.0 / 80.0 : pqCode(203.0);
+    const double tolerance = mode == Mode::Sdr ? 1.0 / 255 + 1e-6 : mode == Mode::Pq ? 1.5 / 1023 : 0.004;
+    const auto w = channels(after, 21, 12);
+    check(std::abs(w[0] - white) <= tolerance && std::abs(w[1] - white) <= tolerance && std::abs(w[2] - white) <= tolerance,
+          tag + ": an opaque white texel gives the format's 203-nit (SDR: full) white", std::to_string(w[0]), std::to_string(white));
+    check(std::abs(w[3] - channels(before, 21, 12)[3]) < 1e-9, tag + ": the buffer's alpha is kept");
+    // Half-transparent red over the pattern, in the buffer's code values.
+    const double a = 128.0 / 255.0;
+    // Red (sRGB 1, 0, 0) at 203 nits: in HDR10 it is first converted to BT.2020 (its green and blue are not zero there).
+    const double red = mode == Mode::Pq ? pqCode(203.0 * 0.627404) : white, black = mode == Mode::Pq ? pqCode(203.0 * 0.069097) : 0.0;
+    const auto r = channels(after, 24, 13), o = channels(before, 24, 13);
+    const double wantR = red * a + o[0] * (1 - a), wantG = black * a + o[1] * (1 - a);
+    check(std::abs(r[0] - wantR) <= 2 * tolerance && std::abs(r[1] - wantG) <= 2 * tolerance, tag + ": half-transparent red blends as src*a + dst*(1-a)",
+          std::to_string(r[0]) + "," + std::to_string(r[1]), std::to_string(wantR) + "," + std::to_string(wantG));
+    // The upload guard: while the last upload's list has not finished, a new picture is not written (nothing recorded).
+    overlay.submitted(gpu.fence.Get(), gpu.value + 1000, true, true);
+    if (gpu.begin()) {
+        check(!overlay.upload(gpu.list.Get(), image), tag + ": a new picture waits while the previous upload is in flight");
+        gpu.list->Close();
+    }
+    overlay.submitted(gpu.fence.Get(), gpu.value, true, true);
+    if (mode == Mode::Sdr) {
+        // A deferred resize: the 64 x 48 buffer stretched to a 128 x 96 window; the picture at window (20, 10) lands at (10, 5).
+        std::vector<uint8_t> scaled;
+        check(run(2 * W, 2 * H, scaled), tag + ": drawn into a stretched buffer");
+        if (scaled.size() == before.size()) {
+            check(channels(scaled, 10, 5)[0] >= 1.0 - tolerance, tag + ": stretched buffer: the picture starts at half the window position");
+            check(std::memcmp(&scaled[(size_t(5) * W + 9) * bpp], &before[(size_t(5) * W + 9) * bpp], bpp) == 0 &&
+                  std::memcmp(&scaled[(size_t(8) * W + 10) * bpp], &before[(size_t(8) * W + 10) * bpp], bpp) == 0,
+                  tag + ": stretched buffer: nothing outside the scaled rectangle changes");
+        }
+    }
+    check(!gpu.debugErrors(), tag + ": no D3D12 debug errors");
+}
+
+// Stream "present" R3 (VEYRA_EXP_RP_PRESENT_BLIT_AHEAD, engine/PushBlitAhead.h): on a real FLIP_DISCARD swap chain with 3
+// buffers and maximum frame latency 1 (the presenter's setting while pacing), a frame's blit submitted AHEAD of its Present
+// writes the current back buffer; a second blit for a replacing frame (the first was dropped) writes the SAME buffer and is
+// the one that buffer holds (queue order); the back buffer index moves only at Present, by one, through all three; nothing is
+// presented before its blit was submitted on the same queue. Needs a desktop session (a small window is shown off to the
+// side); the debug layer, when enabled, must stay silent.
+void testBlitAheadOrder(Gpu& gpu) {
+    const std::string tag = "blit ahead";
+    constexpr UINT W = 64, H = 48;
+    WNDCLASSW wc{}; wc.hInstance = GetModuleHandleW(nullptr); wc.lpfnWndProc = DefWindowProcW; wc.lpszClassName = L"PushFpsBlitAheadTest";
+    RegisterClassW(&wc);
+    HWND window = CreateWindowExW(WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW, wc.lpszClassName, L"", WS_POPUP, 0, 0, int(W), int(H), nullptr, nullptr, wc.hInstance, nullptr);
+    check(window != nullptr, tag + ": window created");
+    if (!window) return;
+    ShowWindow(window, SW_SHOWNOACTIVATE);
+    ComPtr<IDXGIFactory2> factory;
+    ComPtr<IDXGISwapChain1> chain1;
+    ComPtr<IDXGISwapChain3> chain;
+    DXGI_SWAP_CHAIN_DESC1 sd{}; sd.Width = W; sd.Height = H; sd.Format = DXGI_FORMAT_R8G8B8A8_UNORM; sd.SampleDesc.Count = 1;
+    sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT; sd.BufferCount = 3; sd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+    sd.Flags = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
+    const bool made = SUCCEEDED(CreateDXGIFactory2(0, IID_PPV_ARGS(&factory))) &&
+                      SUCCEEDED(factory->CreateSwapChainForHwnd(gpu.queue.Get(), window, &sd, nullptr, nullptr, &chain1)) && SUCCEEDED(chain1.As(&chain));
+    check(made, tag + ": FLIP_DISCARD swap chain with 3 buffers created");
+    if (!made) { DestroyWindow(window); UnregisterClassW(wc.lpszClassName, wc.hInstance); return; }
+    chain->SetMaximumFrameLatency(1);
+    const HANDLE latency = chain->GetFrameLatencyWaitableObject();
+    ComPtr<ID3D12DescriptorHeap> rtvHeap;
+    D3D12_DESCRIPTOR_HEAP_DESC hd{}; hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV; hd.NumDescriptors = 3;
+    gpu.device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&rtvHeap));
+    const UINT inc = gpu.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+    std::array<ComPtr<ID3D12Resource>, 3> buffers;
+    for (UINT i = 0; i < 3; ++i) {
+        chain->GetBuffer(i, IID_PPV_ARGS(&buffers[i]));
+        gpu.device->CreateRenderTargetView(buffers[i].Get(), nullptr, {rtvHeap->GetCPUDescriptorHandleForHeapStart().ptr + size_t(i) * inc});
+    }
+    // One "blit" (a clear to the frame's colour) into the current back buffer, read back in the same list (legal before
+    // Present: the buffer is ours until then).
+    const auto blit = [&](UINT index, uint8_t value, std::vector<uint8_t>& readback) {
+        if (!gpu.begin()) return false;
+        D3D12_RESOURCE_BARRIER b{}; b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION; b.Transition.pResource = buffers[index].Get();
+        b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES; b.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+        b.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET; gpu.list->ResourceBarrier(1, &b);
+        const float colour[4] = {float(value) / 255.0f, 0.0f, 0.0f, 1.0f};
+        gpu.list->ClearRenderTargetView({rtvHeap->GetCPUDescriptorHandleForHeapStart().ptr + size_t(index) * inc}, colour, 0, nullptr);
+        std::swap(b.Transition.StateBefore, b.Transition.StateAfter); gpu.list->ResourceBarrier(1, &b);
+        Plane plane{buffers[index], DXGI_FORMAT_R8G8B8A8_UNORM, W, H, 4};
+        auto rb = recordRead(gpu, plane, D3D12_RESOURCE_STATE_PRESENT);
+        if (!gpu.submit()) return false;   // submitted, not waited for: Present follows on the same queue
+        readback.clear();
+        if (!gpu.wait()) return false;
+        readback = mapRead(plane, rb.Get());
+        return readback.size() == size_t(W) * H * 4;
+    };
+    UINT expectedIndex = chain->GetCurrentBackBufferIndex();
+    std::array<bool, 3> visited{};
+    bool ok = true, latencyTimedOut = false;
+    for (int frame = 0; frame < 12 && ok; ++frame) {
+        const UINT index = chain->GetCurrentBackBufferIndex();
+        ok = index == expectedIndex;
+        check(ok, tag + ": the back buffer index moves only at Present, by one", std::to_string(index), std::to_string(expectedIndex));
+        visited[index] = true;
+        std::vector<uint8_t> pixels;
+        const uint8_t value = uint8_t(20 + frame * 10);
+        ok = ok && blit(index, value, pixels) && pixels[0] == value;
+        check(ok, tag + ": the blit ahead wrote the current back buffer");
+        if (ok && frame % 3 == 1) {
+            // Dropped after its blit: the replacing frame's blit goes into the same buffer and wins (queue order).
+            ok = chain->GetCurrentBackBufferIndex() == index && blit(index, uint8_t(value + 5), pixels) && pixels[0] == uint8_t(value + 5);
+            check(ok, tag + ": a dropped prepared frame is overwritten in the same back buffer by the next blit");
+        }
+        // The deadline: capacity (maximum latency 1), then Present (sync 0: no vblank wait on a test desktop).
+        if (WaitForSingleObject(latency, 2000) != WAIT_OBJECT_0) latencyTimedOut = true;
+        const HRESULT hr = chain->Present(0, 0);
+        ok = ok && SUCCEEDED(hr);
+        check(SUCCEEDED(hr), tag + ": Present after the blit ahead", std::format("0x{:X}", unsigned(hr)), "S_OK");
+        expectedIndex = (index + 1) % 3;
+    }
+    check(ok && visited[0] && visited[1] && visited[2], tag + ": all three buffers used in turn");
+    if (latencyTimedOut) std::printf("NOTE %s: the frame latency object did not signal within 2 s once (no display on this machine?)\n", currentTest.load());
+    // Teardown: wait for the queue (the last blit and Present) before anything is released. The test's list is already
+    // closed and submitted here; submitting it again (the first version of this test) re-executed a list whose readback
+    // buffer had been released, which the debug layer reported (a test bug, not the presenter's).
+    gpu.queue->Signal(gpu.fence.Get(), ++gpu.value);
+    gpu.wait();
+    check(!gpu.debugErrors(), tag + ": no D3D12 debug errors");
+    if (latency) CloseHandle(latency);
+    buffers = {};
+    chain.Reset(); chain1.Reset();
+    DestroyWindow(window);
+    UnregisterClassW(wc.lpszClassName, wc.hInstance);
 }
 
 // PushFPS outputs and canvas (engine/PushCanvas.h, shaders/PushCanvasConvert.hlsl): the presented
@@ -1504,6 +1726,257 @@ void testGpuPathRealWait(Gpu& gpu) {
     check(!gpu.debugErrors(), "gpu-path: no D3D12 debug-layer error across the two queues");
 }
 
+// Stream "predict" (pipeline/PushPredictPass.h, shaders/PushPredict.hlsl): the predicted frame P = B advanced by 1/3 of
+// the A -> B motion, from A and B as VFG keeps them (pitch-linear 32-bit words) and a given flow. The flow here is
+// written by the test (CUDA and the app's DIS flow are not part of it), at the working size so that a 3-pixel motion
+// moves P by exactly one pixel and the expected picture is exact.
+//  - zero motion: P is B bit for bit (held pixels); A == B: P is B bit for bit (still pixels)
+//  - a uniform translation of 3 px per interval: P = B shifted by 1 px, bit for bit, except the 3 columns whose source
+//    lies outside A (they fall back to B); the counters say exactly that
+//  - a static HUD rectangle over that moving background: the HUD stays bit-identical to B although the flow (as real
+//    flow often does) carries the background's motion over it
+//  - untrusted motion (low trust, or a flow that does not match the pictures): every moving pixel is B
+//  - R10G10B10A2 (HDR10) as well as R8G8B8A8 (SDR); no debug-layer error
+//  - a pass that was never initialised holds and answers nothing (the graph creates it only with the switch set)
+namespace predict_gpu {
+uint16_t halfOf(int v) {   // small integers only (exact in half precision)
+    if (v == 0) return 0;
+    const unsigned sign = v < 0 ? 0x8000u : 0u;
+    unsigned m = unsigned(v < 0 ? -v : v), e = 0;
+    while ((m >> e) > 1) ++e;
+    const unsigned mantissa = (m << (10 - e)) & 0x3FF;
+    return uint16_t(sign | ((e + 15) << 10) | mantissa);
+}
+// Any normal float (|f| >= 2^-14) or 0 to half precision, rounded to nearest (the stored flow v x trust is not an integer).
+uint16_t halfOfFloat(float f) {
+    uint32_t bits = 0;
+    std::memcpy(&bits, &f, 4);
+    const uint32_t sign = (bits >> 16) & 0x8000u;
+    const int exponent = int((bits >> 23) & 0xFF) - 127 + 15;
+    if ((bits & 0x7FFFFFFFu) == 0 || exponent <= 0) return uint16_t(sign);
+    uint32_t mantissa = bits & 0x7FFFFFu;
+    uint32_t half = sign | (uint32_t(exponent) << 10) | (mantissa >> 13);
+    if ((mantissa & 0x1FFFu) > 0x1000u || ((mantissa & 0x1FFFu) == 0x1000u && (half & 1u))) ++half;
+    return uint16_t(half);
+}
+// Every colour channel within one code of the other (a recovered motion that is exact to about 1e-3 pixel).
+bool withinOneCode(uint32_t a, uint32_t b, bool tenBit) {
+    const int bits = tenBit ? 10 : 8, mask = (1 << bits) - 1;
+    for (int c = 0; c < 3; ++c) {
+        const int x = int((a >> (c * bits)) & uint32_t(mask)), y = int((b >> (c * bits)) & uint32_t(mask));
+        if (x - y > 1 || y - x > 1) return false;
+    }
+    return true;
+}
+}
+void testPredict(Gpu& gpu, bool tenBit) {
+    using namespace predict_gpu;
+    constexpr uint32_t W = 96, H = 40;
+    const DXGI_FORMAT F = tenBit ? DXGI_FORMAT_R10G10B10A2_UNORM : DXGI_FORMAT_R8G8B8A8_UNORM;
+    const std::string tag = tenBit ? "predict hdr10" : "predict sdr";
+    auto* device = gpu.device.Get();
+    {
+        pipeline::PushPredictPass idle;
+        pipeline::PushPredictCounters none;
+        check(!idle.ready() && !idle.flowReady() && !idle.counters(0, none), tag + ": a pass never initialised holds and answers nothing");
+    }
+    pipeline::PushPredictPass pass;
+    check(pass.initialize(device, W, H, F), tag + ": pass created");
+    if (!pass.ready()) return;
+    const uint32_t pitch = (W * 4 + 255) & ~255u;
+    // One packed word per pixel; colour values differ between columns 3 apart, so no moving pixel looks still.
+    auto word = [&](int x, int y) -> uint32_t {
+        const uint32_t r = uint32_t((x * 37 + y * 11) & 255), g = uint32_t((x * 53 + 7) & 255), b = uint32_t((y * 29 + x * 5 + 3) & 255);
+        if (tenBit) return (r * 4 + 1) | ((g * 4 + 2) << 10) | ((b * 4 + 3) << 20) | (3u << 30);
+        return r | (g << 8) | (b << 16) | (255u << 24);
+    };
+    auto hud = [](int x, int y) { return x >= 40 && x < 64 && y >= 8 && y < 20; };
+    const uint32_t hudWord = tenBit ? (1000u | (12u << 10) | (500u << 20) | (3u << 30)) : (250u | (12u << 8) | (128u << 16) | (255u << 24));
+    // picture(shift, withHud): content moved right by `shift` pixels.
+    auto buffer = [&](int shift, bool withHud) {
+        auto upload = makeBuffer(device, uint64_t(pitch) * H, D3D12_HEAP_TYPE_UPLOAD);
+        uint8_t* mapped = nullptr;
+        if (!upload || FAILED(upload->Map(0, nullptr, reinterpret_cast<void**>(&mapped))) || !mapped) return ComPtr<ID3D12Resource>{};
+        for (uint32_t y = 0; y < H; ++y)
+            for (uint32_t x = 0; x < W; ++x) {
+                const uint32_t v = withHud && hud(int(x), int(y)) ? hudWord : word(int(x) - shift, int(y));
+                std::memcpy(mapped + size_t(y) * pitch + size_t(x) * 4, &v, 4);
+            }
+        upload->Unmap(0, nullptr);
+        return upload;
+    };
+    Plane motion{pipeline::makeTexture(device, W, H, DXGI_FORMAT_R16G16_FLOAT, true), DXGI_FORMAT_R16G16_FLOAT, W, H, 4};
+    Plane trust{pipeline::makeTexture(device, W, H, DXGI_FORMAT_R8_UNORM, true), DXGI_FORMAT_R8_UNORM, W, H, 1};
+    Plane output{pipeline::makeTexture(device, W, H, F, true), F, W, H, 4};
+    check(motion.texture && trust.texture && output.texture, tag + ": textures created");
+    if (!motion.texture || !trust.texture || !output.texture) return;
+    struct Run { std::vector<uint32_t> words; pipeline::PushPredictCounters counters; bool ok = false; };
+    auto run = [&](ID3D12Resource* a, ID3D12Resource* b, int mx, uint8_t trustValue) {
+        Run r;
+        std::vector<uint8_t> m(size_t(W) * H * 4), t(size_t(W) * H, trustValue);
+        const uint16_t hx = halfOf(mx);
+        for (size_t i = 0; i < size_t(W) * H; ++i) std::memcpy(m.data() + i * 4, &hx, 2);   // y component stays 0
+        if (!gpu.begin()) return r;
+        auto mu = recordFill(gpu, motion, m, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON);
+        auto tu = recordFill(gpu, trust, t, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON);
+        const bool recorded = pass.recordPredict(gpu.list.Get(), 0, a, b, pitch, motion.texture.Get(), trust.texture.Get(),
+                                                 output.texture.Get(), pipeline::pushPredictStep(3));
+        auto rb = recordRead(gpu, output, D3D12_RESOURCE_STATE_COMMON);
+        if (!recorded || !mu || !tu || !rb || !gpu.submitAndWait()) return r;
+        const auto bytes = mapRead(output, rb.Get());
+        r.words.resize(size_t(W) * H);
+        if (bytes.size() == r.words.size() * 4) std::memcpy(r.words.data(), bytes.data(), bytes.size());
+        r.ok = bytes.size() == r.words.size() * 4 && pass.counters(0, r.counters);
+        return r;
+    };
+    auto at = [&](const std::vector<uint32_t>& v, uint32_t x, uint32_t y) { return v[size_t(y) * W + x]; };
+    const auto a0 = buffer(0, false), b3 = buffer(3, false), a0h = buffer(0, true), b3h = buffer(3, true);
+    check(a0 && b3 && a0h && b3h, tag + ": input buffers");
+    if (!a0 || !b3 || !a0h || !b3h) return;
+
+    // Zero motion with a moving picture: every pixel held, P == B.
+    auto r = run(a0.Get(), b3.Get(), 0, 255);
+    check(r.ok, tag + ": zero motion ran");
+    if (r.ok) {
+        bool same = true;
+        for (uint32_t y = 0; y < H; ++y) for (uint32_t x = 0; x < W; ++x) same = same && at(r.words, x, y) == word(int(x) - 3, int(y));
+        check(same, tag + ": zero motion: P is B bit for bit");
+        checkValue(r.counters.held == W * H && r.counters.warped == 0, tag + ": zero motion: all held", r.counters.held, W * H);
+    }
+    // A == B: every pixel still, whatever the flow says.
+    r = run(b3.Get(), b3.Get(), -3, 255);
+    if (r.ok) {
+        bool same = true;
+        for (uint32_t y = 0; y < H; ++y) for (uint32_t x = 0; x < W; ++x) same = same && at(r.words, x, y) == word(int(x) - 3, int(y));
+        check(same && r.counters.still == W * H, tag + ": a still picture: P is B bit for bit, every pixel still");
+    }
+    // Uniform translation: B = A moved right by 3; flow B -> A = -3; P = B moved right by 1 more.
+    r = run(a0.Get(), b3.Get(), -3, 255);
+    check(r.ok, tag + ": translation ran");
+    if (r.ok) {
+        bool shifted = true, edges = true;
+        for (uint32_t y = 0; y < H; ++y)
+            for (uint32_t x = 0; x < W; ++x) {
+                if (x >= 3) shifted = shifted && at(r.words, x, y) == word(int(x) - 4, int(y));
+                else edges = edges && at(r.words, x, y) == word(int(x) - 3, int(y));
+            }
+        check(shifted, tag + ": translation: P is B moved by a third of the motion (1 px), bit for bit");
+        check(edges, tag + ": translation: pixels whose source lies outside A stay B");
+        checkValue(r.counters.warped == (W - 3) * H && r.counters.fallback == 3 * H, tag + ": translation counters",
+                   std::format("warped {} fallback {}", r.counters.warped, r.counters.fallback), std::format("warped {} fallback {}", (W - 3) * H, 3 * H));
+    }
+    // Static HUD over the moving background, the flow carrying the background's motion over the HUD too.
+    r = run(a0h.Get(), b3h.Get(), -3, 255);
+    if (r.ok) {
+        bool hudSame = true, background = true;
+        for (uint32_t y = 0; y < H; ++y)
+            for (uint32_t x = 0; x < W; ++x) {
+                if (hud(int(x), int(y))) hudSame = hudSame && at(r.words, x, y) == hudWord;
+                else if (x >= 3 && !hud(int(x) - 1, int(y)) && !hud(int(x) - 3, int(y)))
+                    background = background && at(r.words, x, y) == word(int(x) - 4, int(y));
+            }
+        check(hudSame, tag + ": static HUD stays bit-identical to B");
+        check(background, tag + ": the background around the HUD still moves");
+    }
+    // Untrusted: low trust everywhere.
+    r = run(a0.Get(), b3.Get(), -3, 51);
+    if (r.ok) {
+        bool same = true;
+        for (uint32_t y = 0; y < H; ++y) for (uint32_t x = 0; x < W; ++x) same = same && at(r.words, x, y) == word(int(x) - 3, int(y));
+        check(same && r.counters.warped == 0 && r.counters.fallback == W * H, tag + ": low trust: every moving pixel is B");
+        check(!pipeline::pushPredictFrameUsable(r.counters), tag + ": low trust: the frame is reported unusable");
+    }
+    // Untrusted: trusted but wrong flow (+5 instead of -3): B does not match where the flow says it came from.
+    r = run(a0.Get(), b3.Get(), 5, 255);
+    if (r.ok) {
+        bool same = true;
+        for (uint32_t y = 0; y < H; ++y) for (uint32_t x = 0; x < W; ++x) same = same && at(r.words, x, y) == word(int(x) - 3, int(y));
+        check(same && r.counters.warped == 0, tag + ": a flow that does not match the pictures: every pixel is B");
+    }
+    // Review of 24 Nov (MUST 1, MUST 2): the flow as the graph really feeds it, at a QUARTER of the size and stored the way
+    // GpuDisValidate writes it (the vector times its trust, 0 where the trust is 0). B = A moved right by 3 work pixels
+    // (-0.75 flow pixels B -> A). Flow columns 0-7 trust 1, 8-15 trust 0.6 (153/255), 16-23 trust 0 (the flow failed).
+    {
+        constexpr uint32_t QW = W / 4, QH = H / 4;
+        Plane qMotion{pipeline::makeTexture(device, QW, QH, DXGI_FORMAT_R16G16_FLOAT, true), DXGI_FORMAT_R16G16_FLOAT, QW, QH, 4};
+        Plane qTrust{pipeline::makeTexture(device, QW, QH, DXGI_FORMAT_R8_UNORM, true), DXGI_FORMAT_R8_UNORM, QW, QH, 1};
+        check(qMotion.texture && qTrust.texture, tag + ": quarter-size flow textures created");
+        if (!qMotion.texture || !qTrust.texture) return;
+        // layout 0: trust 1 / 0.6 / 0 by thirds; 1: trust 0 everywhere (a cut); 2: trust 1 in the first third, 0 elsewhere.
+        auto runQuarter = [&](int layout) {
+            Run q;
+            std::vector<uint8_t> m(size_t(QW) * QH * 4, 0), t(size_t(QW) * QH, 0);
+            for (uint32_t y = 0; y < QH; ++y)
+                for (uint32_t x = 0; x < QW; ++x) {
+                    const uint8_t tv = layout == 1 ? uint8_t(0) : x < 8 ? uint8_t(255) : (x < 16 && layout == 0) ? uint8_t(153) : uint8_t(0);
+                    const float stored = tv != 0 ? -0.75f * (float(tv) / 255.0f) : 0.0f;   // GpuDisValidate: v x trust, 0 where trust is 0
+                    const uint16_t h = halfOfFloat(stored);
+                    std::memcpy(m.data() + (size_t(y) * QW + x) * 4, &h, 2);
+                    t[size_t(y) * QW + x] = tv;
+                }
+            if (!gpu.begin()) return q;
+            auto mu = recordFill(gpu, qMotion, m, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON);
+            auto tu = recordFill(gpu, qTrust, t, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON);
+            const bool recorded = pass.recordPredict(gpu.list.Get(), 0, a0.Get(), b3.Get(), pitch, qMotion.texture.Get(), qTrust.texture.Get(),
+                                                     output.texture.Get(), pipeline::pushPredictStep(3));
+            auto rb = recordRead(gpu, output, D3D12_RESOURCE_STATE_COMMON);
+            if (!recorded || !mu || !tu || !rb || !gpu.submitAndWait()) return q;
+            const auto bytes = mapRead(output, rb.Get());
+            q.words.resize(size_t(W) * H);
+            if (bytes.size() == q.words.size() * 4) std::memcpy(q.words.data(), bytes.data(), bytes.size());
+            q.ok = bytes.size() == q.words.size() * 4 && pass.counters(0, q.counters);
+            return q;
+        };
+        r = runQuarter(0);
+        check(r.ok, tag + ": quarter-size trust-scaled flow ran");
+        if (r.ok) {
+            bool fullTrust = true, partTrust = true, failed = true;
+            for (uint32_t y = 0; y < H; ++y)
+                for (uint32_t x = 0; x < W; ++x) {
+                    const uint32_t got = at(r.words, x, y);
+                    if (x >= 3 && x <= 28) fullTrust = fullTrust && got == word(int(x) - 4, int(y));           // trust 1: exact third
+                    else if (x >= 36 && x <= 59) partTrust = partTrust && withinOneCode(got, word(int(x) - 4, int(y)), tenBit);   // trust 0.6: the whole third
+                    else if (x >= 68) failed = failed && got == word(int(x) - 3, int(y));                    // trust 0: B exactly
+                }
+            check(fullTrust, tag + ": quarter flow, trust 1: P is B moved by the whole third, bit for bit");
+            check(partTrust, tag + ": quarter flow, trust 0.6: P is B moved by the whole third (not 60 % of it), within one code");
+            check(failed, tag + ": quarter flow, failed flow (trust 0): P is B");
+            checkValue(r.counters.held == 0 && r.counters.fallback >= 31 * H && r.counters.warped >= 50 * H, tag + ": quarter flow counters: the failed flow counts as fallback, never as held",
+                       std::format("held {} fallback {} warped {}", r.counters.held, r.counters.fallback, r.counters.warped), std::format("held 0 fallback >= {} warped >= {}", 31 * H, 50 * H));
+            check(!pipeline::pushPredictFrameUsable(r.counters), tag + ": quarter flow: a third of the moving picture without flow makes the frame unusable");
+        }
+        r = runQuarter(1);
+        if (r.ok) {
+            bool same = true;
+            for (uint32_t y = 0; y < H; ++y) for (uint32_t x = 0; x < W; ++x) same = same && at(r.words, x, y) == word(int(x) - 3, int(y));
+            check(same && r.counters.fallback == W * H && r.counters.held == 0, tag + ": a failed flow everywhere (a cut): P is B, every moving pixel a fallback");
+            check(!pipeline::pushPredictFrameUsable(r.counters), tag + ": a failed flow everywhere: the frame is unusable");
+        }
+        // Review 2, SHOULD 3: a third of the moving picture moved, two thirds held -> more fell back than moved: P is B as
+        // a whole (bit for bit, the moved third included), decided on the GPU; the counters still say what the warp did.
+        r = runQuarter(2);
+        check(r.ok, tag + ": mostly held ran");
+        if (r.ok) {
+            bool same = true;
+            for (uint32_t y = 0; y < H; ++y) for (uint32_t x = 0; x < W; ++x) same = same && at(r.words, x, y) == word(int(x) - 3, int(y));
+            check(pipeline::pushPredictWholeFrameHeld(r.counters) && r.counters.warped > 0, tag + ": mostly held: the counters show both moved and held pixels");
+            check(same, tag + ": mostly held: P is B as a whole, no torn mix of moved and held regions");
+        }
+        // And the earlier layout (more moved than held) is left as the warp made it (checked above: not whole-frame).
+        r = runQuarter(0);
+        if (r.ok) check(!pipeline::pushPredictWholeFrameHeld(r.counters) && at(r.words, 10, 5) == word(10 - 4, 5), tag + ": mostly moved: P keeps its moved pixels");
+    }
+    {   // Scheduling review F: the counters of the last P by its number are the slot's counters.
+        pipeline::PushPredictCounters bySlot, byNumber;
+        const auto number = pass.lastSequence();
+        check(number > 0 && pass.counters(0, bySlot) && pass.countersOf(number, byNumber) && bySlot.held == byNumber.held &&
+              bySlot.fallback == byNumber.fallback && bySlot.warped == byNumber.warped && bySlot.still == byNumber.still,
+              tag + ": counters by P number match the slot's");
+        check(!pass.countersOf(number + 1, byNumber), tag + ": a P not recorded has no counters");
+    }
+    check(!gpu.debugErrors(), tag + ": no D3D12 debug-layer error");
+}
+
 void testHudLock(Gpu& gpu) {
     constexpr uint32_t W = 256, H = 144;
     constexpr DXGI_FORMAT F = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -2106,6 +2579,10 @@ int main(int argc, char** argv) {
         {"scene-overlay", [](Gpu& g) { testStreamOverlay(g, false); }},
         {"scene-overlay-hdr", [](Gpu& g) { testStreamOverlay(g, true); }},
         {"canvas-convert", [](Gpu& g) { testCanvasConvert(g); }},
+        {"video-overlay", [](Gpu& g) { testVideoOverlay(g, engine::PushPresentOverlay::Mode::Sdr); }},
+        {"video-overlay-scrgb", [](Gpu& g) { testVideoOverlay(g, engine::PushPresentOverlay::Mode::ScRgb); }},
+        {"video-overlay-hdr10", [](Gpu& g) { testVideoOverlay(g, engine::PushPresentOverlay::Mode::Pq); }},
+        {"blit-ahead-order", [](Gpu& g) { testBlitAheadOrder(g); }},
         {"live-layers", [](Gpu& g) { testLiveLayers(g, false); }},
         {"live-layers-hdr", [](Gpu& g) { testLiveLayers(g, true); }},
         {"label-scale", [](Gpu&) { testLabelScale(); }},
@@ -2119,6 +2596,8 @@ int main(int argc, char** argv) {
         {"pipeline-probe", [](Gpu& g) { testPipelineProbe(g); }},
         {"hud-lock", [](Gpu& g) { testHudLock(g); }},
         {"gpu-path-real-wait", [](Gpu& g) { testGpuPathRealWait(g); }},
+        {"predict", [](Gpu& g) { testPredict(g, false); }},
+        {"predict-hdr10", [](Gpu& g) { testPredict(g, true); }},
         {"clean-dither", [](Gpu& g) { testCleanDither(g); }},
         {"stream-change", [](Gpu& g) { testStreamChange(g); }},
         {"pushflow-sizes", [](Gpu&) { testPushFlowSizes(); }},

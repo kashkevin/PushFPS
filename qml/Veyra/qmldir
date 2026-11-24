@@ -109,6 +109,7 @@ PushLatencyTestDialog 1.0 PushLatencyTestDialog.qml
 PushModeRow 1.0 PushModeRow.qml
 PushSmartLinkRow 1.0 PushSmartLinkRow.qml
 PushSmoothnessRow 1.0 PushSmoothnessRow.qml
+PushLowDelayRow 1.0 PushLowDelayRow.qml
 PushModeDriver 1.0 PushModeDriver.qml
 PushProfileRow 1.0 PushProfileRow.qml
 PushStatsOverlay 1.0 PushStatsOverlay.qml

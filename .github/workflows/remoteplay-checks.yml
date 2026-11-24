@@ -170,6 +170,12 @@ jobs:
             '#include "veyra/engine/PushNrAdapt.h"',
             '#include "veyra/engine/PushSizes.h"',
             '#include "veyra/pipeline/PushGpuPath.h"',
+            '#include "veyra/pipeline/PushPredict.h"',
+            '#include "veyra/engine/PushLowDelay.h"',
+            '#include "veyra/engine/PushDelaySplit.h"',
+            '#include "veyra/engine/PushVideoOverlay.h"',
+            '#include "veyra/engine/PushFgHealth.h"',
+            '#include "veyra/engine/PushBlitAhead.h"',
             'int main() { return 0; }') | Set-Content -Encoding ascii out\headers.cpp
           $log = cl /nologo /std:c++20 /EHsc /utf-8 /W4 /WX /permissive- /DNOMINMAX /DUNICODE /D_UNICODE /Iinclude /c /Foout\ out\headers.cpp 2>&1 | ForEach-Object { "$_" }
           $code = $LASTEXITCODE

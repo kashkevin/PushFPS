@@ -65,6 +65,7 @@ public:
 
     bool wantsRawFrames() const override;
     bool record(ID3D12GraphicsCommandList* list, const Frame& frame) override;
+    bool capturing() const override { std::lock_guard lock(m_); return running_ || pending_ || reading_; }
     void submitted(ID3D12Fence* fence, uint64_t value) override;
     void discarded() override;
 

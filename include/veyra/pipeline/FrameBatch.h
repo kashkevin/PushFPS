@@ -28,6 +28,7 @@ struct FrameLease {
     uint64_t readyFence=0,consumerFence=0;
     uint32_t slot=0;
     bool referencesValid=false;
+    bool predicted=false;   // stream "predict": the predicted frame P (our own pass, not the generator's output)
     bool ready()const{return fenceComplete(readyFenceObject.Get(),readyFence);}
 };
 struct BatchFrame {

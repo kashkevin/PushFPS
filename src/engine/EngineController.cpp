@@ -37,6 +37,8 @@
 #include "veyra/engine/PushCaptureStats.h"
 #include "veyra/engine/PushFgLatency.h"
 #include "veyra/engine/PushFgSchedule.h"
+#include "veyra/engine/PushLowDelay.h"
+#include "veyra/engine/PushBenchmarkProbe.h"
 #include "veyra/engine/PushLegacyEnv.h"
 #include "veyra/engine/PushNrAdapt.h"
 #include "veyra/engine/PushSizesHook.h"
@@ -1324,6 +1326,19 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
             PushFgCostWindow fgCostWindow;PushPhaseQueueGuard phaseQueueGuard;
             // robustAdmit's stop for sustained slowness (PushRobustAdmitGuard, 32 pairs / 50 %; part of robustAdmit).
             PushRobustAdmitGuard robustAdmitGuard(32,0.5);uint64_t fgRobustAdmits=0;int64_t nextRobustAdmitLog=0;
+            // Package 15 "Lower delay" (PushLowDelay.h, docs/drafts/LOW_DELAY_MODE.md): the one-predicted schedule I(2/3), B, P on a
+            // capture card with VFG at 3X. OFF unless the quick-setup row (pref pushLowDelay -> pushLowDelayShared().wanted, and
+            // EnhancementSettings::lowDelay, whose change rebuilds the graph with or without the pass) or the kit's
+            // VEYRA_EXP_RP_FG_SCHEDULE=onepredicted. Off and never run: no pair is asked, every learner gets Package 14's arguments.
+            static const bool lowDelaySwitch=[]{wchar_t v[32]{};const DWORD n=GetEnvironmentVariableW(L"VEYRA_EXP_RP_FG_SCHEDULE",v,32);
+                return n>0&&n<32&&pipeline::pushFgScheduleFromSwitch(std::wstring_view(v,n))==pipeline::PushPairSchedule::OnePredicted;}();
+            // Policy (PushLowDelayPolicy): stay in on a bad prediction (P is shown as the pass composed it; 45 of the last 60
+            // unusable leaves), or Package 15's first policy with VEYRA_TEST_RP_LOWDELAY_LEAVE_ON_UNUSABLE (rollback switch).
+            static const auto lowDelayPolicy=pushLowDelayPolicyFor(GetEnvironmentVariableW(L"VEYRA_TEST_RP_LOWDELAY_LEAVE_ON_UNUSABLE",nullptr,0)>0);
+            LivePairLatency predictedLatency;PushLowDelaySchedule lowDelay;lowDelay.setPolicy(lowDelayPolicy);bool lowDelayAsked=false,lowDelaySession=false,lowDelayPrevPredicted=false;unsigned lowDelayInterpRun=0;
+            int64_t lowDelayInterpPhase=0,lowDelayPredictedPhase=0,lowDelayLastPredicted=0,nextLowDelayLog=0;
+            uint64_t windowPredictedShown=0,windowLowDelayUnusable=0,windowLowDelayWholeHeld=0,lowDelayPredictedAtWindow=0,lowDelaySwitchesAtWindow=0;
+            pipeline::PushPredictRefusal lowDelayLastRefusal=pipeline::PushPredictRefusal::SwitchOff;
             smoothHook.setUllHeadroom(ullParts.headroom);   // part "headroom": Smoothness Mode below the VRR ceiling (PushSmoothHook.h)
             // VEYRA_TEST_ADAPTIVE_SCREEN_PHASE=1 and VEYRA_TEST_ARRIVAL_JITTER_MS=<sd> give
             // window capture what a USB card has: this phase and a late callback.
@@ -1366,9 +1381,14 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
                 std::atomic<bool> ready=false;
                 Clock::time_point readyObserved{};
                 std::array<int64_t,pipeline::FrameBatch::Capacity> frameReadyObserved{};
+                // Package 15: the first timestamp of the pair queued after this one; a predicted frame beyond it is
+                // dropped (pushPredictedBeyondNext). Engine thread only.
+                int64_t predictedLimit=std::numeric_limits<int64_t>::max();
+                int64_t predictedLimitHost=0;   // the next pair's first frame's presentation deadline (host 100 ns); 0 unknown
             };
             int64_t nextFgDeadlineLog=0;
             std::vector<std::shared_ptr<CompletionWatch>> pendingCompletions;
+            std::shared_ptr<CompletionWatch> lastPredictedWatch;   // Package 15: the last queued pair that ran predicted
             std::shared_ptr<FrameFlowWindow> frameFlow;
             const uint64_t runSessionId=[&]{std::lock_guard lock(mutex_);return snapshot_.sessionId;}();
             pipeline::ResetReason pendingResetCause=pipeline::ResetReason::Open;
@@ -1465,6 +1485,12 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
                     }
                     watch.flow->ready(batch.batch.batchId,watch.real,valid,invalid,host100ns());
                     smoothHook.ready(valid,invalid);
+                    // Package 15: the counters of a finished predicted frame (PushPredictPass): mostly held -> leave at once.
+                    if(batch.predictedPair&&batch.predictFailed){lowDelay.usable(false);++windowLowDelayUnusable;}
+                    else if(batch.predictedPair&&batch.gpuComplete()){
+                        pipeline::PushPredictCounters counters{};
+                        if(graph->predictCountersOf(batch.predictSequence,counters)){const bool usable=pipeline::pushPredictFrameUsable(counters);lowDelay.usable(usable);windowLowDelayUnusable+=!usable;windowLowDelayWholeHeld+=pipeline::pushPredictWholeFrameHeld(counters);}
+                    }
                     traceFrame(diagnostics::TraceKind::Ready,batch.batch.identity,batch.batch.batchId,std::max(batch.videoFenceValue,batch.genFenceValue),batch.batch.b100ns,invalid,valid,elapsedMs(watch.processStart));
                     if(watch.real)completedProcessing(batch.batch.identity);
                     // A reduced (2X) group must not lower the full-group FG
@@ -1520,7 +1546,8 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
                             const auto ready=watch.frameReadyObserved[i]?watch.frameReadyObserved[i]:observed;
                             requiredDelay=std::max(requiredDelay,ready-watch.phaseAnchor+batch.batch.b100ns-item.pts100ns);
                         }
-                        pairLatency.observe(observed,requiredDelay);
+                        // Package 15: a predicted pair's frames (I at -T/3, B, P at +T/3) teach the predicted schedule's phase.
+                        (batch.predictedPair?predictedLatency:pairLatency).observe(observed,requiredDelay);
                     }
                     completeReset(batch.batch.identity);
                     watch.readyObserved=Clock::now();
@@ -1572,6 +1599,7 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
                     if(presentationEffective.nvidiaLowLatency!=NvidiaLowLatency::Off&&!presenter.reflexActive()&&presenter.reflexFailed()){
                         presentationEffective.nvidiaLowLatency=NvidiaLowLatency::Off;
                         std::lock_guard lock(mutex_);snapshot_.presentationEffective=presentationEffective;snapshot_.presentationStatus=presenter.reflexDisablePending()?L"英伟达低延迟调用及撤销失败；请关闭视频后重试":
+                            presenter.reflexOverrunEnded()?L"英伟达低延迟：等待多次晚于采集画面到达，本次播放已关闭；当前使用低排队":/*stream "present" R11 hook*/
                             presenter.reflexStalled()?L"英伟达低延迟：驱动每帧等待过长，本次播放已关闭；当前使用低排队":L"英伟达低延迟调用失败，当前使用低排队；详见日志";
                     }
                     if(presentationPaced&&!presenter.pacingActive()){
@@ -1589,7 +1617,7 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
                 {std::lock_guard lock(mutex_);snapshot_.presentationEffective=presentationEffective;snapshot_.presentationRevision=revision;snapshot_.presentationStatus=message;snapshot_.presentationProviderOwned=presenter.providerOwnedPresentation();}
                 veyra::log::info("pacing",std::format("revision={} requested={}/{}/{} effective={}/{}/{} displayQueuePaced={} variableRefresh={} vrrLevel={} vrrSync={}",revision,requested.enabled,unsigned(requested.mode),unsigned(requested.display),presentationEffective.enabled,unsigned(presentationEffective.mode),unsigned(presentationEffective.display),presentationPaced,requested.variableRefresh,gfx::vrrLevel(presenter.displayVrr()),presenter.vrrSync()));
             };
-            auto drainLivePresentation=[&]{cadence.reset();if(liveScheduler){++presentationDrains;liveScheduler->cancel();pollCompletions();pendingCompletions.clear();}pairLatency.reset();deadlineMargin.reset();fgRejectionHold.reset();ullHold.reset();phaseQueueGuard.reset();};
+            auto drainLivePresentation=[&]{cadence.reset();if(liveScheduler){++presentationDrains;liveScheduler->cancel();pollCompletions();pendingCompletions.clear();}pairLatency.reset();predictedLatency.reset();deadlineMargin.reset();fgRejectionHold.reset();ullHold.reset();phaseQueueGuard.reset();};
             const bool preciseDeadlines=GetEnvironmentVariableW(L"VEYRA_TEST_LEGACY_DEADLINE_WAIT",nullptr,0)==0;
             // A ready frame whose deadline has come goes out before the completion
             // poll: the poll collects GPU timings and FG budget samples, and a frame
@@ -2517,6 +2545,7 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
                 }
                 const auto processStart=Clock::now();
                 const auto captureArrival=pkt.arrivalHost100ns?pkt.arrivalHost100ns:host100ns();
+                presenter.sourceArrived(captureArrival,physicalCapture,options.fg,physicalCapture&&options.fg&&presenter.reflexActive()?captureSource.metrics().dropped:0);   // stream "present" R11 hook: Reflex Sleep overrun (VideoPresenter.cpp)
                 // A PS5 callback is a compressed AU, not a decoded video frame.
                 // Its decode baseline must not consume the entire FG lookahead
                 // budget. Still measure full ingress latency from captureArrival.
@@ -2600,7 +2629,7 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
                     nextFgAdmissionLog=now+10000000;if(!admitted)nextFgRejectionLog=now+10000000;
                     veyra::log::info("live-fg-admission",std::format("timeline={} revision={} source={} multiplier={} requestedMultiplier={} admitted={} admittedPairs={} rejectedPairs={} remainingDeadlineMs={:.3f} firstDeadlineMs={:.3f} queuedGpuMs={:.3f} predictedMs={:.3f} elapsedMs={:.3f} blitGpuP95Ms={:.3f} presentCpuP95Ms={:.3f} warmingHistory={} (CPU Present is backpressure, not added GPU cost; firstDeadlineMs=-1 when unused)",timeline,batch.identity.settingsRevision,batch.identity.sourceFrameId,previewFgMultiplier,options.fgMultiplier,admitted,fgAdmittedPairs,fgRejectedPairs,double(deadline-now)/10000,firstDeadline?double(firstDeadline-now)/10000:-1,queuedMs,fgBudget.predicted(now,warmingHistory).value_or(-1),elapsed,blit,livePresent.p95(),warmingHistory));
                 };
-                if(fgBudgetRevision!=options.settings.revision||hardFrameReset){fgBudget.reset();fgCostWindow.reset();phaseQueueGuard.reset();robustAdmitGuard.reset();vfgOverload.reset();vfgCostSettling.reset();vfgChosenFgMs=vfgFastFgMs=0;liveArrival.reset();pairLatency.reset();deadlineMargin.reset();fgRejectionHold.reset();ullHold.reset();fgBudgetRevision=options.settings.revision;displayFgGate.reset();}
+                if(fgBudgetRevision!=options.settings.revision||hardFrameReset){fgBudget.reset();fgCostWindow.reset();phaseQueueGuard.reset();robustAdmitGuard.reset();vfgOverload.reset();vfgCostSettling.reset();vfgChosenFgMs=vfgFastFgMs=0;liveArrival.reset();pairLatency.reset();predictedLatency.reset();deadlineMargin.reset();fgRejectionHold.reset();ullHold.reset();fgBudgetRevision=options.settings.revision;displayFgGate.reset();}
                 previewFgMultiplier=options.fgMultiplier;
                 // An output cap used to only drop candidates at present time, so
                 // the GPU still generated frames that were thrown away: at 6X on
@@ -2747,10 +2776,39 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
                 // generated frames before this change), so their bound stays as it was;
                 // the FG allowance is for 60->30 and transport pairs.
                 const int64_t fgPhaseAllowance=marginPair&&!smoothContentAnchor?fgBudget.phaseAllowance(host100ns(),liveInterval):0;
+                // Package 15 "Lower delay" (PushLowDelay.h): a capture card's 3X VFG pair may be asked to run I(2/3), B, P. Each
+                // schedule has its own learner; pushLowDelayPhaseArgs gives the interpolate learner Package 14's arguments exactly
+                // unless the predicted schedule ran within the last second (then its phase + T/3: leaving keeps the grid).
+                // Paused (wanted = false for the schedule, no back-off) while the quality test, the optimiser's benchmark,
+                // HUD detection or a comparison clip runs; static refusals (format, HUD Lock, exclusion, no pass) are
+                // Ineligible and never asked (scheduling review B).
+                const bool lowDelayRow=pushLowDelayWanted(lowDelaySwitch,pushLowDelayShared());
+                const auto lowDelaySuspend=lowDelayRow?pushLowDelaySuspendFor(quality_->running(),pushBenchmarkProbe().active(),hud_->running(),captures_.wantsRawFrames()):PushLowDelaySuspend::None;
+                const bool lowDelayWanted=lowDelayRow&&lowDelaySuspend==PushLowDelaySuspend::None;
+                // Review 2: the pair's own multiplier (adaptive, output cap) is a named reason (not-3x), not "needs VFG";
+                // Smoothness Mode deciding the multiplier excludes the mode (it assumes the real frame is the batch's last).
+                const bool lowDelayCardVfg3x=lowDelayRow&&marginPair&&(physicalCapture||testReplayAsCard)&&!isStream&&!rereadCached&&
+                    options.settings.frameGenerationBackend==FrameGenerationBackend::Vfg;
+                const auto lowDelayStatic=!lowDelayCardVfg3x?pipeline::PushPredictRefusal::NotVfg:
+                    smoothHook.wantsCosts()?pipeline::PushPredictRefusal::SmoothnessMode:graph->predictStaticRefusal(previewFgMultiplier);
+                const bool lowDelayCard=lowDelayWanted&&lowDelayCardVfg3x&&lowDelayStatic==pipeline::PushPredictRefusal::Ok;
+                const bool lowDelayAsk=lowDelayCard&&lowDelay.request();
+                const auto phaseNow=host100ns();
+                const auto pairAllowance=std::max(transportInterval/2,fgPhaseAllowance);
+                // A switch starts the incoming schedule's learner afresh, so it begins at its seeded phase (on the grid).
+                const auto lowDelayResets=pushLowDelayResets(lowDelayAsk,lowDelayPrevPredicted);
+                if(lowDelayResets.interpolate)pairLatency.reset();
+                if(lowDelayResets.predicted)predictedLatency.reset();
+                const auto interpolatedArgs=pushLowDelayPhaseArgs(false,phaseNow,liveInterval,legacyPairDelay,pairAllowance,lowDelayInterpPhase,lowDelayPredictedPhase,lowDelayLastPredicted);
+                const auto interpolatedPhase=marginPair?pairLatency.select(phaseNow,interpolatedArgs.start,liveInterval,previewFgMultiplier,interpolatedArgs.allowance):legacyPairDelay;
                 // Stream "lagfix": a PS5 stream's learned phase never goes above its fixed one (pushStreamPairDelay, PushFgLatency.h).
-                const auto pairDelay=pushStreamPairDelay(marginPair?
-                    pairLatency.select(host100ns(),legacyPairDelay,liveInterval,previewFgMultiplier,std::max(transportInterval/2,fgPhaseAllowance))+pairExtra:legacyPairDelay,
-                    legacyPairDelay,marginPair&&remoteAdaptivePhase);
+                const auto interpolatedDelay=pushStreamPairDelay(marginPair?interpolatedPhase+pairExtra:legacyPairDelay,legacyPairDelay,marginPair&&remoteAdaptivePhase);
+                auto pairDelay=interpolatedDelay;
+                if(lowDelayAsk){
+                    const auto args=pushLowDelayPhaseArgs(true,phaseNow,liveInterval,legacyPairDelay,pairAllowance,lowDelayInterpPhase,lowDelayPredictedPhase,lowDelayLastPredicted);
+                    lowDelayPredictedPhase=predictedLatency.select(phaseNow,args.start,liveInterval,previewFgMultiplier,args.allowance);
+                    pairDelay=lowDelayPredictedPhase+pairExtra;
+                }
                 std::optional<int64_t> pairPresentAnchor;
                 const auto presentAnchorFor=[&](int64_t source){
                     if(!pairPresentAnchor){
@@ -2779,7 +2837,15 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
                         const auto interval=liveInterval;
                         const auto a=(historyReset||batch.b100ns<=batch.a100ns||batch.b100ns-batch.a100ns>10000000)?batch.b100ns-interval:batch.a100ns;
                         const auto lastGenerated=pipeline::FrameBatch::interpolate(a,batch.b100ns,previewFgMultiplier-1,previewFgMultiplier);
-                        const auto now=host100ns(),deadline=liveTimeline.deadline(lastGenerated);
+                        const auto now=host100ns();
+                        auto deadline=liveTimeline.deadline(lastGenerated);
+                        // Package 15: asked to run predicted, a + 2d/3 is I and comes FIRST: base + Fg1 must fit I, the group P.
+                        // A history reset (warmingHistory) is refused by the graph (no-history): judged as the pair it runs.
+                        if(lowDelayAsk&&!warmingHistory){
+                            const auto base=fgBudget.baseCost(now),whole=fgBudget.predicted(now,warmingHistory);
+                            const auto fg1=frameFlow->snapshot(now).gpuTiming[size_t(diagnostics::GpuStage::Fg1)].p95;
+                            deadline=pushLowDelayAdmissionDeadline(deadline,liveTimeline.deadline(pipeline::pushPredictedPts(a,batch.b100ns,3)),base&&whole?*whole-*base:0.0,fg1.value_or(0.0));
+                        }
                         const double elapsed=elapsedMs(processStart);
                         bool admitted=!vfgCostSettling.holding(now)&&fgBudget.admit(now,deadline,elapsed,presentP95,warmingHistory);
                         // Stream "lagfix" robustAdmit (off by default): a pair the 2 s P95 rejects goes ahead when min(P95, 1.2 x P75) fits.
@@ -2916,6 +2982,8 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
                     {OnExit processingDone{[&]{processingGraph=false;}};
                     // The first checkpoint: a frame due before the graph's first one.
                     if(!historyReset)presentDuringProcess();
+                    // Package 15: what this pair is asked to run (the graph refuses on its own conditions: lastPredictRefusal).
+                    if(lowDelayAsk||lowDelayAsked){graph->setPairSchedule(lowDelayAsk?pipeline::PushPairSchedule::OnePredicted:pipeline::PushPairSchedule::Interpolate);lowDelayAsked=lowDelayAsk;}
                     processed=!injectedReject&&graph->process(frame,pts,historyReset,out,pkt.sequence,&pkt.colorInfo,&pkt.hardwareSurface,comparisonMode_!=0||captures_.wantsRawFrames(),admitFg,previewFgMultiplier,(paused_||isImage)&&transaction,presentDuringProcess);}
                     presenter.endReflex(currentReflexFrame);
                     processSlotWaitMs=ring.cpuWaitMilliseconds()-processWaitMsBase;
@@ -2923,6 +2991,14 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
                 loopTrace.mark("graphSubmit");
                 previewSkipSinceProcess=false;
                 if(processed)lastProcessedPtsMs=pts;
+                // Package 15: a pair asked to run predicted that ran as today's (refused, skipped) is timed as today's.
+                if(lowDelayAsk&&!out.predictedPair)pairDelay=interpolatedDelay;
+                if(out.predictedPair)lowDelayLastPredicted=host100ns();
+                if(processed&&!rereadCached&&isCapture&&(lowDelayWanted||lowDelayPrevPredicted)){
+                    lowDelayPrevPredicted=out.predictedPair;lowDelayInterpRun=out.predictedPair?0:lowDelayInterpRun+1;
+                    // What interpolation needed, recorded after a run of interpolated pairs (pushLowDelayPhaseArgs).
+                    if(marginPair&&!out.predictedPair&&lowDelayInterpRun>=kPushLowDelayLearnedRun)lowDelayInterpPhase=interpolatedPhase;
+                }
                 if(processed&&captureWindow.enabled()&&!rereadCached)captureWindow.pair(capturePictured,capturePictureId,historyReset,out.fgEvaluated,fgRejectionHold.held()||ullHold.held());
                 if(!processed){
                     const auto failedComponent=graph->failedBackend();
@@ -3094,6 +3170,31 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
                     }
                     else if(!liveTimeline.anchored(out.batch.identity.epoch,paceSourcePts))liveTimeline.reset(out.batch.identity.epoch,out.batch.b100ns,liveInputReady,options.fg?duration100ns:0,paceSourcePts);
                 }
+                // Package 15: the schedule for the NEXT pair (enter after a calm run, leave at once), its state for the row, logs.
+                if(lowDelayRow||lowDelay.active()){
+                    lowDelaySession=true;
+                    const auto refusal=graph->lastPredictRefusal();
+                    PushLowDelayPair ldPair;
+                    ldPair.wanted=lowDelayWanted;ldPair.eligible=lowDelayCard;ldPair.ranPredicted=out.predictedPair;
+                    ldPair.refused=lowDelayAsk&&!out.predictedPair;
+                    ldPair.skipped=capturePairDecision&&*capturePairDecision==pipeline::EnhanceGraph::FgDecision::Skip;
+                    const auto ldNow=host100ns();
+                    ldPair.held=pairFgHeld||vfgCostSettling.holding(ldNow);
+                    const bool wasActive=lowDelay.active();
+                    lowDelay.pair(ldPair);
+                    const auto state=pushLowDelayStateFor(lowDelayRow,lowDelaySuspend,lowDelayCardVfg3x,graph->predictAsked(),lowDelayStatic,lowDelay.active());
+                    pushLowDelayShared().state.store(uint8_t(state),std::memory_order_relaxed);
+                    pushLowDelayShared().refusal.store(uint8_t(lowDelayStatic),std::memory_order_relaxed);
+                    pushLowDelayShared().suspend.store(uint8_t(lowDelaySuspend),std::memory_order_relaxed);
+                    if(lowDelayAsk&&!out.predictedPair&&refusal!=lowDelayLastRefusal&&refusal!=pipeline::PushPredictRefusal::Ok)
+                        veyra::log::info("fg-sched",std::format("lowDelay refused={} source={} (the graph ran today's pair: PushPredict.h)",pipeline::pushPredictRefusalName(refusal),out.batch.identity.sourceFrameId));
+                    if(lowDelayAsk)lowDelayLastRefusal=refusal;
+                    if((wasActive!=lowDelay.active()&&ldNow>=nextLowDelayLog)||(lowDelayRow&&nextLowDelayLog==0)){
+                        nextLowDelayLog=ldNow+10000000;
+                        veyra::log::info("fg-sched",std::format("lowDelay state={} refusal={} paused={} policy={} unusableShown={} kitSwitch={} row={} predictedPairs={} entries={} exits={} calmNeeded={} predictPass={} (one predicted frame per real frame: PushLowDelay.h; at most one line a second)",
+                            pushLowDelayStateName(state),pipeline::pushPredictRefusalName(lowDelayStatic),pushLowDelaySuspendName(lowDelaySuspend),pushLowDelayPolicyName(lowDelay.policy()),lowDelay.unusableShown(),lowDelaySwitch,pushLowDelayShared().wanted.load(std::memory_order_relaxed),lowDelay.predictedPairs(),lowDelay.entries(),pushLowDelayExitsText(lowDelay),lowDelay.calmNeeded(),graph->predictAvailable()));
+                    }
+                }
                 if(!isImage&&!isCapture&&frames==0){anchor=Clock::now();anchorMs=lastAudioClockMs=pts;}
                 double frameWaitMs=0,framePresentMs=0;
                 double gpuWaitMs=0;
@@ -3101,6 +3202,12 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
                     const auto timeline=liveTimeline;
                     const uint64_t jobGeneration=presentationGeneration.load();
                     auto watch=std::make_shared<CompletionWatch>();watch->output=out;watch->flow=frameFlow;watch->processStart=processStart;watch->real=!rereadCached;
+                    // Package 15: the previous predicted pair's P must come before this pair's first frame.
+                    if(lastPredictedWatch&&out.batch.count){
+                        lastPredictedWatch->predictedLimit=out.batch.frames[0].pts100ns;
+                        if(timeline.paced())lastPredictedWatch->predictedLimitHost=timeline.deadline(out.batch.frames[0].pts100ns);
+                    }
+                    lastPredictedWatch=out.predictedPair?watch:nullptr;
                     watch->predictedGpuStart100ns=std::chrono::duration_cast<std::chrono::nanoseconds>(processStart.time_since_epoch()).count()/100+int64_t(queuedGpuMs*10000);
                     watch->captureArrival=captureArrival;watch->presentationGeneration=jobGeneration;
                     // Learn enough phase for early content-clock deadlines on late capture slots.
@@ -3147,7 +3254,7 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
 #ifdef VEYRA_ENABLE_XBOX
                         &xb,
 #endif
-                        &seekDecoded,&seekStarted,&audio,&audioPipe,&audioStarted,&cadence,&ctx,&fileAudioAlignPending,&fileAwaitingVideo,&fileInputEnded,&generatedDropCap,&generatedDropCapacity,&generatedDropDeadline,&playbackRate,&frameFlow,&graph,&host100ns,&isCapture,&isImage,&liveArrival,&livePresent,&liveScheduler,&nextFgDeadlineLog,&nowMs,&options,&pendingCompletions,&physicalCapture,&processingGraph,&presentEntryDeviation,&presentReturnDeviation,&presentationEffective,&presentationGeneration,&presentationSkippedGenerated,&presenter,&ring,&runSessionId,&seekPreviewPending,&traceFrame,&traceSubframes,watch,step,timeline,captureArrival,baselineReady,delayEnhanced,activeSeekId,lineage,jobGeneration,rereadCached,sourceIntervalMs,submitThenPresent,generatedGrace=liveGeneratedGrace,smoothTransportAnchor,captureClockCorrected,driverPts100ns,flow=frameFlow,&deadlineMargin,marginPair,pairExtra,&smoothHook,pairFgHeld,&presentGrid,gridSlot=presentGridSlot,&robustAdmitGuard,robustPair=pairRobustAdmitted,robustBad=std::make_shared<bool>(false)](int64_t now)->LiveGpuScheduler::Step{
+                        &seekDecoded,&seekStarted,&audio,&audioPipe,&audioStarted,&cadence,&ctx,&fileAudioAlignPending,&fileAwaitingVideo,&fileInputEnded,&generatedDropCap,&generatedDropCapacity,&generatedDropDeadline,&playbackRate,&frameFlow,&graph,&host100ns,&isCapture,&isImage,&liveArrival,&livePresent,&liveScheduler,&nextFgDeadlineLog,&nowMs,&options,&pendingCompletions,&physicalCapture,&processingGraph,&presentEntryDeviation,&presentReturnDeviation,&presentationEffective,&presentationGeneration,&presentationSkippedGenerated,&presenter,&ring,&runSessionId,&seekPreviewPending,&traceFrame,&traceSubframes,watch,step,timeline,captureArrival,baselineReady,delayEnhanced,activeSeekId,lineage,jobGeneration,rereadCached,sourceIntervalMs,submitThenPresent,generatedGrace=liveGeneratedGrace,smoothTransportAnchor,captureClockCorrected,driverPts100ns,flow=frameFlow,&deadlineMargin,marginPair,pairExtra,&smoothHook,pairFgHeld,&presentGrid,gridSlot=presentGridSlot,&robustAdmitGuard,&windowPredictedShown,&lowDelay,robustPair=pairRobustAdmitted,robustBad=std::make_shared<bool>(false)](int64_t now)->LiveGpuScheduler::Step{
                         using State=LiveGpuScheduler::State;auto& batch=watch->output;auto& s=*step;
                         auto updatePending=[&](LiveStepState*){
                             unsigned left=0;for(unsigned i=s.next;i<batch.batch.count;++i)if(batch.batch.frames[i].kind!=pipeline::FrameKind::Generated||batch.batch.frames[i].validity==pipeline::GenerationValidity::Valid)++left;
@@ -3167,6 +3274,9 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
                             const double itemPtsMs=double(item.pts100ns)/10000;
                             const auto decisionTime=host100ns();
                             const bool generationExpired=generated&&(isCapture?timeline.expired(item.pts100ns,decisionTime,generatedGrace):!fileAwaitingVideo&&previewGeneratedExpired(nowMs(),itemPtsMs));
+                            // Package 15: a predicted frame beyond the next pair's first frame is dropped (times never go backwards).
+                            if(generated&&item.lease&&item.lease->predicted&&(pipeline::pushPredictedBeyondNext(item.pts100ns,watch->predictedLimit)||
+                               (timeline.paced()&&pipeline::pushPredictedDropBeforeNext(timeline.deadline(item.pts100ns),decisionTime,watch->predictedLimitHost)))){lowDelay.predictedOutcome(true);++generatedDropDeadline;++s.dropped;++s.handled;++s.next;s.deadlineStart.reset();s.capacityStart.reset();continue;}
                             // XeSS shares the producer queue; native no-FG capture has an explicit GPU-side fence wait.
                             const bool early=submitThenPresent&&!generated&&!watch->ready;
                             if(!watch->frameReadyObserved[s.next]&&item.lease&&item.lease->ready())watch->frameReadyObserved[s.next]=host100ns();
@@ -3192,9 +3302,11 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
                                 veyra::log::info("fg-deadline",std::format("revision={} batch={} subframe={} expired={} readyObservedLateMs={:.3f} decisionLateMs={:.3f} observedReadyToDecisionMs={:.3f} batchReady={} (CPU fence observations, not scanout; -1 means readiness unknown)",item.identity.settingsRevision,batch.batch.batchId,item.subframe,generationExpired,ready?double(ready-timeline.deadline(item.pts100ns))/10000:-1,double(decisionTime-timeline.deadline(item.pts100ns))/10000,ready?double(decisionTime-ready)/10000:-1,watch->ready.load()));
                                 veyra::log::info("fg-drops",std::format("revision={} deadline={} capacity={} cap={} graceMs={:.1f} (session totals of frames dropped before Present, by reason)",item.identity.settingsRevision,generatedDropDeadline,generatedDropCapacity,generatedDropCap,double(generatedGrace)/10000));
                             }
-                            if(readiness==PreviewFrameReadiness::Expired){*robustBad=true;++generatedDropDeadline;++s.dropped;++s.handled;++s.next;s.deadlineStart.reset();s.capacityStart.reset();continue;}
+                            if(readiness==PreviewFrameReadiness::Expired){if(generated&&item.lease&&item.lease->predicted)lowDelay.predictedOutcome(true);*robustBad=true;++generatedDropDeadline;++s.dropped;++s.handled;++s.next;s.deadlineStart.reset();s.capacityStart.reset();continue;}
                             if(!s.deadlineStart)s.deadlineStart=Clock::now();
-                            if(isCapture){if(host100ns()<timeline.deadline(item.pts100ns))return {State::Pending,timeline.deadline(item.pts100ns),timeline.paced()&&!presenter.providerOwnedPresentation()};}
+                            if(isCapture){if(host100ns()<timeline.deadline(item.pts100ns)){
+                                if(presenter.blitAheadEnabled()&&timeline.paced())presenter.prepare(ctx,ring,*graph,item.lease->slot,generated,item.lease->referencesValid,comparisonMode_,comparisonBase_,comparisonSplit_,item.identity,previewView(),item.pts100ns);   // stream "present" R3 hook (VEYRA_EXP_RP_PRESENT_BLIT_AHEAD, off by default)
+                                return {State::Pending,timeline.deadline(item.pts100ns),timeline.paced()&&!presenter.providerOwnedPresentation()};}}
                             else if(!fileAwaitingVideo){
                                 if(audioStarted)audioPipe.videoReady(itemPtsMs);
                                 if(nowMs()+.25<itemPtsMs)return {State::Pending,now+std::min<int64_t>(10000,int64_t((itemPtsMs-nowMs())*10000/playbackRate))};
@@ -3315,7 +3427,14 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
 #endif
                             if(didPresent&&!generated&&!rereadCached){
                                 const auto returned=host100ns();
-                                flow->latency(captureArrival,returned);
+                                // Package 15 (PushDelaySplit.h): the same sample split into picture + first generated frame +
+                                // the schedule's wait + margin, from this real frame's readiness and its batch's layout.
+                                {
+                                    const auto readyAt=watch->frameReadyObserved[s.next];int64_t firstAt=0;unsigned generatedBefore=0;
+                                    for(unsigned f=0;f<s.next&&f<batch.batch.count;++f)if(batch.batch.frames[f].kind==pipeline::FrameKind::Generated){++generatedBefore;if(!firstAt&&watch->frameReadyObserved[f])firstAt=watch->frameReadyObserved[f];}
+                                    flow->latency(captureArrival,returned,readyAt>0?double(readyAt-captureArrival)/10000:-1.0,firstAt>0?double(firstAt-captureArrival)/10000:-1.0,
+                                                  generatedBefore,unsigned(batch.batch.count),batch.batch.b100ns>batch.batch.a100ns?double(batch.batch.b100ns-batch.batch.a100ns)/10000:0.0);
+                                }
                                 const double age=double(returned-captureArrival)/10000;
                                 if(physicalCapture&&age>=80.0)veyra::log::info("capture-age-stall",std::format("source={} epoch={} revision={} callbackToReturnMs={:.3f} readyObservedAgeMs={:.3f} gpuSpanMs={:.3f} deadlineAgeMs={:.3f} decisionLateMs={:.3f} deadlineWaitMs={:.3f} presentMs={:.3f} (CPU observation includes scheduling; not scanout; -1 means unknown or no paced deadline)",item.identity.sourceFrameId,item.identity.epoch,item.identity.settingsRevision,age,watch->frameReadyObserved[s.next]?double(watch->frameReadyObserved[s.next]-captureArrival)/10000:-1.0,watch->gpuExecutionMs.value_or(-1.0),timeline.paced()?double(timeline.deadline(item.pts100ns)-captureArrival)/10000:-1.0,timeline.paced()?double(optionalNow-timeline.deadline(item.pts100ns))/10000:-1.0,waited,elapsed));
                             }
@@ -3363,8 +3482,11 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
                                 if(generated&&timeline.paced()&&presentBeginHost-timeline.deadline(item.pts100ns)>10000)*robustBad=true;
                                 if(!generated)robustAdmitGuard.observe(host100ns(),*robustBad);
                             }
-                            if(didPresent){++s.handled;++s.count;flow->presented(generated,item.lease->consumerFence,host100ns(),presenter.lastPresentCallHost100ns());if(!generated)++presentationCompletedReal;s.ageMs=double(host100ns()-captureArrival)/10000;
+                            if(didPresent){++s.handled;++s.count;flow->presented(generated,item.lease->consumerFence,host100ns(),presenter.lastPresentCallHost100ns());if(!generated)++presentationCompletedReal;
+                                // Package 15: P comes after the real frame; the delay readout stays capture arrival -> the real frame's Present returned.
+                                if(generated&&item.lease->predicted){++windowPredictedShown;lowDelay.predictedOutcome(false);}else s.ageMs=double(host100ns()-captureArrival)/10000;
                                 if(!generated)captureWindow.realPresented(s.ageMs);   // [slipstream-capture]; nothing unless VEYRA_EXP_RP_STATS=1 with a card
+                                if(!generated)pushFgHealth().real(s.ageMs);   // stream "present" R2 hook: [fg-health] (engine/PushFgHealth.h), O(1)
                                 if(flow==frameFlow){const auto time=host100ns();liveSubmissions.push_back(time);while(liveSubmissions.size()>1&&time-liveSubmissions.front()>10000000)liveSubmissions.pop_front();}}
                             if(didPresent&&!generated)presenter.latencyObserved(captureArrival,baselineReady,std::chrono::duration_cast<std::chrono::nanoseconds>(watch->processStart.time_since_epoch()).count()/100); // Slipstream STATS only
                             ++s.next;
@@ -3451,7 +3573,7 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
                 }
 
 
-                for(size_t stage=0;stage<measured.gpu.size();++stage){const auto& sample=measured.gpu[stage];if(sample.state==diagnostics::SampleState::Measured&&sample.milliseconds&&sample.end&&sample.end!=lastGpuSampleEnd[stage]){gpuStageTimes[stage].add(*sample.milliseconds);lastGpuSampleEnd[stage]=sample.end;}}
+                for(size_t stage=0;stage<measured.gpu.size();++stage){const auto& sample=measured.gpu[stage];if(sample.state==diagnostics::SampleState::Measured&&sample.milliseconds&&sample.end&&sample.end!=lastGpuSampleEnd[stage]){gpuStageTimes[stage].add(*sample.milliseconds);pushFgHealth().gpu(unsigned(stage),*sample.milliseconds);/*stream "present" R2 hook*/lastGpuSampleEnd[stage]=sample.end;}}
                 measured.resolution=pipeline::ResolutionPlan::make({width,height},options.sr,options.snapshot().nrPolicy,isImage,options.settings.revision,runningSrTarget(options.settings,options.sr,isImage,ctx.adapter().isNvidia,smoothHook.followWidth(),smoothHook.followHeight()),options.settings.lowLatency&&options.nr,0,runningSrPrescale(options.settings,ctx.adapter().isNvidia,isImage),runningSrOutput(options.settings,ctx.adapter().isNvidia),dualSrRuns(options.settings,ctx.adapter().isNvidia,isImage),options.settings.dualSrTarget);measured.decodeCpuMs=decodeMs;measured.submitCpuMs=std::chrono::duration<double,std::milli>(processDone-processStart).count();measured.gpuWaitCpuMs=gpuWaitMs;measured.deadlineWaitCpuMs=frameWaitMs;measured.presentCpuMs=framePresentMs;measured.queueWatermark=out.batch.count;
                 if(!isImage&&sizesHook.due(host100ns())){   // stream "delay90": the real working sizes (PushSizesHook.h; writes only on a change)
                     PushSizesHook::Inputs si;si.graph=graph.get();si.plan=&measured.resolution;si.sr=options.sr;si.dualSr=dualSrRuns(options.settings,ctx.adapter().isNvidia,isImage);si.hdrOutput=graph->hdrOutput();
@@ -3608,9 +3730,27 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
                         dedupLogged=st;dedupRepeatMax8=0;dedupRepeatMaxOver=0;dedupNewMinOver=UINT64_MAX;
                     }
                     const auto gridStats=presentGrid.take();   // stream "lagfix": the steadiness window of this second
+                    // Package 15 "Lower delay": appended only in a session where it was on (the line is unchanged otherwise).
+                    const std::string lowDelayTiming=lowDelaySession?std::format(" lowDelay={} predictedShown={} predictedPairs={} lowDelaySwitches={} lowDelayUnusable={} lowDelayWholeHeld={} lowDelayExits={} (Package 15, this window: predicted frames shown, pairs run predicted, schedule switches, predicted frames found mostly held, of them shown as the real frame as a whole; lowDelayExits: session totals by reason)",
+                        pushLowDelayStateName(PushLowDelayState(pushLowDelayShared().state.load(std::memory_order_relaxed))),windowPredictedShown,lowDelay.predictedPairs()-lowDelayPredictedAtWindow,
+                        lowDelay.switches()-lowDelaySwitchesAtWindow,windowLowDelayUnusable,windowLowDelayWholeHeld,pushLowDelayExitsText(lowDelay)):std::string();
+                    // Package 15 (PushDelaySplit.h): the readout of the last second and where it goes (always on; -1 unknown).
+                    const auto delaySplit=frameFlow?frameFlow->snapshot(host100ns()):diagnostics::FrameFlowMetrics{};
+                    const std::string delaySplitTiming=std::format(" delayMs={:.2f} delayPictureMs={:.2f} delayFirstGeneratedMs={:.2f} delayWaitMs={:.2f} delayMarginMs={:.2f} delaySplitPct={:.0f} (the readout: capture callback -> real frame's Present returned, 1 s mean; picture + first generated frame + schedule wait + margin; not the game, console, capture card or display)",
+                        delaySplit.softwareLatencyMs.value_or(-1.0),delaySplit.latencyPictureMs.value_or(-1.0),delaySplit.latencyFirstGeneratedMs.value_or(-1.0),delaySplit.latencyWaitMs.value_or(-1.0),delaySplit.latencyMarginMs.value_or(-1.0),delaySplit.latencySplitShare*100.0);
                     veyra::log::info("capture-timing",std::format("revision={} received={} processed={} dropped={} callbackFps={:.2f} readAgeMs={:.3f} callbackToPresentReturnP95Ms={:.3f} processCpuP95Ms={:.3f} gpuReadyP95Ms={:.3f} schedulingWaitP95Ms={:.3f} presentCpuP95Ms={:.3f} gpuColorP95Ms={:.3f} gpuSrP95Ms={:.3f} gpuFlowP95Ms={:.3f} gpuNrP95Ms={:.3f} gpuResidualP95Ms={:.3f} gpuFgBatchP95Ms={:.3f} gpuBlitP95Ms={:.3f} slotWaits={} slotWaitMs={:.3f} commandSubmits={} displaySubmits={} expiredGenerated={} nr={} nvof={} generated={} historyResets={} presentationDrains={} presentationCompletedReal={} presentationSkippedGenerated={} presentationCancelledJobs={} singleGpuOwner=1 batchCapacity=2 gridIntervals={} onGrid1msPct={:.2f} onGridHalfPct={:.2f} shownPct={:.2f} gridLongestMs={:.2f} gridOffRunMax={} robustAdmits={} gridEarly={} skippedPairs={} (not HDMI-to-display latency; grid*: Present call spacing against content interval / M, -1 without frame generation)",options.settings.revision,captureStats.received,sourceFrames-statsSourceBase,captureStats.dropped,captureStats.callbackFps,captureStats.readAgeMs,ageP95,processTimes.p95(),liveScheduler?completed.readyP95:gpuReadyTimes.p95(),waitP95,presentP95,gpuP95(diagnostics::GpuStage::Color),gpuP95(diagnostics::GpuStage::Sr),gpuP95(diagnostics::GpuStage::Flow),gpuP95(diagnostics::GpuStage::Nr),gpuP95(diagnostics::GpuStage::Residual),gpuP95(diagnostics::GpuStage::FgBatch),gpuP95(diagnostics::GpuStage::Blit),slotWaitCount,slotWaitMilliseconds,commandSubmits,submitted,expired,graphStats.nrEvaluateCount,graphStats.nvofExecuteCount,graphStats.fgGeneratedFrames,historyResets.load(),presentationDrains.load(),presentationCompletedReal.load(),presentationSkippedGenerated.load(),presentationCancelledJobs.load(),
-                        gridStats.intervals,gridStats.onGrid1msPct(),gridStats.onGridHalfPct(),gridStats.shownPct(),gridStats.longestMs,gridStats.offRunMax,windowRobustAdmits,windowGridEarly,windowSkippedPairs));
+                        gridStats.intervals,gridStats.onGrid1msPct(),gridStats.onGridHalfPct(),gridStats.shownPct(),gridStats.longestMs,gridStats.offRunMax,windowRobustAdmits,windowGridEarly,windowSkippedPairs)+lowDelayTiming+delaySplitTiming);
                     windowRobustAdmits=windowGridEarly=windowSkippedPairs=0;
+                    // Review 2, SHOULD 2: three windows in a row below 98 % on the grid while the mode ran the whole window leave,
+                    // unless interpolation's own last whole window was worse (PushLowDelaySchedule::gridWindow).
+                    {const bool unchanged=lowDelay.switches()==lowDelaySwitchesAtWindow;
+                     lowDelay.gridWindow(gridStats.intervals>0?gridStats.onGrid1msPct():-1.0,lowDelay.active()&&unchanged,lowDelaySession&&!lowDelay.active()&&unchanged);}
+                    windowPredictedShown=windowLowDelayUnusable=windowLowDelayWholeHeld=0;lowDelayPredictedAtWindow=lowDelay.predictedPairs();lowDelaySwitchesAtWindow=lowDelay.switches();
+                    {   // stream "present" R2 hook: [fg-health] once per 10 s from the totals and the grid window above (engine/PushFgHealth.h)
+                        const auto health=pushFgHealth().second(host100ns(),{gridStats.intervals,gridStats.within1ms,gridStats.presents,gridStats.expected,gridStats.longestMs,gridStats.offRunMax},
+                            {generatedDropDeadline,generatedDropCapacity,generatedDropCap,presentationSkippedGenerated.load(),captureStats.dropped,contentDedup.stats().repeats});
+                        if(!health.empty())veyra::log::info("fg-health",health);
+                    }
                     if(captureWindow.enabled()){
                         // [slipstream-capture] (engine/PushCaptureStats.h): one line per 5 s window, VEYRA_EXP_RP_STATS=1 only.
                         PushCaptureSource cs;const auto& ci=activeSource->info();cs.width=ci.width;cs.height=ci.height;cs.nominalFps=ci.averageFps;

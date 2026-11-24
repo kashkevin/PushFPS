@@ -6,32 +6,42 @@
 # so that no package ships with a blank. Plain ASCII, lines of at most 100 characters, two spaces of indent.
 # Rule: say what was compiled, run and tested and on which machine; anything that only passed checks on GitHub's
 # Windows machine has NOT run on a gaming PC. Never write "validated" or a latency figure here.
-  Experimental build: build-windows number 73 (run 45346138947), 24 November 2026, compiled by
+  Experimental build: build-windows number 79 (run 45467487654), 24 November 2026, compiled by
   MSVC with warnings as errors, and every step below passed; its source is archived as
-  archive/dfc0a73b. The first build of this package (number 72) failed to link because three
-  functions had been deleted by mistake; they were put back, and number 73 is the result.
+  archive/b15c7410. Two earlier builds of single parts passed as well; one build of the
+  display-path part failed in a test of the switched-off early-copy experiment (the test
+  released a buffer too early; the test was corrected, the program did not change).
   On GitHub's Windows machine (software renderer, no graphics card, no capture card, no PS5): the
-  unit tests, the GPU tests including the new presentation-queue test, the strict QML tests
-  (none failed), the install test; remoteplay-checks number 248 (1047 of 1047 core tests on
-  Linux, plain and with sanitizers, and 1047 of 1047 compiled by MSVC; the kit's dry runs) and
-  checks number 271: all passed. 278 kit tests pass.
-  Independent reviews (a reviewer who did not write the code): each of the three parts was
-  reviewed and accepted (the neural-layer change only in its second design; the first was
-  rejected because it could switch off a layer you chose). The scheduling changes got four
-  required fixes (undo lines usable from slipstream.ini, a stop for sustained slow frames, test
-  runs that tested nothing removed, private values out of the log), then the merged package was
-  reviewed again: code accepted, six corrections to this text required and made (among them a
-  claim of "never worse" that only one random draw supported, and an understated rise of the
-  delay readout).
+  unit tests; the GPU tests, 34 groups, among them the predicted frame (predict, predict-hdr10),
+  the in-picture readouts (video-overlay in SDR, scRGB and HDR10) and blit-ahead-order; the
+  strict QML tests (none failed; the "Lower delay" row 16 of 16, the in-picture readouts 8 of
+  8); the readout composition test; the install test. remoteplay-checks number 273 (1107 of
+  1107 core tests; Linux plain and with sanitizers, MSVC; the kit's dry runs) and checks number
+  298: all passed. 282 kit tests pass.
+  NOT tested anywhere, because it needs a real NVIDIA card: NVIDIA's frame generation asked for
+  the second in-between frame alone ("Lower delay" depends on it), the copy that replaces a
+  failed predicted frame, and everything about how a predicted frame looks.
+  Independent reviews (reviewers who did not write the code): the predicted-frame pass and the
+  schedule were each reviewed twice. First round: two required fixes in the picture (the
+  motion was applied too weakly where it was half trusted; failed motion was counted as good)
+  and the schedule's claims held for one random draw only. Second round: accepted with
+  changes, all made (a row that could stay on "starting", texts that overstated the automatic
+  fallback, a late-frame watch, a whole-frame fallback, a safe path if NVIDIA refuses the
+  request). The display-path part was reviewed twice: accepted, eight smaller corrections made
+  (the low-latency guard no longer reacts to a hiccup at start-up). The merged package was
+  reviewed again: code accepted; ten sentences of this text were false or overstated and were
+  corrected (among them "tested" where only the code had been read, and a delay figure that
+  read as a promise).
   What the figures marked SIMULATED are: our own scheduling code run with made-up timings on a
   Linux machine. They say how the logic behaves, not how your graphics card behaves.
   The builds were compiled, installed and started on GitHub's Windows build machine (no graphics
   card, no PS5, no screen to measure). On a real PC only these have run: package 6 once (19 November
   2026, PS5 over Wi-Fi, software counters) and package 7 twice (20 November 2026, PS5 over Wi-Fi:
   the presentation and audio sessions, about 12 minutes, software counters), package 9 once
-  (21 November 2026, PS5 wired: the bitrate test, eight runs) and package 13 in normal play
+  (21 November 2026, PS5 wired: the bitrate test, eight runs), package 13 in normal play
   (23 November 2026, capture card at 4K: the owner reported a higher delay readout and lag; no
-  log of that play reached us). EVERYTHING new in this
+  log of that play reached us) and package 14 in normal play (24 November 2026, capture card at
+  4K: the owner reported 31 ms at 90 FPS; no log reached us). EVERYTHING new in this
   package (the list of what is in this package above, and every new kit session)
   has never run on a gaming PC, a graphics card or a PS5. No latency and no picture quality has
   been measured with any of it. Everything new is off until you choose it, except what is listed

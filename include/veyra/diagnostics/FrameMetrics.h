@@ -80,6 +80,10 @@ struct FrameFlowMetrics {
     // 1% low of the present rate (FramePaceWindow); unknown until enough presents.
     std::optional<double> presentLow1Fps;
     std::optional<double> softwareLatencyMs,softwareLatencyP95Ms,slotWaitPerFrameMs;
+    // PushFPS Package 15: the readout's mean split into picture + first generated frame + schedule wait + margin over the
+    // same frames (engine/PushDelaySplit.h); the four add up to softwareLatencyMs. Share: frames whose readiness was seen.
+    std::optional<double> latencyPictureMs,latencyFirstGeneratedMs,latencyWaitMs,latencyMarginMs;
+    double latencySplitShare=0;
     uint64_t latencySamples=0;
     uint32_t pendingOutputFrames=0; // valid frame opportunities retained by presenter jobs
     std::array<TimingAggregate,size_t(GpuStage::Count)> gpuTiming;
