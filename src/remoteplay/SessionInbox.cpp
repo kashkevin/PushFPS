@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "veyra/remoteplay/SessionInbox.h"
+#include "veyra/remoteplay/ConnectionHealth.h"
 #include <limits>
 #include <algorithm>
 #include <vector>
@@ -13,6 +14,8 @@ struct SessionInbox::Shared {
     uint64_t decodedFrames=0,receivedBytes=0,framesLost=0,referenceRecoveryEvents=0;
     bool hardwareDecode=false,decodeFallback=false,decodeConfirmed=false;
     VideoProfile requestedProfile;
+    std::shared_ptr<WakeSignal> wake;
+    FrameJitter jitter; // observation only: a few additions per frame, under the lock already held
     struct Sample {HostTime time;double value;};
     std::deque<Sample> received,decoded,decodeTimes,ingressWait;
     static void add(std::deque<Sample>& q,HostTime now,double value){
@@ -30,7 +33,7 @@ SessionInbox::Token SessionInbox::begin(HostTime origin){
     ++s.generation;s.video.begin(s.generation);s.audio.begin(s.generation);s.origin=origin;s.state=SessionState::Connecting;s.accepting=true;s.error=0;
     s.lastVideo=s.lastAudio=s.decodeStart=s.lastDecoded=0;s.decodedFrames=s.receivedBytes=s.framesLost=s.referenceRecoveryEvents=0;
     s.hardwareDecode=s.decodeFallback=s.decodeConfirmed=false;
-    s.received.clear();s.decoded.clear();s.decodeTimes.clear();s.ingressWait.clear();
+    s.received.clear();s.decoded.clear();s.decodeTimes.clear();s.ingressWait.clear();s.jitter.reset();
     return Token{shared_,s.generation};
 }
 void SessionInbox::invalidate(){auto& s=*shared_;std::lock_guard l(s.mutex);s.accepting=false;if(s.state!=SessionState::Idle)s.state=SessionState::Stopping;s.video.close();s.audio.close();}
@@ -52,6 +55,7 @@ SessionInbox::Snapshot SessionInbox::snapshot()const{
     result.decodedFrames=s.decodedFrames;result.receivedBytes=s.receivedBytes;result.framesLost=s.framesLost;result.referenceRecoveryEvents=s.referenceRecoveryEvents;
     result.hardwareDecode=s.hardwareDecode;result.decodeFallback=s.decodeFallback;result.decodeConfirmed=s.decodeConfirmed;
     result.requestedProfile=s.requestedProfile;
+    result.frameJitterMs=s.jitter.jitterMs();result.frameJitterPeakMs=s.jitter.peakMs();
     result.ratesReady=now-s.origin>=10000000;
     for(const auto& v:s.received)if(v.time>now-10000000){++result.receivedFps;result.videoMbps+=v.value*8/1000000;}
     for(const auto& v:s.decoded)if(v.time>now-10000000)++result.decodedFps;
@@ -65,10 +69,16 @@ void SessionInbox::decodeStarted(HostTime now,HostTime arrival){auto& s=*shared_
 void SessionInbox::decodeFinished(HostTime now){auto& s=*shared_;std::lock_guard l(s.mutex);if(s.decodeStart>0&&now>=s.decodeStart)Shared::add(s.decodeTimes,now,double(now-s.decodeStart)/10000);s.decodeStart=0;}
 void SessionInbox::frameDecoded(HostTime now){auto& s=*shared_;std::lock_guard l(s.mutex);s.lastDecoded=now;++s.decodedFrames;Shared::add(s.decoded,now,1);}
 bool SessionInbox::Token::video(VideoSample sample)const noexcept{
-    try{auto s=shared_.lock();if(!s)return false;std::lock_guard l(s->mutex);if(!s->current(generation_))return false;
+    try{auto s=shared_.lock();if(!s)return false;
+        std::shared_ptr<WakeSignal> wake;PushStatus r;
+        {std::lock_guard l(s->mutex);if(!s->current(generation_))return false;
         if(sample.generation!=generation_)return false;
-        if(sample.kind==SampleKind::AccessUnit){s->lastVideo=monotonic100ns();s->receivedBytes+=sample.payload.bytes().size();s->framesLost+=std::max(0,sample.framesLost);s->referenceRecoveryEvents+=sample.referenceRecovered?1:0;Shared::add(s->received,s->lastVideo,double(sample.payload.bytes().size()));}
-        const auto r=s->video.push(std::move(sample),monotonic100ns());return r==PushStatus::Accepted||r==PushStatus::ConfigStored;
+        if(sample.kind==SampleKind::AccessUnit){s->lastVideo=monotonic100ns();s->receivedBytes+=sample.payload.bytes().size();s->framesLost+=std::max(0,sample.framesLost);s->referenceRecoveryEvents+=sample.referenceRecovered?1:0;Shared::add(s->received,s->lastVideo,double(sample.payload.bytes().size()));
+            if(sample.wireFrameIndex)s->jitter.observeWire(*sample.wireFrameIndex,sample.arrival100ns,s->requestedProfile.fps);}
+        r=s->video.push(std::move(sample),monotonic100ns());wake=s->wake;}
+        // Also after a rejected sample: the owner sends the keyframe request it caused.
+        if(wake)wake->notify();
+        return r==PushStatus::Accepted||r==PushStatus::ConfigStored;
     }catch(...){failed(-1001);return false;}
 }
 bool SessionInbox::Token::audio(PcmBlock block)const noexcept{
@@ -76,20 +86,29 @@ bool SessionInbox::Token::audio(PcmBlock block)const noexcept{
     catch(...){failed(-1002);return false;}
 }
 void SessionInbox::Token::connected()const noexcept{
-    try{auto s=shared_.lock();if(!s)return;std::lock_guard l(s->mutex);if(!s->current(generation_))return;
+    try{auto s=shared_.lock();if(!s)return;std::shared_ptr<WakeSignal> wake;
+        {std::lock_guard l(s->mutex);if(!s->current(generation_))return;
         if(s->state==SessionState::Connecting||s->state==SessionState::LoginPinRequired)s->state=SessionState::WaitingFirstFrame;
+        wake=s->wake;}
+        if(wake)wake->notify();
     }catch(...){}
 }
 void SessionInbox::Token::loginPinRequired()const noexcept{
-    try{auto s=shared_.lock();if(!s)return;std::lock_guard l(s->mutex);if(s->current(generation_))s->state=SessionState::LoginPinRequired;}catch(...){}
+    try{auto s=shared_.lock();if(!s)return;std::shared_ptr<WakeSignal> wake;
+        {std::lock_guard l(s->mutex);if(!s->current(generation_))return;s->state=SessionState::LoginPinRequired;wake=s->wake;}
+        if(wake)wake->notify();
+    }catch(...){}
 }
 void SessionInbox::Token::failed(int code)const noexcept{
-    try{auto s=shared_.lock();if(!s)return;std::lock_guard l(s->mutex);if(!s->current(generation_))return;
-        s->error=code;s->state=SessionState::Failed;s->accepting=false;s->video.close();s->audio.close();
+    try{auto s=shared_.lock();if(!s)return;std::shared_ptr<WakeSignal> wake;
+        {std::lock_guard l(s->mutex);if(!s->current(generation_))return;
+        s->error=code;s->state=SessionState::Failed;s->accepting=false;s->video.close();s->audio.close();wake=s->wake;}
+        if(wake)wake->notify();
     }catch(...){}
 }
 void SessionInbox::decoderBackend(bool hardware,bool fallback){
     auto& s=*shared_;std::lock_guard lock(s.mutex);s.hardwareDecode=hardware;s.decodeFallback=fallback;s.decodeConfirmed=true;
 }
 void SessionInbox::streamProfile(VideoProfile profile){auto& s=*shared_;std::lock_guard lock(s.mutex);s.requestedProfile=profile;}
+void SessionInbox::wakeOn(std::shared_ptr<WakeSignal> signal){auto& s=*shared_;std::lock_guard lock(s.mutex);s.wake=std::move(signal);}
 } // namespace veyra::remoteplay

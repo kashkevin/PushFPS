@@ -9,6 +9,7 @@
 // which software cannot see - the quick setup hint says so.
 import QtQuick
 import QtQuick.Layouts
+import "PushInPicture.js" as InPicture
 
 Rectangle {
     id: badge
@@ -17,17 +18,34 @@ Rectangle {
     readonly property bool wanted: veyra.preferences.pushLatencyOverlay === true
     readonly property bool hasNumbers: stats.running === true && stats.latencyMs !== undefined && stats.latencyMs !== null
     visible: wanted && stats.running === true
-    readonly property bool videoCover: visible
+    // Stream "present" R1 (PushInPicture.js): while it plays this is drawn inside the swap chain, so the video window keeps
+    // one rectangle; it is cut out of the video window (a cover) only until the presenter has drawn it, and whenever it
+    // has not for up to about 2 s. videoOrigin: the picture's top left in the window (Main.qml).
+    property point videoOrigin: Qt.point(0, 0)
+    property bool inPicture: false
+    readonly property bool videoCover: visible && !inPicture
+    function publishPicture() { InPicture.publish(veyra, badge, "badge", badge.videoOrigin, Screen.devicePixelRatio) }
+    // At most 4 grabs a second, coalesced (review S4: never one per Qt frame while the item moves); hiding is immediate.
+    function schedulePicture() { if (!badgeGrabTimer.running) badgeGrabTimer.start() }
+    Timer { id: badgeGrabTimer; objectName: "pushfps-latency-grab-timer"; interval: 250; onTriggered: badge.publishPicture() }
+    onVisibleChanged: { if (!visible) { badge.inPicture = false; badgeGrabTimer.stop(); badge.publishPicture() } else badge.schedulePicture() }
+    onXChanged: badge.schedulePicture()
+    onYChanged: badge.schedulePicture()
+    onWidthChanged: badge.schedulePicture()
+    onHeightChanged: badge.schedulePicture()
+    onStatsChanged: badge.schedulePicture()
     readonly property real coverRadius: 9
     implicitWidth: row.implicitWidth + 20
     implicitHeight: 30
     radius: 9
-    color: Qt.rgba(0.04, 0.05, 0.04, 0.82)
+    // Drawn in the picture the backing covers the game, not the dark interface: 0.94 there (6 % of the game shows through),
+    // 0.82 as before where the items stay cut-outs (review S4).
+    color: Qt.rgba(0.04, 0.05, 0.04, InPicture.enabled(veyra) ? 0.94 : 0.82)
     border.width: 1
     border.color: Qt.rgba(1, 1, 1, 0.10)
 
     function refresh() { badge.stats = veyra.pushLiveStats() || {} }
-    Timer { interval: 500; repeat: true; running: badge.wanted; triggeredOnStart: true; onTriggered: badge.refresh() }
+    Timer { interval: 500; repeat: true; running: badge.wanted; triggeredOnStart: true; onTriggered: { badge.refresh(); badge.inPicture = InPicture.drawn(veyra, "badge") } }
 
     // Green under 30 ms of PC latency, amber to 60, red above.
     readonly property color level: !hasNumbers ? Theme.t3 : stats.latencyMs < 30 ? Theme.accent : stats.latencyMs < 60 ? Theme.warn : "#FF6B5B"
@@ -48,8 +66,13 @@ Rectangle {
             color: Theme.t3; font.family: Theme.fontMono; font.pixelSize: 11
         }
         Text {
+            objectName: "pushfps-latency-fps"
             visible: badge.stats.submitFps !== undefined && badge.stats.submitFps !== null
-            text: qsTr("%1 FPS").arg(Number(badge.stats.submitFps).toFixed(0))
+            // Shown FPS when the presenter knows it (PushLiveCadence), otherwise named as submitted; "uneven" when
+            // the presents do not reach the screen evenly (no variable refresh: holds of 1 and 2 refreshes).
+            text: (badge.stats.shownFpsKnown ? qsTr("显示 %1 FPS").arg(Number(badge.stats.shownFps).toFixed(0))
+                                             : qsTr("提交 %1 FPS").arg(Number(badge.stats.submitFps).toFixed(0)))
+                  + (badge.stats.uneven ? qsTr(" · 不均匀") : "")
                   + (badge.stats.submitLowFps !== undefined && badge.stats.submitLowFps !== null ? qsTr(" · 1% %1").arg(Number(badge.stats.submitLowFps).toFixed(0)) : "")
             color: Theme.t2; font.family: Theme.fontMono; font.pixelSize: 11
         }
