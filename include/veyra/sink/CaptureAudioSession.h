@@ -50,6 +50,15 @@ public:
     void setInputBitstream(std::wstring kind);
     // 0 automatic, 1 manual, 2 off. Positive offset delays sound.
     void setSync(unsigned mode,int offsetMs);
+    // PS5 Remote Play experiments, both off by default (docs/PS5_REMOTE_PLAY_EXPERIMENTS.md):
+    // fastRecover = VEYRA_EXP_RP_AUDIO_FAST_RECOVER, lowBuffer = VEYRA_EXP_RP_AUDIO_LOW_BUFFER.
+    // Takes effect at the next start(); ignored while running.
+    void setRemotePlayExperiments(bool fastRecover,bool lowBuffer);
+    // VEYRA_EXP_RP_STATS / _AUDIO_SMOOTH / _AUDIO_ADAPTIVE / _SMARTLINK (docs/AUDIO.md, rounds 3-4); same rules. concealed: Opus frames Chiaki concealed so far.
+    void setRemotePlayAudioOptions(bool stats,bool smooth,bool adaptive,bool smartlink=false);void noteRemotePlayConcealed(uint64_t concealed);
+    // VEYRA_EXP_RP_AUDIO_OWN_CLOCK (AudioOwnClock.h): in automatic sync the picture term of the schedule is the
+    // local delay of shown frames (videoPresented with an arrival), never the video PTS. Same rules as above.
+    void setRemotePlayOwnClock(bool on);
     CaptureAudioState snapshot()const;
 private:
     struct Impl;std::unique_ptr<Impl> p_;

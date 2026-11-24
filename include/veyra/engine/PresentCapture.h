@@ -28,6 +28,11 @@ public:
         // PushFPS quality test (PushQualityProbe.h): the frame's presentation timestamp (100 ns, the
         // source clock; generated frames carry their in-between time), 0 when unknown.
         int64_t pts100ns=0;
+        // Stream "clarity": the swap chain's back buffer after the presenter's blit, before Present (PRESENT = COMMON
+        // on entry, must be left in COMMON); what the window shows of this frame. Null when not available.
+        ID3D12Resource* screen=nullptr;
+        // How the presenter scaled this frame (EnhanceGraph::highQualityPresentation): 1 FineSample, 0 one bilinear tap, -1 unknown.
+        int presentFine=-1;
     };
     // Whether the next frames should carry `raw` (the graph keeps it only when asked).
     virtual bool wantsRawFrames() const { return false; }

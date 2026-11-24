@@ -11,6 +11,9 @@
 #include "veyra/engine/PresentationSettings.h"
 #include "veyra/engine/PresentCapture.h"
 #include "veyra/engine/DisplayStateService.h"
+#include "veyra/engine/PushPresentTiming.h"
+#include "veyra/engine/PushCadence.h"
+#include <memory>
 #include <chrono>
 #include <array>
 #include <optional>
@@ -69,6 +72,13 @@ public:
     // just before it as RTSS and PresentMon do: the 1% low counts these, not
     // returns, whose spacing also carries the call's own 0.2-0.6 ms jitter.
     int64_t lastPresentCallHost100ns()const{return lastPresentCallHost100ns_;}
+    // Slipstream (VEYRA_EXP_RP_STATS=1): called after a REAL frame's present with the host 100 ns
+    // stamps the frame carries (network arrival, decoded, engine pickup); joins the scanout dated by
+    // DXGI frame statistics and writes one [slipstream-latency] line per 5 s. No-op without the switch.
+    void latencyObserved(int64_t arrival100ns,int64_t decoded100ns,int64_t pickup100ns);
+    // VEYRA_EXP_PRESENT_TEARING: whether the last configurePresentation replaced VSync by
+    // sync interval 0 + DXGI_PRESENT_ALLOW_TEARING (docs/PRESENTATION_LATENCY.md).
+    bool tearingExperimentActive()const{return tearingExperiment_;}
     bool pacingActive()const{return sink_.pacingActive();}
     uint64_t generation()const{return generation_;}
     // Explicit integration-test capture only; never called by playback/export.
@@ -80,6 +90,9 @@ public:
     // queue; caller drains the shared queue and releases before resize/close.
     Microsoft::WRL::ComPtr<ID3D12Resource> presentedResourceForTest();
     uint64_t submittedCount() const {return sink_.presentCount();}
+    // PushFPS stream "delay90" ([slipstream-sizes]): the swap chain's back buffer extent.
+    uint32_t backBufferWidth() const {return sink_.bufferWidth();}
+    uint32_t backBufferHeight() const {return sink_.bufferHeight();}
     uint64_t consumerFenceValue(uint64_t sharedValue)const{return presentationQueue_?presentationRing_.lastSignaledValue():sharedValue;}
     double cpuWaitMilliseconds(const gfx::CommandSlotRing& shared)const{return presentationQueue_?presentationRing_.cpuWaitMilliseconds():shared.cpuWaitMilliseconds();}
     uint64_t xessGeneratedCount() const {return sink_.xess()?sink_.xess()->generatedCount():0;}
@@ -99,6 +112,11 @@ public:
     double displayRefreshHz();
     // Variable refresh state of that monitor (NVIDIA only), read with it.
     gfx::VrrState displayVrr()const{return vrr_;}
+    // VRR state for the cadence figures and VEYRA_EXP_PRESENT_EVEN_CADENCE: 1 enabled, 0 fixed refresh (read after
+    // the first present), -1 unknown (PushCadence.h pushVrrCadenceState).
+    int cadenceVrr()const{
+        return pushVrrCadenceState(vrr_.known,vrr_.enabled,cadenceConfirm_.readAfterPresent(),vrrConfirmAt_.has_value(),cadenceConfirm_.recentResize(cadenceNowMs()));
+    }
     // The 可变刷新 rule: the switch is on, Automatic is selected and VRR is
     // possible on the monitor, so Automatic presents like explicit Vsync.
     // vrrSync() is what the last configurePresentation applied.
@@ -128,6 +146,29 @@ private:
     gfx::ReflexSession reflex_;
     uint64_t reflexFrame_=0,reflexInputFrame_=0,generation_=0;
     int64_t lastPresentCallHost100ns_=0;
+    int64_t lastPresentReturnHost100ns_=0;
+    // Slipstream experiments, read once per swap-chain creation (open() without reuse).
+    std::unique_ptr<PushPresentLatency> latency_;
+    std::unique_ptr<PushCadenceWindow> cadence_; // [slipstream-cadence], with latency_ (VEYRA_EXP_RP_STATS=1)
+    // Live readout (always): a 1 s window published to pushLiveCadenceBoard() for the interface's counters.
+    std::unique_ptr<PushCadenceWindow> liveCadence_;int64_t nextLiveCadence100ns_=0;
+    // Cadence VRR state (pushVrrCadenceState): readings issued after this chain's first present
+    // (cadence-confirm, vrr-confirm, slipstream-stats); a resize / full-screen change makes it unknown for 3 s.
+    PushVrrConfirmSchedule cadenceConfirm_;
+    void resetCadenceVrr(){cadenceConfirm_.reset();}
+    static double cadenceNowMs(){return double(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count())/1e6;}
+    bool tearingSwitch_=false,vrrRequestSwitch_=false,tearingExperiment_=false;
+    // vrrConfirmLog_: the next display state is logged even when unchanged (vrr-confirm with the VRR switch).
+    // statsVrrReread_: STATS asks the display worker for a forced VRR re-read on the next presenter loop.
+    bool vrrConfirmLog_=false,statsVrrReread_=false;
+    // VEYRA_EXP_PRESENT_WINDOW_FACTS=1 (with STATS): the window facts and the forced VRR re-read run only then,
+    // because they query the desktop from the presenting thread (review: keep them out of ordinary STATS runs).
+    bool windowFactsSwitch_=false;
+    PushWindowFacts windowFacts_{};
+    int64_t windowCheckAt_=0;
+    void watchWindow(int64_t now100ns);
+    const char* tearingReason_=nullptr;
+    void openSlipstreamExperiments();
     bool providerOwnedPresentation_=false;
     PresentCapture* capture_=nullptr;
     Microsoft::WRL::ComPtr<ID3D12CommandQueue> presentationQueue_;

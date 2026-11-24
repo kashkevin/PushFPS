@@ -31,5 +31,59 @@
     "version": "3.4.14",
     "source": "https://github.com/libsdl-org/SDL/tree/release-3.4.14",
     "archive_sha512": "6e6f91cde7dffec527af8a9b0162e9fb7997ec2b6770d3002c662cd75e5cd01afd2fb5f5cadfa2496c86e67ed22e876d99ebdf60b9ea7431a3a3caf5686d0f8f"
-  }
+  },
+  "feedback_history_patch": "patches/0003-chiaki-feedback-history.patch",
+  "feedback_history_upstream_commits": [
+    "4382c1c718271c0e2427196d13863a28d57c2038",
+    "bfbb2968a01238c4ee1611ceb79ee0025ca31267",
+    "c938844a2fa7bbb9052656d83837cf98baff9ba5",
+    "bc397a728bb430f28666129ef006f7a8ac0e6081"
+  ],
+  "transport_tuning_patch": "patches/0004-chiaki-transport-tuning.patch",
+  "transport_tuning_api": "CHIAKI_VEYRA_TRANSPORT_API=1, local change (not an upstream backport): run-time AV reorder timeout and SO_RCVBUF with upstream values as defaults, transport counters; nothing sent to the console changes",
+  "upstream_fix_patches_note": "chiaki-ng fixes after the pin, one numbered patch each, applied after 0001-0004; not carried by Veyra",
+  "upstream_fix_patches": [
+    {
+      "patch": "patches/0005-chiaki-reorder-queue-drop.patch",
+      "upstream_commits": [
+        "727917c00067f4585d3ed076755c77835ce1ae9d"
+      ],
+      "default": "on, as upstream"
+    },
+    {
+      "patch": "patches/0006-chiaki-takion-send-buffer-teardown.patch",
+      "upstream_commits": [
+        "e5f1dd84d15a81bd12ee399610c030a8e2839c9b"
+      ],
+      "default": "on, as upstream"
+    },
+    {
+      "patch": "patches/0007-chiaki-http-header-bounds.patch",
+      "upstream_commits": [
+        "db6f54759c18e5a7b51463474e3b7313034b8388",
+        "6fd908272e2fac4eb91143a52eea1aeeefd3cd65",
+        "876a5e2ec4ad8ce1ef1cc562a9531654b6392f1a"
+      ],
+      "default": "on, as upstream"
+    },
+    {
+      "patch": "patches/0008-chiaki-login-pin-log.patch",
+      "upstream_commits": [
+        "728d2b607abdda9fa85c4e36f56132e305dbf4cc"
+      ],
+      "default": "on, as upstream"
+    },
+    {
+      "patch": "patches/0009-chiaki-send-buffer-size-switch.patch",
+      "upstream_commits": [
+        "3e1a24ddb26d2cac7807daa67ad12cd78b784df4"
+      ],
+      "default": "off; VEYRA_EXP_RP_CHIAKI_SEND_BUFFER=1 enables it"
+    },
+    {
+      "patch": "patches/0010-chiaki-send-buffer-counters.patch",
+      "upstream_commits": [],
+      "default": "on: counters only (local change, not an upstream backport), nothing sent changes"
+    }
+  ]
 }
