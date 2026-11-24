@@ -43,12 +43,14 @@
 #include <dbghelp.h>
 #include <d3d12.h>
 
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <format>
 #include <memory>
+#include <string>
 
 #include "veyra/Brand.h"
 #include "veyra/Log.h"
@@ -56,12 +58,15 @@
 #include "veyra/engine/EngineController.h"
 #include "veyra/engine/ExportJobManager.h"
 #include "veyra/engine/PresentationGeometry.h"
+#include "veyra/engine/PushCoverRegion.h"
+#include "veyra/engine/PushVideoOverlay.h"
 #include "veyra/gfx/PresentationHooks.h"
 #include "veyra/pipeline/AmdHipPreflight.h"
 #include "veyra/ui/InterfaceRenderer.h"
 #include "veyra/ui/QmlDataDirectory.h"
 #include "veyra/ui/QmlDiskCache.h"
 #include "veyra/ui/QmlPlayerBridge.h"
+#include "veyra/ui/SlipstreamSettingsFile.h"
 #include "veyra/ui/StartupMusic.h"
 #include "veyra/ui/ThumbnailProvider.h"
 
@@ -118,6 +123,7 @@ void blankVideo(const char* why) {
     g_videoBlanked = true;
     const int result = SetWindowRgn(g_video, CreateRectRgn(0, 0, 0, 0), TRUE);
     veyra::log::info("qml-window", std::format("blank video until the new source presents ({}) result={}", why, result));
+    veyra::engine::pushRegionBoard().set({veyra::engine::PushRegionKind::Empty, 0, false, "blank"});   // stream "present" [present-path]
 }
 
 const char* videoProbeName() {
@@ -259,7 +265,7 @@ bool syncVideoGeometry(QQuickWindow* window, QQuickItem* host) {
     return placed != 0;
 }
 
-struct Cover { QRectF rect; qreal radius = 0; };
+struct Cover { QRectF rect; qreal radius = 0; const QQuickItem* item = nullptr; };
 
 // cineIn (pages.css @keyframes cineIn, plan M21): the stage is clipped with
 // inset(12% 0 12% 0) and expands to inset(0). The picture is a native window, so
@@ -289,8 +295,51 @@ qreal sceneInsetFraction(QQuickWindow* window) {
     return videoInsetFraction(root);
 }
 
+// Experiment VEYRA_EXP_PRESENT_TEST_UNCOVERED=1 (off unless set; read once): while the built-in PS5
+// latency test RUNS, its dialog is not cut out of the video window, so the window keeps its whole
+// rectangle (no clipping region) for the timed presses; the dialog is behind the picture until the test
+// ends and then shows again. The question it answers: does the dialog's hole in the video window's
+// region change present->scanout (docs/PRESENTATION_LATENCY.md section 6, arm "test-uncovered").
+bool testUncoveredSwitch() {
+    static const bool on = [] { wchar_t v[4]{}; return GetEnvironmentVariableW(L"VEYRA_EXP_PRESENT_TEST_UNCOVERED", v, 4) == 1 && v[0] == L'1'; }();
+    return on;
+}
+bool g_testUncoveredNow = false;
+// VEYRA_EXP_PRESENT_RECT_REGION=1 (include/veyra/engine/PushCoverRegion.h): while interface items are over
+// the picture the video window keeps ONE rectangle (the largest part no item touches) instead of a region
+// with rounded holes. The question it answers: is the complex region what keeps presentation out of the
+// short-delay regime (BENCH2: slow exactly while regionKind=3). The strip beside an item is hidden meanwhile.
+bool rectRegionSwitch() {
+    static const bool on = [] { wchar_t v[4]{}; return GetEnvironmentVariableW(L"VEYRA_EXP_PRESENT_RECT_REGION", v, 4) == 1 && v[0] == L'1'; }();
+    return on;
+}
+// With VEYRA_EXP_RP_STATS=1: which interface item is over the picture, by its QML type and the nearest
+// object name of this program's own interface (identifiers from the source, nothing of the user's).
+bool coverFactsSwitch() {
+    static const bool on = [] { wchar_t v[4]{}; return GetEnvironmentVariableW(L"VEYRA_EXP_RP_STATS", v, 4) == 1 && v[0] == L'1'; }();
+    return on;
+}
+std::string coverName(const QQuickItem* item) {
+    if (!item) return "none";
+    std::string name = item->metaObject()->className();
+    if (const auto cut = name.find("_QMLTYPE_"); cut != std::string::npos) name.resize(cut);
+    for (const QQuickItem* at = item; at; at = at->parentItem()) {
+        const QString object = at->objectName();
+        if (object.isEmpty() || object == QLatin1String("videoCover")) continue;
+        name += '/';
+        name += object.toLatin1().constData();
+        break;
+    }
+    return name;
+}
+
 void collectCovers(QQuickItem* item, QList<Cover>& out) {
     if (!item->isVisible() || item->opacity() <= 0.0) return;
+    if (testUncoveredSwitch() && item->objectName() == QLatin1String("pushfps-latency-test") &&
+        item->property("running").toBool()) {
+        g_testUncoveredNow = true;
+        return;
+    }
     // A cover is named "videoCover" or carries videoCover: true; the property lets a
     // dialog keep its own objectName for tests (an overridden name used to drop
     // the hole, leaving five dialogs behind the picture).
@@ -304,7 +353,7 @@ void collectCovers(QQuickItem* item, QList<Cover>& out) {
         // Scale is folded into the scene rect; the corner radius scales with it.
         const QRectF r = item->mapRectToScene(QRectF(0, 0, item->width(), item->height()));
         const qreal s = item->width() > 0 ? r.width() / item->width() : 1.0;
-        out << Cover{r, item->property("coverRadius").toReal() * s};
+        out << Cover{r, item->property("coverRadius").toReal() * s, item};
     }
     for (QQuickItem* child : item->childItems()) collectCovers(child, out);
 }
@@ -319,8 +368,13 @@ void syncVideoCovers(QQuickWindow* window, QQuickItem* host, qreal inset) {
     if (!window || !host || !g_video) return;
     if (g_videoProbe == VideoProbeMode::CoversOnly) inset = 0;
     QList<Cover> covers;
+    const bool wasUncovered = g_testUncoveredNow;
+    g_testUncoveredNow = false;
     collectCovers(window->contentItem()->parentItem() ? window->contentItem()->parentItem()
                                                       : window->contentItem(), covers);
+    if (g_testUncoveredNow != wasUncovered)
+        veyra::log::info("slipstream-present", std::format("testUncovered={} (VEYRA_EXP_PRESENT_TEST_UNCOVERED: the running latency test's dialog is {} the video window's region)",
+                                                           g_testUncoveredNow ? 1 : 0, g_testUncoveredNow ? "not cut out of" : "cut out of"));
     const qreal dpr = window->devicePixelRatio();
     const QPointF origin = host->mapToScene(QPointF(0, 0));
     // The region clips the native HWND, so its dimensions must come from that
@@ -352,6 +406,28 @@ void syncVideoCovers(QQuickWindow* window, QQuickItem* host, qreal inset) {
         if (key == last) return;
         last = key;
     }
+    {
+        // Stream "present" R2: what this call makes of the region, for the presenter's [present-path] line
+        // (engine/PushVideoOverlay.h pushRegionDecision follows the branches below). Covers wholly outside the window
+        // cut nothing; the names are this program's own QML types and object names.
+        std::size_t inPicture = 0;
+        std::string names;
+        qsizetype index = 0;
+        for (const Cover& c : covers) {
+            const QRect& hole = holes[index * 2];
+            ++index;
+            if (std::min(hole.left() + hole.width(), w) <= std::max(hole.left(), 0) || std::min(hole.top() + hole.height(), h) <= std::max(hole.top(), 0)) continue;
+            ++inPicture;
+            if (names.size() < 200) { if (!names.empty()) names += ','; names += coverName(c.item); }
+        }
+        veyra::engine::PushRegionInput in;
+        in.coversInPicture = inPicture;
+        in.insetBand = insetBand > 0;
+        in.rectExperiment = rectRegionSwitch() && covers.size() <= qsizetype(veyra::engine::kPushCoverLimit);
+        in.noRegionProbe = g_videoProbe == VideoProbeMode::NoRegion;
+        in.covers = std::size_t(covers.size());   // review S5: covers wholly outside the picture still install a rectangle region
+        veyra::engine::pushRegionBoard().set({veyra::engine::pushRegionDecision(in), unsigned(inPicture), in.insetBand, names.empty() ? std::string("none") : names});
+    }
     if (g_videoProbe == VideoProbeMode::NoRegion) {
         SetLastError(0);
         const int result = SetWindowRgn(g_video, nullptr, TRUE);
@@ -359,6 +435,36 @@ void syncVideoCovers(QQuickWindow* window, QQuickItem* host, qreal inset) {
             "SetWindowRgn no-region result={} error={}", result, result ? 0 : GetLastError()));
         logVideoWindowState(window, host, "region");
         return;
+    }
+    if (coverFactsSwitch() || rectRegionSwitch()) {
+        // One line when the set of items over the picture changes (not while one only moves).
+        std::array<veyra::engine::PushRect, veyra::engine::kPushCoverLimit> rects{};
+        std::size_t count = 0;
+        for (qsizetype i = 0; i + 1 < holes.size() && count < rects.size(); i += 2)
+            rects[count++] = {holes[i].left(), holes[i].top(), holes[i].left() + holes[i].width(), holes[i].top() + holes[i].height()};
+        const std::size_t inPicture = veyra::engine::pushCoversInPicture(w, h, rects.data(), count);
+        std::string names;
+        for (const Cover& c : covers) { if (names.size() > 200) break; if (!names.empty()) names += ','; names += coverName(c.item); }
+        static std::string lastNames; static std::size_t lastInPicture = ~std::size_t(0);
+        if (names != lastNames || inPicture != lastInPicture) {
+            lastNames = names; lastInPicture = inPicture;
+            veyra::log::info("slipstream-present", std::format("covers count={} inPicture={} rectRegion={} items={}",
+                                                               covers.size(), inPicture, rectRegionSwitch() ? 1 : 0, names.empty() ? "none" : names));
+        }
+        bool complete = false;
+        const auto clear = veyra::engine::pushLargestClearRect(w, h, rects.data(), count, &complete);
+        if (rectRegionSwitch() && !holes.isEmpty() && complete && covers.size() <= qsizetype(rects.size())) {
+            HRGN one = CreateRectRgn(clear.left, clear.top, clear.right, clear.bottom);
+            SetLastError(0);
+            const int result = SetWindowRgn(g_video, one, TRUE); // the system owns the region on success
+            const DWORD error = result ? 0 : GetLastError();
+            if (!result) DeleteObject(one);
+            veyra::log::info("qml-window", std::format(
+                "SetWindowRgn rect={},{} {}x{} of {}x{} covers={} result={} error={}",
+                clear.left, clear.top, clear.width(), clear.height(), w, h, covers.size(), result, error));
+            logVideoWindowState(window, host, "region");
+            return;
+        }
     }
     // Covers win: a popover over the picture shows the QML beneath it, and the
     // clip inset only ever runs without one. A cover opening mid-animation simply
@@ -503,6 +609,7 @@ static int runApplication(int argc, char** argv, QString& restartProgram, QStrin
     g_crashDumpDirectory = logPath.parent_path().wstring();
     veyra::engine::EngineWatchdog::setDumpDirectory(g_crashDumpDirectory);
     SetUnhandledExceptionFilter(crashFilter);
+    veyra::ui::applySlipstreamSettingsFile();   // slipstream.ini beside the exe -> VEYRA_EXP_RP_* / VEYRA_TEST_RP_* switches not already set
 
     // Interface scale (设置 → 界面缩放) has to be fixed before Qt starts, so the
     // preference file is read here, from the same data directory the bridge uses.

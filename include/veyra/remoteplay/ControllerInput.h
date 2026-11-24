@@ -1,5 +1,6 @@
 #pragma once
 #include "Types.h"
+#include "TriggerFilter.h"
 #include <deque>
 #include <string>
 #include <vector>
@@ -40,6 +41,8 @@ private:
     std::array<float,3> gyroBias_{},biasSum_{},sensorGyro_{},sensorAccel_{0,1,0};
     unsigned calibrationSamples_=0;bool calibrating_=false,haveGyro_=false,haveAccel_=false;
     HostTime calibrationStart_=0;uint64_t sensorStamp_=0;
+    // Veyra 17e54e24; used only with VEYRA_EXP_RP_TRIGGER_FILTER=1 (read in start()).
+    TriggerFilter triggerFilter_;bool triggerFilterOn_=false;
 
 
 };

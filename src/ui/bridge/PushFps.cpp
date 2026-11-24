@@ -7,9 +7,17 @@
 #include "../QmlPlayerBridge_p.h"
 #include "veyra/engine/PushArchivePaths.h"
 #include "veyra/engine/PushBenchmarkProbe.h"
+#include "veyra/engine/PushCadence.h"
+#include "veyra/engine/PushVideoOverlay.h"
+#include "veyra/ui/PushInPictureCompose.h"
+#include "veyra/engine/PushLegacyEnv.h"
+#include <map>
+#include <climits>
+#include <algorithm>
 #include "veyra/Brand.h"
 #include "veyra/RuntimePaths.h"
 #include "veyra/ngx/AnrProvider.h"
+#include <chrono>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QDirIterator>
@@ -46,10 +54,49 @@
 #include "veyra/gfx/D3D12DeviceContext.h"
 
 namespace veyra::ui {
+void pushSlipstreamLiveStats(QVariantMap& m);   // PushSlipstream.cpp: VEYRA_EXP_RP_GOVERNOR keys, none without it
 namespace {
 QVariant optionalNumber(const std::optional<double>& v) { return v && std::isfinite(*v) ? QVariant(*v) : QVariant(); }
 // Discord's upload limit without server boosts or Nitro (2024 onwards).
 constexpr qint64 kDiscordUploadLimit = 10ll * 1024 * 1024;
+}
+
+namespace {
+// Stream "present" R1: the items' pictures (UI thread only), composed into one for the presenter (ui/PushInPictureCompose.h).
+std::map<QString, InPictureLayer>& inPictureLayers() { static std::map<QString, InPictureLayer> layers; return layers; }
+bool inPictureEnabled() { return !engine::pushLegacyRestored(engine::PushLegacyPart::VideoOverlay, engine::pushEnvironment()); }
+int64_t steadyMs() { return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+}  // namespace
+
+bool QmlPlayerBridge::pushSetVideoOverlay(const QString& key, const QVariant& image, double x, double y, double dpr) {
+    if (!inPictureEnabled() || key.isEmpty() || key.size() > 32) return false;
+    auto& layers = inPictureLayers();
+    const QImage picture = image.canConvert<QImage>() ? image.value<QImage>() : QImage();
+    // Bounded: a picture larger than 2048 x 2048 or placed far outside any window is no overlay item; it is refused.
+    const bool usable = !picture.isNull() && picture.width() <= 2048 && picture.height() <= 2048 && std::isfinite(x) && std::isfinite(y) &&
+                        std::abs(x) < 16384 && std::abs(y) < 16384;
+    if (!usable) {
+        if (layers.erase(key) == 0) return picture.isNull();   // nothing to take away: no new version
+    } else {
+        const double ratio = std::isfinite(dpr) && dpr > 0 && dpr < 8 ? dpr : 1.0;
+        auto& layer = layers[key];
+        layer.image = inPictureNormalized(picture);   // review S1: ratio 1, drawn pixel for pixel
+        layer.x = int(std::lround(x * ratio));
+        layer.y = int(std::lround(y * ratio));
+    }
+    const auto composed = inPictureCompose(layers);
+    if (!layers.empty() && !composed) return false;
+    const uint64_t version = engine::pushVideoOverlayBoard().publish(composed);
+    if (usable) layers[key].version = version;
+    return true;
+}
+
+QVariantMap QmlPlayerBridge::pushVideoOverlayState() const {
+    QVariantMap drawn;
+    const bool enabled = inPictureEnabled();
+    const auto now = steadyMs();
+    for (const auto& [name, layer] : inPictureLayers()) drawn.insert(name, enabled && engine::pushVideoOverlayBoard().drawnSince(layer.version, now));
+    return {{"enabled", enabled}, {"drawn", drawn}};
 }
 
 QVariantMap QmlPlayerBridge::pushLiveStats() const {
@@ -69,6 +116,21 @@ QVariantMap QmlPlayerBridge::pushLiveStats() const {
     m["settled"] = s.running && !facadeApplying && !s.applying && s.desired.revision == s.applied.revision &&
                    flow.latest.frame.settingsRevision == s.applied.revision;
     m["submitFps"] = optionalNumber(s.submissionFps);
+    // What reaches the screen and how evenly, INFERRED from our Present calls and the sync rule (engine::PushLiveCadence, published by the presenter once a
+    // second). Not known with display sync Automatic, while the VRR state is unknown (evenness only), when
+    // the XeSS SDK presents its own frames, or when nothing was presented in the last 3 s.
+    {
+        const auto live = engine::pushLiveCadenceBoard().read();
+        const double nowMs = double(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()) / 1e6;
+        const bool xessSdk = s.fgActive && s.applied.frameGenerationBackend == engine::FrameGenerationBackend::XeSS && flow.xessSdkSubmitFps > 0;
+        const bool usable = s.running && !xessSdk && live.fresh(nowMs);
+        m["shownFpsKnown"] = usable && live.shownKnown;
+        m["shownFps"] = usable && live.shownKnown ? QVariant(live.shownFps) : QVariant();
+        m["vrrActive"] = usable ? live.vrr : -1;
+        m["unevenKnown"] = usable && live.unevenKnown;
+        m["unevenPct"] = usable && live.unevenKnown ? QVariant(live.unevenPct) : QVariant();
+        m["uneven"] = usable && live.uneven();
+    }
     m["submitLowFps"] = optionalNumber(s.submissionLow1Fps);
     m["sourceFps"] = s.fps;
     m["contentFps"] = s.contentFps;
@@ -78,6 +140,12 @@ QVariantMap QmlPlayerBridge::pushLiveStats() const {
     m["latencyMs"] = optionalNumber(flow.softwareLatencyMs);
     m["latencyP95Ms"] = optionalNumber(flow.softwareLatencyP95Ms);
     m["latencySamples"] = QVariant::fromValue(qulonglong(flow.latencySamples));
+    // Package 15 (engine/PushDelaySplit.h): latencyMs = picture + first generated frame + wait + margin, same frames.
+    m["latencyPictureMs"] = optionalNumber(flow.latencyPictureMs);
+    m["latencyFirstGeneratedMs"] = optionalNumber(flow.latencyFirstGeneratedMs);
+    m["latencyWaitMs"] = optionalNumber(flow.latencyWaitMs);
+    m["latencyMarginMs"] = optionalNumber(flow.latencyMarginMs);
+    m["latencySplitShare"] = flow.latencySplitShare;
     m["fgActive"] = s.fgActive;
     // The multiplier the last pair used (adaptive mode, output cap or a reduced group).
     m["fgMultiplierNow"] = s.previewFgMultiplier;
@@ -100,6 +168,96 @@ QVariantMap QmlPlayerBridge::pushLiveStats() const {
     m["outputWidth"] = int(s.metrics.resolution.output.width);
     m["outputHeight"] = int(s.metrics.resolution.output.height);
     m["hdr"] = s.sourceHdr;
+    // Statistics overlay (PushStatsOverlay.qml) and the performance modes: numbers the engine already has,
+    // copied as they are. A key that is absent or null means "not measured" and is shown as that.
+    m["realPresentFps"] = flow.realPresentFps;
+    m["generatedPresentFps"] = flow.generatedPresentFps;
+    m["remotePlay"] = s.remotePlay;
+    if (s.remotePlay && s.remoteRatesReady) {
+        m["streamReceivedFps"] = s.remoteReceivedFps;
+        m["streamDecodedFps"] = s.remoteDecodedFps;
+    }
+    // VEYRA_EXP_RP_STREAM_DEDUP: what the console sends and how many of those pictures are new, per 10 s.
+    const auto& cadence = s.streamCadence;
+    m["cadenceActive"] = cadence.active;
+    if (cadence.active) {
+        m["cadenceState"] = cadence.state;
+        m["cadenceStreamFps"] = cadence.streamFps;
+        m["cadenceSourceFps"] = cadence.sourceFps;
+        m["cadenceRealPresentedFps"] = cadence.realPresentedFps;
+        m["cadenceGeneratedPresentedFps"] = cadence.generatedPresentedFps;
+        m["cadencePresentedFps"] = cadence.presentedFps;
+    }
+    // VEYRA_EXP_RP_HEALTH: the newest five-second connection health snapshot. No addresses.
+    const auto& health = s.remoteHealth;
+    m["healthValid"] = s.remotePlay && health.valid;
+    if (s.remotePlay && health.valid) {
+        m["healthGrade"] = QString::fromLatin1(remoteplay::healthGradeName(health.grade));
+        m["healthLossPercent"] = health.counterWrap ? QVariant() : QVariant(health.lossPercent);   // a wrapped counter: unknown, never "-1.00 %"
+        m["healthJitterMs"] = health.frameJitterMs;
+        m["healthJitterPeakMs"] = health.frameJitterPeakMs;
+        m["healthRecoveryEvents"] = QVariant::fromValue(qulonglong(health.recoveryEvents()));
+        m["healthFrameDrops"] = QVariant::fromValue(qulonglong(health.networkFrameDrops));
+        m["healthRttMs"] = optionalNumber(health.rttMs);
+        m["routeKnown"] = health.route.addressKnown;
+        m["routeDirectLan"] = health.route.directLan();
+        m["routeLink"] = QString::fromLatin1(health.route.linkName());
+    }
+    // VEYRA_EXP_RP_STATS=1: the newest [slipstream-net] window (NetDiagnostics.h) for the Network
+    // Diagnostics panel, and the dominant cause again with the engine's own evidence added. Absent keys
+    // and nulls are "not available"; nothing here is estimated. No addresses or names.
+    const auto& net = s.remoteNet;
+    m["netValid"] = s.remotePlay && net.valid;
+    if (s.remotePlay && net.valid) {
+        const auto count = [](const std::optional<std::uint64_t>& v) { return v ? QVariant::fromValue(qulonglong(*v)) : QVariant(); };
+        const auto positive = [](double v) { return v >= 0 && std::isfinite(v) ? QVariant(v) : QVariant(); };
+        m["netSeconds"] = net.health.seconds;
+        m["netCodec"] = QString::fromStdString(net.codec);
+        m["netWidth"] = int(net.width);
+        m["netHeight"] = int(net.height);
+        m["netResolutionChanges"] = QVariant::fromValue(qulonglong(net.resolutionChanges));
+        m["netFps"] = net.health.receivedFps;
+        m["netRequestedKbps"] = net.requestedKbps;
+        m["netKbps"] = net.kbps;
+        m["netKbpsMin1s"] = optionalNumber(net.kbpsMin1s);
+        m["netKbpsMax1s"] = optionalNumber(net.kbpsMax1s);
+        m["netConsoleTargetKbps"] = positive(net.health.console.targetKbps);
+        m["netPackets"] = QVariant::fromValue(qulonglong(net.health.packetsReceived + net.health.packetsLost));
+        // A wrapped library loss counter (counterWrap): the loss figures of this window are unavailable.
+        m["netCounterWrap"] = net.counterWrap;
+        m["netLossPercent"] = net.counterWrap ? QVariant() : QVariant(net.health.lossPercent);
+        m["netMissing"] = net.counterWrap ? QVariant() : QVariant::fromValue(qulonglong(net.missing));
+        m["netLate"] = QVariant::fromValue(qulonglong(net.late));
+        m["netMissingNotLate"] = net.counterWrap ? QVariant() : QVariant::fromValue(qulonglong(net.missingNotLate));
+        m["netReordered"] = QVariant::fromValue(qulonglong(net.health.reordered));
+        m["netDropOther"] = QVariant::fromValue(qulonglong(net.dropOther));
+        m["netFecRecovered"] = QVariant::fromValue(qulonglong(net.health.fecRecovered));
+        m["netFecFailed"] = QVariant::fromValue(qulonglong(net.health.fecFailed));
+        m["netFecRecoveryPct"] = optionalNumber(net.fecRecoveryPct);
+        m["netFramesLost"] = QVariant::fromValue(qulonglong(net.framesLost));
+        m["netRecoveries"] = QVariant::fromValue(qulonglong(net.health.decoderResets));
+        m["netIngressDropped"] = QVariant::fromValue(qulonglong(net.ingressDropped));
+        m["netJitterMs"] = net.health.frameJitterMs;
+        m["netJitterPeakMs"] = net.health.frameJitterPeakMs;
+        m["netToDecodeP95Ms"] = optionalNumber(net.netToDecodeP95Ms);
+        m["netUdpInErrors"] = count(net.udpInErrors);
+        m["netNicDiscards"] = count(net.nicDiscards);
+        m["netRoute"] = QString::fromLatin1(remoteplay::routeHopName(net.hop));
+        m["netRouteClass"] = QString::fromLatin1(remoteplay::routeClassName(net.health.route));
+        remoteplay::EngineEvidence engineEvidence;
+        engineEvidence.valid = true;
+        if (gpuUtilizationKnown()) engineEvidence.gpuUtilizationPct = double(gpuUtilization());
+        engineEvidence.fgActive = s.fgActive;
+        engineEvidence.fgBudgetLimited = s.fgBudgetLimited;
+        engineEvidence.enhancementActive = s.srActive || s.nrActive;
+        if (flow.realPresentFps > 0) engineEvidence.realPresentFps = flow.realPresentFps;
+        if (s.remoteRatesReady) engineEvidence.decodedFps = s.remoteDecodedFps;
+        const auto verdict = remoteplay::classifyStream(net.evidence, engineEvidence);
+        m["netBottleneck"] = QString::fromLatin1(remoteplay::streamCauseName(verdict.cause));
+        m["netSigns"] = QString::fromStdString(remoteplay::formatStreamCauseSigns(verdict.signs));
+        m["netEvidence"] = QString::fromStdString(verdict.evidence);
+    }
+    pushSlipstreamLiveStats(m);
     return m;
 }
 
@@ -673,6 +831,8 @@ void QmlPlayerBridge::pushFlowBudgetWatch() {
     const auto now = std::chrono::steady_clock::now();
     if (now - w.last < std::chrono::seconds(1)) return;
     w.last = now;
+    // Experiments VEYRA_EXP_RP_GOVERNOR / VEYRA_EXP_RP_GPU_BUDGET (PushSlipstream.cpp); nothing without them.
+    const bool gpuBudgetApplies = pushSlipstreamWatch();
     const auto& s = impl_->snapshot;
     // The cadence notice (same second tick): the game is set to 30 FPS, the capture runs at 60 and
     // automatic duplicate removal still sees a new picture in every sample. Some capture cards add
@@ -691,7 +851,8 @@ void QmlPlayerBridge::pushFlowBudgetWatch() {
         }
     }
     const auto reset = [&] { w.starved = 0; w.settledSeconds = 0; };
-    if (!s.running || !s.fgActive || s.pushFlowPrecision.empty() || fgBackendName() != QLatin1String("pushflow")) { reset(); return; }
+    // VEYRA_EXP_RP_GPU_BUDGET=apply steps the tier itself: never both.
+    if (gpuBudgetApplies || !s.running || !s.fgActive || s.pushFlowPrecision.empty() || fgBackendName() != QLatin1String("pushflow")) { reset(); return; }
     // "Optimise for my PC" measures every tier itself: never change one under it.
     const QString optimizing = impl_->prefs.value(QStringLiteral("pushOptimizeRestore")).toString();
     if (engine::pushBenchmarkProbe().active() || impl_->engine.qualityTest().running || (!optimizing.isEmpty() && optimizing != QLatin1String("{}"))) { reset(); return; }

@@ -1,0 +1,37 @@
+{
+ "GTA V 风格": {
+  "en": "GTA V style",
+  "zh-TW": "GTA V 風格",
+  "ja": "GTA V スタイル"
+ },
+ "套用 GTA V 风格键位": {
+  "en": "Apply GTA V-style keys",
+  "zh-TW": "套用 GTA V 風格鍵位",
+  "ja": "GTA V スタイルのキーを適用"
+ },
+ "暂停（OPTIONS）并切换菜单按键": {
+  "en": "Pause (OPTIONS) and switch the menu keys",
+  "zh-TW": "暫停（OPTIONS）並切換選單按鍵",
+  "ja": "ポーズ（OPTIONS）とメニューキーの切り替え"
+ },
+ "用“暂停并切换菜单按键”的键进入和离开菜单按键；菜单按键生效时鼠标不转动镜头": {
+  "en": "The key for “pause and switch the menu keys” turns the menu keys on and off; while they are on the mouse does not turn the camera",
+  "zh-TW": "用「暫停並切換選單按鍵」的鍵進入和離開選單按鍵；選單按鍵生效時滑鼠不轉動鏡頭",
+  "ja": "「ポーズとメニューキーの切り替え」のキーでメニューキーのオン・オフを切り替えます。オンの間はマウスでカメラは回りません"
+ },
+ "菜单": {
+  "en": "Menu",
+  "zh-TW": "選單",
+  "ja": "メニュー"
+ },
+ "已套用 GTA V 风格键位。GTA VI 的换弹键没有公开资料：如果游戏里换弹是别的按键，把 R 设到那个按键上（R 就不再是近战）": {
+  "en": "GTA V-style keys applied. GTA VI's reload button is not published: if reload is another button in the game, put R on it (R then stops sending melee)",
+  "zh-TW": "已套用 GTA V 風格鍵位。GTA VI 的換彈鍵沒有公開資料：如果遊戲裡換彈是別的按鍵，把 R 設到那個按鍵上（R 就不再是近戰）",
+  "ja": "GTA V スタイルのキーを適用しました。GTA VI のリロードボタンは公開されていません。ゲーム内でリロードが別のボタンなら、R をそのボタンに割り当ててください（R は近接攻撃ではなくなります）"
+ },
+ "WASD 移动，鼠标转镜头，左键开火，右键瞄准，Shift 奔跑，空格跳跃，F 上下车，R 近战，Q 掩体，Ctrl 蹲下，Tab 武器轮盘，E 互动，Esc 暂停和菜单按键；按媒体整理的 GTA VI PS5 按键表（未在游戏里验证）。同时设定最低延迟的鼠标处理，保留你自定义的灵敏度。换弹键没有公开资料：如果游戏里换弹是别的按键，把 R 设到那个按键上（R 就不再是近战）": {
+  "en": "WASD move, mouse camera, left click fire, right click aim, Shift run, Space jump, F enter or exit vehicles, R melee, Q cover, Ctrl crouch, Tab weapon wheel, E interact, Esc pause and menu keys; sent as the GTA VI PS5 buttons from press tables (not checked in the game). Also sets the lowest-latency mouse handling and keeps your own Custom sensitivities. No published source names the reload button: if reload is another button in the game, put R on it (R then stops sending melee)",
+  "zh-TW": "WASD 移動，滑鼠轉鏡頭，左鍵開火，右鍵瞄準，Shift 奔跑，空白鍵跳躍，F 上下車，R 近戰，Q 掩護，Ctrl 蹲下，Tab 武器輪盤，E 互動，Esc 暫停和選單按鍵；依媒體整理的 GTA VI PS5 按鍵表（未在遊戲裡驗證）。同時設定最低延遲的滑鼠處理，保留你自訂的靈敏度。換彈鍵沒有公開資料：如果遊戲裡換彈是別的按鍵，把 R 設到那個按鍵上（R 就不再是近戰）",
+  "ja": "WASD で移動、マウスでカメラ、左クリックで射撃、右クリックでエイム、Shift で走る、スペースでジャンプ、F で乗り降り、R で近接攻撃、Q でカバー、Ctrl でしゃがむ、Tab で武器ホイール、E でインタラクト、Esc でポーズとメニューキー。報道各社がまとめた GTA VI の PS5 ボタン表に基づきます（ゲーム内では未確認）。最も遅延の少ないマウス処理も設定し、カスタムの感度はそのまま残します。リロードのボタンは公開情報がありません。ゲーム内でリロードが別のボタンなら、R をそのボタンに割り当ててください（R は近接攻撃ではなくなります）"
+ }
+}

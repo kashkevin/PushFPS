@@ -7,6 +7,7 @@
 
 #include <format>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "veyra/Log.h"
@@ -257,6 +258,17 @@ bool D3D12DeviceContext::initialize(const DeviceContextDesc& desc, Status& statu
     queueDesc.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
     queueDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
     queueDesc.NodeMask = 0;
+    // PushFPS stream "delay90" asked for a HIGH-priority graph queue with VEYRA_EXP_RP_GRAPH_QUEUE_PRIORITY=high. Stream
+    // "lagfix" (the owner's 24th message) made it inert: the presentation queue stays NORMAL, so a real frame's blit
+    // could wait behind graph work of the next pair, and raising both queues only moves the same contention elsewhere;
+    // nothing on Linux can show which is better. The value is still read and logged; the queue stays NORMAL.
+    {
+        wchar_t graphPriority[8]{};
+        const DWORD length = GetEnvironmentVariableW(L"VEYRA_EXP_RP_GRAPH_QUEUE_PRIORITY", graphPriority, 8);
+        if (length > 0)
+            veyra::log::info("graph-priority", std::format("requested={} selected=NORMAL disabled: can make playback worse (VEYRA_EXP_RP_GRAPH_QUEUE_PRIORITY)",
+                length < 8 && std::wstring_view(graphPriority, length) == L"high" ? "HIGH" : "unknown"));
+    }
     result = device_->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&queue_));
     if (FAILED(result)) {
         status = Status::DeviceFailure;
