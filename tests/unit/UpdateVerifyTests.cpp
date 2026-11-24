@@ -100,6 +100,13 @@ private slots:
         rec = parseInstalledVersionFile("PushFPS 3.2.0\nRuntime: Veyra-2.1.6-AMD-win64-portable.zip from x\nNot installed: runtime\\amd-nr (...)\n");
         QCOMPARE(rec->gpu, QStringLiteral("AMD"));
         QVERIFY(!rec->extras);
+        // The neural runtime's own line is not an "extras left out" line: -ExperimentalExtras Yes stays Yes.
+        rec = parseInstalledVersionFile("PushFPS 3.2.2\r\nRuntime: Veyra-2.1.6-NVIDIA-win64-portable.zip from x\r\n"
+                                        "Neural runtime: not installed (runtime\\experimental\\nr-original, NVIDIA's neural-rendering runtime, experimental; optional)\r\n");
+        QVERIFY(rec.has_value());
+        QVERIFY(rec->extras);
+        rec = parseInstalledVersionFile("PushFPS 3.2.2\nRuntime: Veyra-2.1.6-NVIDIA-win64-portable.zip from x\nNeural runtime: kept (runtime\\experimental\\nr-original, installed earlier by your choice)\n");
+        QVERIFY(rec->extras);
         QVERIFY(!parseInstalledVersionFile("hello").has_value());
         QCOMPARE(parseInstalledVersionFile("PushFPS 3.1.4\nRuntime: Veyra-2.1.9-NVIDIA-win64-portable.zip from x\n")->version, QVersionNumber(3, 1, 4));
     }
