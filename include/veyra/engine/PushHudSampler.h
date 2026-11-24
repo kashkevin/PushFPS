@@ -37,6 +37,7 @@ public:
     void start(uint32_t samples = 12, uint32_t intervalMs = 350);
     void cancel();
     Status status();
+    bool running() { std::lock_guard lock(m_); return running_; }   // cheap (no copy, no detection): "Lower delay" pauses
 
     bool record(ID3D12GraphicsCommandList* list, const Frame& frame) override;
     void submitted(ID3D12Fence* fence, uint64_t value) override;
