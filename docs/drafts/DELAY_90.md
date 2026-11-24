@@ -1,5 +1,11 @@
 # The delay of a 30 FPS game shown at 90 FPS at 4K (stream "delay90", 23 Nov 2026)
 
+> **Stream "lagfix" (23 Nov 2026): `VEYRA_EXP_RP_GRAPH_QUEUE_PRIORITY` is inert.** A HIGH graph queue with a NORMAL
+> presentation queue can make a real frame's blit wait behind the next pair's graph work; nothing short of the owner's
+> PC can show whether raising both helps. The value is still read and logged (`[graph-priority] ... selected=NORMAL
+> disabled: can make playback worse`); the queue stays NORMAL.
+
+
 Scope: the owner's nineteenth and twentieth messages. His setup: 3840x2160 processing, a 30 FPS game, frame generation to
 a stable 90 FPS (3X), about 30 ms reported delay, a 2560x1440 180 Hz screen, an RTX 5070. His firm rule (twentieth
 message): **4K processing is kept**. Lower sizes, lower frame-generation quality, 2X / 60 FPS and frame generation off
@@ -35,7 +41,7 @@ base = the real frame's own processing (upload, colour, clean-up, SR, NR, flow);
    code: the model runs at the full working size (section 4c).
 4. Built (all off by default; unverified on Windows): `[slipstream-sizes]`; the delay split in `[slipstream-smooth]`;
    `gpuFg1P50/P95Ms`, `uploadCpuCopyFps`; `VEYRA_EXP_RP_UPLOAD_EARLY_RELEASE=1`; `VEYRA_EXP_RP_GRAPH_QUEUE_PRIORITY=high`;
-   `VEYRA_EXP_RP_FIT_DISPLAY=1` (DIAGNOSTIC only); the kit sets `d90` and `d90-capture` (about 30 minutes each).
+   `VEYRA_EXP_RP_FIT_DISPLAY=1` (DIAGNOSTIC only); the kit sets `d90` and `d90-capture` (about 22 and 39 minutes since Package 14).
 
 ## 1. What was verified in code
 
@@ -176,14 +182,17 @@ No real avoidable extra specific to 3X was found beyond these; no new FG_ULL par
 ## 5. The kit (deliverable 5)
 
 Two sets, every arm at 4K unless its note says DIAGNOSTIC; switch arms against the 3X arm (`d90-fg3` / `d90c-fg3`); 2 rounds; with the
-kit's own arithmetic (2 rounds x 11 arms x 83 s) each set takes **about 30 minutes**:
+kit's own arithmetic (2 rounds x arms x 83 s) the Remote Play set takes **about 22 minutes** (8 arms) and the capture set
+**about 39 minutes** (14 arms) since Package 14, which removed the arms of switches that became inert (FG_ULL, the graph
+queue priority, the early upload release, now the default) and added to the capture set the new defaults against
+`VEYRA_TEST_RP_LEGACY_PACKAGE13=1` (`d90c-p13`) and each restore switch alone (`d90c-l-*`):
 - Remote Play (smoothness session; DLSS SR to 4K; `dedup=auto` + the experimental stream duplicate removal
   `VEYRA_EXP_RP_STREAM_DEDUP=1` so a 30 FPS game pairs at
   33.4 ms; these are the only kit arms besides the `p-dedup` diagnostic that turn the stream's duplicate detector on, and
   only because 30 -> 90 over Remote Play does not exist without it; it stays off by default):
-  `Run-First-Test.cmd -Session smoothness -Pass 180 -Arms d90-off,d90-fg3,d90-fg3-ull,d90-fg3-prio,d90-fg3-pprio,d90-fg3-all,d90-fg3-low,d90-fg3-dlss,d90-fg3-flow,d90-fg3-fit,d90-fg2`
+  `Run-First-Test.cmd -Session smoothness -Pass 180 -Arms d90-off,d90-fg3,d90-fg3-pprio,d90-fg3-low,d90-fg3-dlss,d90-fg3-flow,d90-fg3-fit,d90-fg2`
 - 4K capture card (capture session; card format 3840x2160; duplicate removal on):
-  `Run-First-Test.cmd -Session capture -Pass 180 -Arms d90c-off,d90c-fg3,d90c-fg3-ull,d90c-fg3-early,d90c-fg3-prio,d90c-fg3-pprio,d90c-fg3-all,d90c-fg3-low,d90c-fg3-dlss,d90c-fg3-flow,d90c-fg2`
+  `Run-First-Test.cmd -Session capture -Pass 180 -Arms d90c-off,d90c-fg3,d90c-p13,d90c-l-robust,d90c-l-grid,d90c-l-cadence,d90c-l-gpuwaits,d90c-l-upload,d90c-l-nrhold,d90c-fg3-pprio,d90c-fg3-low,d90c-fg3-dlss,d90c-fg3-flow,d90c-fg2`
 
 `-off` is the reference (what the 4K base alone costs). `d90-fg3` is 3X at 4K with the experimental stream duplicate
 removal (`VEYRA_EXP_RP_STREAM_DEDUP`; not the installed default); `d90c-fg3` is 3X at 4K as installed. `-ull` =

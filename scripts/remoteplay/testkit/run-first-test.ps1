@@ -35,15 +35,15 @@
     builds    original, stable, Package 7's experimental build and this experimental build, same test profile, one minute
               each, twice: the regression proof. Copies that are not installed are skipped with a line. About 15 minutes.
     smoothness  frame generation 2x and 3x, a 90 cap, Smoothness Mode 90 / 120, upscaling to 4K or 1440p, RTX Video SR,
-              the neural layer, Ultra Low Latency Frame Generation at 2x and 3x: how evenly frames are PRESENTED and how
-              long a real frame waits. About 36 minutes. Run it twice, with -Pass 120
+              the neural layer: how evenly frames are PRESENTED and how
+              long a real frame waits. About 30 minutes. Run it twice, with -Pass 120
               (Windows at 120 Hz) and -Pass 180 (Windows at 180 Hz): each pass asks you to set the rate first, and
               the kit never changes Windows settings itself.
     capture   a capture card instead of Remote Play (PS5 picture over HDMI, the DualSense plugged into the PS5, PS5 HDCP
               off): native passthrough against frame generation 2x / 3x / 4x / 6x, VFG Low and High+Low, the DLSS path,
-              PushFlow, duplicate removal off, HUD Lock, one capture buffer, Ultra Low Latency Frame Generation at 4x and 6x.
+              PushFlow, duplicate removal off, HUD Lock, one capture buffer.
               The first time the kit asks you to choose the card once. Run it with a 30 FPS game and with a 60 FPS game;
-              add -Pass 120 or -Pass 180. About 42 minutes.
+              add -Pass 120 or -Pass 180. About 36 minutes.
   Every session ends with one zip to send back and RESULT.txt on screen.
 
   CHECKS BEFORE ANYTHING STARTS, each with a one-line fix: the copies are installed (and which version), each copy

@@ -68,6 +68,44 @@ inline const char* pushUllPartsName(const PushUllParts& p) {
     return names[index];
 }
 
+// --- what the switch may still do (stream "lagfix", the owner's 24th message) -----------------------------------------
+// Package 13 was reported laggy. No part of VEYRA_EXP_RP_FG_ULL may show fewer generated frames, make present intervals
+// less even or delay a real frame compared with the default at the same costs; a part that cannot be made so is inert:
+// still parsed and logged ("disabled: can make playback worse"), it does nothing. The scheduling simulator
+// (tests/remoteplay/FgScheduleSim.h: a model of this code at made-up 4K-like costs, not a measurement) found:
+//   hold      fewer generated frames and longer gaps: a pair admitted while held keeps its generated frames back until
+//             8 pairs in a row were admitted, and entering and leaving are uneven intervals (near-limit stream: 29.1 ->
+//             27.8 generated frames a second, longest gap 40.8 -> 62.4 ms).
+//   headroom  Smoothness Mode steps 3X down to 2X after rejected pairs: fewer generated frames by design, and real
+//             frames wait for the 2X phase where the card's rejection hold showed them early (near-limit card: real
+//             frame 35.6 -> 37.4 ms on average).
+//   grace     drops generated frames late by between half an output interval and 10 ms that the default shows
+//             (spikes: 59.6 -> 59.0 a second on a card, 59.5 -> 58.5 on a stream).
+//   phase     a learned phase on a stream: in Package 13 above the fixed phase when the first generated frame takes more
+//             than a third of the interval (spikes: real frame P95 36.7 -> 48.1 ms). Limited to the fixed phase
+//             (pushStreamPairDelay) it still trades generated frames for delay (spikes: 59.46 -> 59.39 a second) and
+//             brings the capture card's rejection hold to the stream (near-limit: 29.1 -> 27.8, longest gap 40.8 ->
+//             62.4 ms): a lower phase can only leave generated frames less time, so it cannot be never-worse.
+// So every part is inert. The learned stream phase itself stays reachable through VEYRA_EXP_RP_ADAPTIVE_PHASE=1 (and
+// the interface's modes, which set it), now never above the fixed phase.
+inline PushUllParts pushUllPartsInForce(const PushUllParts& requested) {
+    PushUllParts p;
+    p.valid = requested.valid;
+    return p;
+}
+// The parts asked for that are inert ("hold,phase" style; "none" without any), for the log line.
+inline const char* pushUllPartsDisabledName(const PushUllParts& requested) {
+    return pushUllPartsName(requested);
+}
+// A PS5 stream's pair phase with a learned phase (VEYRA_EXP_RP_ADAPTIVE_PHASE=1 or the interface's modes): never above
+// the fixed phase the stream has without it (legacyPairDelay: a content interval plus the base cost's P95).
+// LivePairLatency may move a capture card's phase past that (FgRecoveryBudget::phaseAllowance, LiveDeadlineMargin) so
+// that its generated frames are ready by their deadlines; on a stream that held real frames up to 11 ms longer than
+// the default at P95 in the simulator (spikes: 36.7 -> 48.1 ms). Capture cards (stream=false): unchanged.
+constexpr std::int64_t pushStreamPairDelay(std::int64_t learned100ns, std::int64_t fixed100ns, bool stream) {
+    return stream && learned100ns > fixed100ns ? fixed100ns : learned100ns;
+}
+
 // --- part "hold": no dead FG phase -----------------------------------------------------------------------------------
 // Frame generation shows a pair's real frame B (M-1)/M of a content interval plus the first generated frame's GPU time
 // after it was ready (the "phase"), because the generated frames between A and B go out first. A pair whose generated

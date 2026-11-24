@@ -66,6 +66,7 @@ KIT_FILES = (
     "scripts/remoteplay/detect-hardware.ps1",
     "scripts/remoteplay/latency-ab.ps1",
     "tools/remoteplay_latency_bench/report.py",
+    "tools/remoteplay_latency_bench/triage.py",
     "tools/remoteplay_latency_bench/analyze.py",
     "tools/remoteplay_latency_bench/test_report.py",
     "scripts/remoteplay/testkit/collect-diagnostics.ps1",
@@ -83,7 +84,8 @@ DOC_FILES = ("docs/SETUP.md", "docs/HARDWARE_TEST_PROCEDURE.md", "docs/KEYBOARD_
              "docs/NEURAL_RENDERING_RUNTIME.md", "docs/drafts/CLARITY_VERDICT.md", "docs/drafts/SMOOTHNESS_ANALYSIS.md", "docs/drafts/NETWORK_AUDIT.md", "docs/drafts/SYNC_FINDINGS.md", "docs/drafts/FPS90.md",
              "docs/drafts/CAPTURE_FG.md", "docs/drafts/KBM_AUDIT.md",
              "docs/drafts/FG_LATENCY.md", "docs/drafts/NR_STUTTER.md",
-             "docs/drafts/DELAY_90.md")
+             "docs/drafts/DELAY_90.md",
+             "docs/drafts/FG_SCHEDULING_NEXT.md", "docs/drafts/GPU_PATH_MAP.md")
 TOP_FILES = ("Install-Slipstream.cmd", "Run-First-Test.cmd", "Run-Full-Test.cmd", "Collect-Diagnostics.cmd", "Rollback-Slipstream.cmd",
              "Uninstall-Slipstream.cmd")
 

@@ -625,7 +625,7 @@ class KitMirror(unittest.TestCase):
             return report.about_minutes(rounds[session] * (len(arms) * report.plan_seconds(plans[session]) + by_hand * report.MANUAL_SECONDS))
         got = {s: minutes(s, by_hand=2 if s == "builds" else 0) for s in report.MEASURE_SESSIONS}
         self.assertEqual({k: got[k] for k in ("input", "visual", "neural", "framegen", "audiofix", "builds")}, {"input": 29, "visual": 25, "neural": 20, "framegen": 20, "audiofix": 19, "builds": 15})
-        self.assertEqual(got["smoothness"], 36); self.assertIn("About 36 minutes.", first[first.index("    smoothness "):first.index("    smoothness ") + 300])
+        self.assertEqual(got["smoothness"], 30); self.assertIn("About 30 minutes.", first[first.index("    smoothness "):first.index("    smoothness ") + 300])
         self.assertEqual(rounds["retest"], 3); self.assertEqual(plans["retest"], "settle:8;probe:20;wait:40;exit")
         self.assertEqual(got["pacing"], 8); self.assertIn("About 8 minutes.", first[first.index("    pacing "):first.index("    pacing ") + 200])
         # the procedure and START-HERE print the same figures

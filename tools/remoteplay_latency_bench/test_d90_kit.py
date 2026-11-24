@@ -27,20 +27,26 @@ GRAPH = "VEYRA_EXP_RP_GRAPH_QUEUE_PRIORITY=high"
 PRESENT = "VEYRA_TEST_PRESENT_QUEUE_PRIORITY=high"
 EARLY = "VEYRA_EXP_RP_UPLOAD_EARLY_RELEASE=1"
 FIT = "VEYRA_EXP_RP_FIT_DISPLAY=1"
+# Package 14: the arms of switches that became inert (FG_ULL, the graph queue priority, the early upload release, now the
+# default) were removed; the capture set compares the new defaults with VEYRA_TEST_RP_LEGACY_PACKAGE13=1 and each restore
+# switch alone.
 SETS = {
-    "d90": ["d90-off", "d90-fg3", "d90-fg3-ull", "d90-fg3-prio", "d90-fg3-pprio", "d90-fg3-all", "d90-fg3-low", "d90-fg3-dlss",
-            "d90-fg3-flow", "d90-fg3-fit", "d90-fg2"],
-    "d90-capture": ["d90c-off", "d90c-fg3", "d90c-fg3-ull", "d90c-fg3-early", "d90c-fg3-prio", "d90c-fg3-pprio", "d90c-fg3-all",
-                    "d90c-fg3-low", "d90c-fg3-dlss", "d90c-fg3-flow", "d90c-fg2"],
+    "d90": ["d90-off", "d90-fg3", "d90-fg3-pprio", "d90-fg3-low", "d90-fg3-dlss", "d90-fg3-flow", "d90-fg3-fit", "d90-fg2"],
+    "d90-capture": ["d90c-off", "d90c-fg3", "d90c-p13", "d90c-l-robust", "d90c-l-grid", "d90c-l-cadence", "d90c-l-gpuwaits",
+                    "d90c-l-upload", "d90c-l-nrhold", "d90c-fg3-pprio", "d90c-fg3-low", "d90c-fg3-dlss", "d90c-fg3-flow", "d90c-fg2"],
 }
+MINUTES = {"d90": 22, "d90-capture": 39}
 # What each arm adds to its pair: (pipeline keys added, pipeline keys removed, other switches added, differs)
 ADDS = {
     "fg3": (["fg=vfg", "fgMultiplier=3", "fgTier=1"], ["fg=off"], set(), ""),
-    "fg3-ull": ([], [], {ULL}, ""),
-    "fg3-early": ([], [], {EARLY}, ""),
-    "fg3-prio": ([], [], {GRAPH}, ""),
     "fg3-pprio": ([], [], {PRESENT}, ""),
-    "fg3-all": ([], [], None, ""),
+    "p13": ([], [], {"VEYRA_TEST_RP_LEGACY_PACKAGE13=1"}, ""),
+    "l-robust": ([], [], {"VEYRA_TEST_RP_LEGACY_ROBUST_ADMIT=1"}, ""),
+    "l-grid": ([], [], {"VEYRA_TEST_RP_LEGACY_GRID_EARLY=1"}, ""),
+    "l-cadence": ([], [], {"VEYRA_TEST_RP_LEGACY_DEDUP_CADENCE=1"}, ""),
+    "l-gpuwaits": ([], [], {"VEYRA_TEST_RP_LEGACY_GPU_REAL_WAITS=1"}, ""),
+    "l-upload": ([], [], {"VEYRA_TEST_RP_LEGACY_UPLOAD_RELEASE=1"}, ""),
+    "l-nrhold": ([], [], {"VEYRA_TEST_RP_LEGACY_NR_HOLD=1"}, ""),
     "fg3-low": (["fgTier=0"], ["fgTier=1"], set(), "fgTier"),
     "fg3-dlss": (["fg=dlss"], ["fg=vfg", "fgTier=1"], set(), "fgMethod;fgTier"),
     "fg3-flow": (["fg=pushflow"], ["fg=vfg"], set(), "fgMethod"),
@@ -104,9 +110,6 @@ class D90Kit(unittest.TestCase):
                 removed = sorted(p for p in theirs if p not in mine)
                 self.assertFalse(theirs_other - mine_other, name)
                 want_added, want_removed, want_extra, differs = ADDS[kind(name)]
-                if want_extra is None:   # every switch of the set that applies to it, together
-                    singles = {s for n in arms for s in parts(self.table, n)[1] - theirs_other if kind(n) in ("fg3-ull", "fg3-early", "fg3-prio", "fg3-pprio")}
-                    want_extra = singles
                 self.assertEqual((added, removed, mine_other - theirs_other), (sorted(want_added), sorted(want_removed), want_extra), name)
                 self.assertEqual(row["differs"], differs, name)
 
@@ -162,9 +165,17 @@ class D90Kit(unittest.TestCase):
         rounds = {s: int(r) for s, _p, r in found}
         for session, set_name in (("smoothness", "d90"), ("capture", "d90-capture")):
             minutes = report.about_minutes(rounds[session] * len(SETS[set_name]) * report.plan_seconds(plans[session]))
-            self.assertEqual(minutes, 30, session)
+            self.assertEqual(minutes, MINUTES[set_name], session)
         with open(os.path.join(ROOT, "docs", "drafts", "DELAY_90.md"), encoding="utf-8") as f:
-            self.assertIn("about 30 minutes", f.read())
+            text = f.read()
+        self.assertIn("about 22 minutes", text)
+        self.assertIn("about 39 minutes", text)
+
+    def test_no_arm_tests_only_an_inert_switch(self):
+        # Since Package 14 these change nothing: an arm with only them would read as "the experiment did not help".
+        for name, row in self.table.items():
+            for inert in ("VEYRA_EXP_RP_FG_ULL", "VEYRA_EXP_RP_GRAPH_QUEUE_PRIORITY", "VEYRA_EXP_RP_UPLOAD_EARLY_RELEASE"):
+                self.assertNotIn(inert, row["switches"], name)
 
     def test_the_lines_it_reads_are_kept_and_shown(self):
         lines = [

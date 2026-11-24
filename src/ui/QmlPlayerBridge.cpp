@@ -229,6 +229,11 @@ QmlPlayerBridge::QmlPlayerBridge(engine::EngineController& engine, std::filesyst
             const auto reason = disableUnavailableEffects(configuration);
             if (!reason.isEmpty()) disabled << reason;
         }
+        // PushFPS stream "laghunt": the original-runtime neural layer the checks above switched off, or that was held
+        // off at an earlier start, stays off until the user switches it on (marker pushNrHeldOff; the saved session
+        // keeps his choice). This does not undo a saved layer that is on with a working runtime. PushNeural.cpp.
+        if (pushNeuralStartupHold(restored, savedConfiguration, impl_->prefs) && !impl_->savePrefs())
+            veyra::log::warn("ui-prefs", "neural layer marker not saved");
         if (!disabled.isEmpty()) {
             const auto message = tr("已关闭当前硬件或包不支持的效果，参数仍保留：") + disabled.join("; ");
             veyra::log::warn("effect-availability", message.toStdString());

@@ -17,6 +17,7 @@
 //
 // Nothing here has run on a GPU or on Windows; nothing here is a measurement.
 #include "veyra/engine/PushSmoothness.h"
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -141,27 +142,60 @@ inline std::string pushSizesLine(const PushSizesFacts& f) {
 
 // When to write it: the facts are looked at no more than once a second (due), and the line is written only when its
 // text differs from the last one written (changed). The first call writes (the live graph was just built).
+// Stream "laghunt": a value that keeps changing (a window being resized, a size that alternates, HDR toggled on and
+// off) may not write a line every second for ever: after kBurst changed lines, further changes are written at most one
+// per kRefill100ns (a token bucket on the WRITE, refilled from the times due() looked). The newest text is written when
+// a token is back, as the hook builds the line again at every look; nothing is lost but intermediate values. The
+// written line then ends with held=N (looks whose changed line was held back since the last write, takeHeld()). A new
+// live graph (a rebuild) is always written at its first look (forceNext()): the cap is for flapping, not for rebuilds.
 class PushSizesGate {
 public:
-    static constexpr std::int64_t kPeriod100ns = 10000000;   // 1 s
+    static constexpr std::int64_t kPeriod100ns = 10000000;    // 1 s
+    static constexpr unsigned kBurst = 3;                      // changed lines written at once
+    static constexpr std::int64_t kRefill100ns = 100000000;   // then one per 10 s
     bool due(std::int64_t now100ns) {
         if (checked_ && now100ns - last_ < kPeriod100ns && now100ns >= last_) return false;
+        if (!checked_ || now100ns < last_) refillAt_ = now100ns;   // first look, or a clock that went back
         checked_ = true;
         last_ = now100ns;
         return true;
     }
+    // Called after due() returned true (the time of that look is the time of the write).
     bool changed(const std::string& line) {
-        if (written_ && line == text_) return false;
+        if (written_ && line == text_) { force_ = false; return false; }   // a rebuild with the same sizes: nothing to write
+        if (written_) {
+            if (last_ > refillAt_) {
+                const std::int64_t steps = (last_ - refillAt_) / kRefill100ns;
+                if (steps > 0) {
+                    tokens_ = static_cast<unsigned>(std::min<std::int64_t>(kBurst, static_cast<std::int64_t>(tokens_) + steps));
+                    refillAt_ += steps * kRefill100ns;
+                }
+            }
+            if (tokens_ == 0 && !force_) { ++held_; ++heldSinceWrite_; return false; }
+            if (!force_) {
+                if (tokens_ == kBurst) refillAt_ = last_;   // a full bucket starts its refill clock at its first spend
+                --tokens_;
+            }
+        }
+        force_ = false;
         written_ = true;
         text_ = line;
         return true;
     }
-    void reset() { checked_ = written_ = false; text_.clear(); }
+    // Changed lines not written (yet) because of the budget, since the session started.
+    std::uint64_t held() const { return held_; }
+    // Held back since the last written line; reading it starts the count again (call after changed() returned true).
+    std::uint64_t takeHeld() { const auto n = heldSinceWrite_; heldSinceWrite_ = 0; return n; }
+    // The next changed line is written whatever the budget (a new live graph); it spends no token.
+    void forceNext() { force_ = true; }
+    void reset() { checked_ = written_ = force_ = false; text_.clear(); tokens_ = kBurst; held_ = heldSinceWrite_ = 0; }
 
 private:
     std::string text_;
-    std::int64_t last_ = 0;
-    bool checked_ = false, written_ = false;
+    std::int64_t last_ = 0, refillAt_ = 0;
+    unsigned tokens_ = kBurst;
+    std::uint64_t held_ = 0, heldSinceWrite_ = 0;
+    bool checked_ = false, written_ = false, force_ = false;
 };
 
 }  // namespace veyra::engine

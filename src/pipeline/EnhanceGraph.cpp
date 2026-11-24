@@ -50,6 +50,7 @@
 #include "veyra/engine/PushSrPlan.h"
 #include "veyra/engine/PushPipelinePlan.h"
 #include "veyra/pipeline/VfxSrBackend.h"
+#include "veyra/pipeline/PushGpuPath.h"
 #include "veyra/ngx/TrueHdrBackend.h"
 #include "veyra/ngx/NgxCoreHost.h"
 #include "veyra/ngx/DlssgLite.h"
@@ -58,6 +59,7 @@
 #include "veyra/ngx/NvOfSession.h"
 #include "veyra/guidance/AmdOpticalFlow.h"
 #include "veyra/guidance/GpuDisOpticalFlow.h"
+#include "veyra/engine/PushLegacyEnv.h"
 
 extern "C" {
 #include <libavutil/frame.h>
@@ -73,6 +75,27 @@ static_assert(diagnostics::kTimedNrLayers==engine::kMaxNrInstances&&diagnostics:
               "every NR layer / Color / anti-aliasing / beauty instance needs its own node timing slot");
 
 namespace {
+
+// Stream "gpupath" (PushGpuPath.h): the two restore switches, each exactly "1", read once per process; the first use
+// logs what is in force (the defaults are on in every build: they only lower fences that something waits for).
+struct PushGpuPathRestore { bool realWaitsGroup=false,uploadLate=false; };
+const PushGpuPathRestore& pushGpuPathRestore(){
+    static const PushGpuPathRestore value=[]{
+        auto one=[](const wchar_t* name){wchar_t v[4]{};return GetEnvironmentVariableW(name,v,4)==1&&v[0]==L'1';};
+        // Package 14's rollback (PushLegacy.h): VEYRA_TEST_RP_LEGACY_GPU_REAL_WAITS / _UPLOAD_RELEASE / _PACKAGE13 = 1, the
+        // earlier names as aliases.
+        PushGpuPathRestore r;r.realWaitsGroup=engine::pushLegacyRestored(engine::PushLegacyPart::GpuRealWaits,engine::pushEnvironment());
+        r.uploadLate=engine::pushLegacyRestored(engine::PushLegacyPart::UploadRelease,engine::pushEnvironment());
+        // Stream "delay90"'s experiment switch for the same release: now the default, read only to say so in the log.
+        const bool earlyAsked=one(L"VEYRA_EXP_RP_UPLOAD_EARLY_RELEASE");
+        veyra::log::info("gpu-path",std::format("realFrameWait={} uploadRelease={} (stream gpupath defaults: a real frame's presentation waits for its own lists with VFG "
+            "and no HUD Lock or exclusion, the capture upload buffer is released after the base list; VEYRA_TEST_RP_LEGACY_GPU_REAL_WAITS=1 and "
+            "VEYRA_TEST_RP_LEGACY_UPLOAD_RELEASE=1 (or VEYRA_TEST_RP_LEGACY_PACKAGE13=1) restore the old waits; no picture or order changes; VEYRA_EXP_RP_UPLOAD_EARLY_RELEASE set={} has no further effect)",
+            r.realWaitsGroup?"pair-group":"own-lists",r.uploadLate?"pair-group":"base-list",earlyAsked?1:0));
+        return r;
+    }();
+    return value;
+}
 
 constexpr int64_t usPerSecond = 1000000;
 float uintBits(uint32_t v) { return std::bit_cast<float>(v); }
@@ -4456,8 +4479,33 @@ bool EnhanceGraph::process(const AVFrame* frame, double ptsMs, bool reset, Frame
     // not at the last list of the pair: every read of the upload buffer is the base list's CopyTextureRegion at its
     // start, so the callback may write it once that list is done instead of falling back to its CPU planes (and this
     // graph copying 12-25 MB again on the engine thread, counted in metrics_.captureUploadCpuCopies). Unset: as before.
-    static const bool uploadEarlyRelease=[]{wchar_t v[4]{};return GetEnvironmentVariableW(L"VEYRA_EXP_RP_UPLOAD_EARLY_RELEASE",v,4)==1&&v[0]==L'1';}();
-    if(gpuDirectFrame)gpuDirectFrame->gpuRead(context_.fence(),uploadEarlyRelease&&out.videoFenceValue?out.videoFenceValue:uploadFences_[parity]);
+    // Stream "gpupath" (PushGpuPath.h, 24 Nov 2026): this is now the default; VEYRA_TEST_UPLOAD_LATE_RELEASE=1 (exactly
+    // 1, read once) restores the release at the pair's last list; the experiment switch above is only logged.
+    // - Unfinished work: the base list's CopyTextureRegion (above, at its start) is the buffer's only GPU reader and
+    //   out.videoFenceValue follows it; the callback writes the buffer only after that fence (gpuBusy).
+    // - Order and picture: nothing is presented or composed differently; the callback writes the same bytes into the
+    //   upload buffer instead of its CPU planes, which this graph would otherwise copy into its own upload buffer.
+    // With the capture mailbox's three frames and the pickup gate the buffer is normally free by then anyway
+    // (GPU_PATH_MAP.md C3): expected effect 0 in steady state, never a cost.
+    if(gpuDirectFrame)gpuDirectFrame->gpuRead(context_.fence(),pushUploadReleaseFence(out.videoFenceValue,uploadFences_[parity],pushGpuPathRestore().uploadLate));
+    // Stream "gpupath" (PushGpuPath.h, on by default; VEYRA_TEST_GPU_REAL_WAITS_GROUP=1 restores the group wait): the
+    // presentation queue waits for the real frame's own lists (out.videoFenceValue) instead of the pair's last list,
+    // only where no later list of the pair touches its texture: VFG, no HUD Lock, no exclusion, no present-sink FG.
+    // - Unfinished work: every list that writes or transitions videoFrame_[parity] (and the references the comparison
+    //   view and PresentCapture read) is at or before out.videoFenceValue; the VFG lists above only write genFrame_ and
+    //   read CUDA's buffers.
+    // - Order: the CPU presents in the engine's order and the presentation queue is FIFO, so a real frame's blit still
+    //   follows the blits of its generated frames when they are shown; the value only ever goes down (never above
+    //   uploadFences_[parity]).
+    // - Picture: the same texture with the same contents; nothing is copied or composed differently.
+    {
+        PushRealPresentFenceInputs realWait;
+        realWait.backend=pushFgPathKindOf(vfgBackend_!=nullptr,pushFlow_!=nullptr,amfFrc_!=nullptr,fgCreated());
+        realWait.hudLock=hudLock_!=nullptr;realWait.exclusion=desc_.exclusion.enabled;realWait.presentSinkFg=presentSinkFg();
+        realWait.realFence=out.videoFenceValue;realWait.pairFence=uploadFences_[parity];realWait.restore=pushGpuPathRestore().realWaitsGroup;
+        realPresentFences_[parity]=pushRealPresentFence(realWait);
+        if(realPresentFences_[parity]!=uploadFences_[parity])++metrics_.realPresentOwnFence;
+    }
 
     prevPtsMs_ = ptsMs;
     prevValid_ = true;

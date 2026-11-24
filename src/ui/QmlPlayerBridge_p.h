@@ -190,6 +190,7 @@ QString unavailableEffects(const engine::EnhancementSettings& settings);
 void pushNeuralCapabilities(QVariantMap& capabilities, bool autoVerifiedHere);   // PushNeural.cpp: nr3 only for a verified NVIDIA-signed original; nrAuto
 engine::NrRuntime pushNeuralDefaultRuntime(engine::NrRuntime runtime);     // PushNeural.cpp: the untouched default -> the verified original
 QString disableUnavailableEffects(engine::ChainConfiguration& configuration);
+bool pushNeuralStartupHold(engine::ChainSession& running, const engine::ChainSession& saved, QVariantMap& prefs);   // PushNeural.cpp: the original-runtime neural layer held off at start (pref pushNrHeldOff)
 ui::EffectGpu effectGpu();
 
 namespace bridge_detail {

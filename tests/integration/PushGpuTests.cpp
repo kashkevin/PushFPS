@@ -22,6 +22,9 @@
 //    edges, sees an object that moves inside one block, reports "not comparable" for the first
 //    picture, after a restart and after a size change; the runner with its own command list gives
 //    the same numbers, also when an answer arrives late or is not waited for.
+//  - Stream "gpupath" (pipeline/PushGpuPath.h): a second queue waiting for the real frame's own list's fence, submitted
+//    before the graph queue signals it, reads exactly the picture written, as with the pair's last fence; a later list
+//    that writes only the generated frame is not seen by it (gpu-path-real-wait).
 //  - PushFlow (PushFPS's own frame generation, RIFE on DirectML): when VEYRA_PUSHFLOW_TEST_RUNTIME names a
 //    folder holding pushflow\ (the release's runtime), two identical frames give the same picture back,
 //    and a square that moves 16 px lands near the middle at t = 0.5, far closer than a blend of the two
@@ -45,6 +48,7 @@
 #include "veyra/pipeline/PushHudLock.h"
 #include "veyra/pipeline/PushCleanPass.h"
 #include "veyra/pipeline/StreamChangePass.h"
+#include "veyra/pipeline/PushGpuPath.h"
 #include "veyra/engine/RecordingCompare.h"
 #include "veyra/engine/PushStreamOverlay.h"
 #include "veyra/engine/PushCanvas.h"
@@ -1375,6 +1379,131 @@ void testStreamChange(Gpu& gpu) {
     check(!runner.ready(), "stream change runner: shut down");
     check(!gpu.debugErrors(), "stream change: no D3D12 debug errors");
 }
+// Stream "gpupath" (pipeline/PushGpuPath.h): the real frame's presentation-queue wait at its own list's fence. A second
+// queue stands for the presentation queue and is submitted FIRST, waiting on the GPU for a fence value the graph queue
+// has not signalled yet: the graph queue writes the real frame R (its own list, fence v0), then a later list of the
+// same pair writes only the generated frame G (fence v1), as VFG's copy back does. The presentation queue copies R out
+// after waiting for the value pushRealPresentFence picks (v0), and again with the restore switch's value (v1).
+// Checks: the decision picks v0 / v1; both read-backs equal the picture written, byte for byte; G is untouched by the
+// presentation queue; with the debug layer on, no error. This tests the cross-queue contract the change relies on,
+// not the graph's VFG path (CUDA does not exist on WARP) and not any time.
+void testGpuPathRealWait(Gpu& gpu) {
+    constexpr uint32_t W = 128, H = 72;
+    constexpr DXGI_FORMAT F = DXGI_FORMAT_R8G8B8A8_UNORM;
+    auto* device = gpu.device.Get();
+    Plane real{pipeline::makeTexture(device, W, H, F, true), F, W, H, 4};
+    Plane generated{pipeline::makeTexture(device, W, H, F, true), F, W, H, 4};
+    check(real.texture && generated.texture, "gpu-path: textures created");
+    if (!real.texture || !generated.texture) return;
+    // A second direct queue (the presentation queue) with its own list and fence, and a gate fence the CPU opens.
+    ComPtr<ID3D12CommandQueue> present;
+    ComPtr<ID3D12CommandAllocator> presentAllocator, laterAllocator;
+    ComPtr<ID3D12GraphicsCommandList> presentList, laterList;
+    ComPtr<ID3D12Fence> presentFence, gate;
+    D3D12_COMMAND_QUEUE_DESC qd{}; qd.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+    const bool made = SUCCEEDED(device->CreateCommandQueue(&qd, IID_PPV_ARGS(&present))) &&
+        SUCCEEDED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&presentAllocator))) &&
+        SUCCEEDED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&laterAllocator))) &&
+        SUCCEEDED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, presentAllocator.Get(), nullptr, IID_PPV_ARGS(&presentList))) &&
+        SUCCEEDED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, laterAllocator.Get(), nullptr, IID_PPV_ARGS(&laterList))) &&
+        SUCCEEDED(presentList->Close()) && SUCCEEDED(laterList->Close()) &&
+        SUCCEEDED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&presentFence))) &&
+        SUCCEEDED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&gate)));
+    check(made, "gpu-path: presentation queue, lists and fences created");
+    if (!made) return;
+    auto picture = [&](uint8_t seed) {
+        std::vector<uint8_t> px(size_t(W) * H * 4);
+        for (size_t i = 0; i < px.size(); ++i) px[i] = uint8_t((i * 7 + seed * 13 + (i >> 9)) & 0xFF);
+        return px;
+    };
+    uint64_t presentValue = 0;
+    std::vector<std::vector<uint8_t>> reads;
+    for (const bool restore : {false, true}) {
+        const auto realPixels = picture(restore ? 3 : 1), generatedPixels = picture(restore ? 4 : 2);
+        const uint64_t v0 = gpu.value + 1, v1 = gpu.value + 2, gateValue = gate->GetCompletedValue() + 1;
+        pipeline::PushRealPresentFenceInputs in;
+        in.backend = pipeline::PushFgPathKind::Vfg; in.realFence = v0; in.pairFence = v1; in.restore = restore;
+        const uint64_t waitFor = pipeline::pushRealPresentFence(in);
+        checkValue(waitFor == (restore ? v1 : v0), "gpu-path: decision for a VFG pair", waitFor, restore ? v1 : v0);
+        // 1. Presentation queue first: wait for the graph fence value, copy R out (COMMON -> COPY_SOURCE -> COMMON).
+        bool ok = SUCCEEDED(presentAllocator->Reset()) && SUCCEEDED(presentList->Reset(presentAllocator.Get(), nullptr));
+        auto readback = makeBuffer(device, uint64_t(real.pitch()) * H, D3D12_HEAP_TYPE_READBACK);
+        ok = ok && readback;
+        if (ok) {
+            D3D12_RESOURCE_BARRIER b{}; b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION; b.Transition.pResource = real.texture.Get();
+            b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            b.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON; b.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+            presentList->ResourceBarrier(1, &b);
+            D3D12_TEXTURE_COPY_LOCATION from{}, to{};
+            from.pResource = real.texture.Get(); from.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+            to.pResource = readback.Get(); to.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+            to.PlacedFootprint.Footprint = {F, W, H, 1, real.pitch()};
+            presentList->CopyTextureRegion(&to, 0, 0, 0, &from, nullptr);
+            std::swap(b.Transition.StateBefore, b.Transition.StateAfter); presentList->ResourceBarrier(1, &b);
+            ok = SUCCEEDED(presentList->Close()) && SUCCEEDED(present->Wait(gpu.fence.Get(), waitFor));
+            ID3D12CommandList* lists[] = {presentList.Get()};
+            if (ok) present->ExecuteCommandLists(1, lists);
+            ok = ok && SUCCEEDED(present->Signal(presentFence.Get(), ++presentValue));
+        }
+        // 2. Graph queue, held by the gate until both lists are queued: the real frame's own list, then a later list.
+        ok = ok && SUCCEEDED(gpu.queue->Wait(gate.Get(), gateValue)) && gpu.begin();
+        ComPtr<ID3D12Resource> realUpload, generatedUpload;
+        if (ok) realUpload = recordFill(gpu, real, realPixels, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON);
+        ok = ok && realUpload && gpu.submit() && gpu.value == v0;
+        ok = ok && SUCCEEDED(laterAllocator->Reset()) && SUCCEEDED(laterList->Reset(laterAllocator.Get(), nullptr));
+        if (ok) {
+            generatedUpload = makeBuffer(device, uint64_t(generated.pitch()) * H, D3D12_HEAP_TYPE_UPLOAD);
+            uint8_t* mapped = nullptr;
+            ok = generatedUpload && SUCCEEDED(generatedUpload->Map(0, nullptr, reinterpret_cast<void**>(&mapped))) && mapped;
+            if (ok) {
+                for (uint32_t y = 0; y < H; ++y) std::memcpy(mapped + size_t(y) * generated.pitch(), generatedPixels.data() + size_t(y) * W * 4, size_t(W) * 4);
+                generatedUpload->Unmap(0, nullptr);
+                D3D12_RESOURCE_BARRIER b{}; b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION; b.Transition.pResource = generated.texture.Get();
+                b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                b.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON; b.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+                laterList->ResourceBarrier(1, &b);
+                D3D12_TEXTURE_COPY_LOCATION from{}, to{};
+                from.pResource = generatedUpload.Get(); from.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+                from.PlacedFootprint.Footprint = {F, W, H, 1, generated.pitch()};
+                to.pResource = generated.texture.Get(); to.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+                laterList->CopyTextureRegion(&to, 0, 0, 0, &from, nullptr);
+                std::swap(b.Transition.StateBefore, b.Transition.StateAfter); laterList->ResourceBarrier(1, &b);
+                ok = SUCCEEDED(laterList->Close());
+                ID3D12CommandList* lists[] = {laterList.Get()};
+                if (ok) gpu.queue->ExecuteCommandLists(1, lists);
+                ok = ok && SUCCEEDED(gpu.queue->Signal(gpu.fence.Get(), ++gpu.value)) && gpu.value == v1;
+            }
+        }
+        // Unfinished work is never read: while the graph queue is held before the real frame's list, the presentation
+        // queue's copy has not run (it waits on the GPU for v0 or v1, neither signalled yet).
+        if (ok) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            checkValue(presentFence->GetCompletedValue() < presentValue, "gpu-path: presentation copy waits while the real frame's list has not run",
+                       presentFence->GetCompletedValue(), std::format("< {}", presentValue));
+        }
+        // 3. Open the gate, wait for both queues.
+        ok = ok && SUCCEEDED(gate->Signal(gateValue)) && gpu.wait();
+        if (ok && presentFence->GetCompletedValue() < presentValue) {
+            presentFence->SetEventOnCompletion(presentValue, gpu.event);
+            ok = WaitForSingleObject(gpu.event, 60000) == WAIT_OBJECT_0;
+        }
+        check(ok, restore ? "gpu-path: queues ran (restore: group wait)" : "gpu-path: queues ran (own-list wait)");
+        if (!ok) return;
+        const auto got = mapRead(real, readback.Get());
+        check(got == realPixels, restore ? "gpu-path: real frame read after the group wait is the picture written"
+                                         : "gpu-path: real frame read after its own list's wait is the picture written");
+        reads.push_back(got);
+        // G holds its own picture: the presentation queue never touched it.
+        if (!gpu.begin()) { check(false, "gpu-path: list for the generated frame's read"); return; }
+        auto generatedRead = recordRead(gpu, generated, D3D12_RESOURCE_STATE_COMMON);
+        if (!gpu.submitAndWait()) { check(false, "gpu-path: generated frame read"); return; }
+        check(mapRead(generated, generatedRead.Get()) == generatedPixels, "gpu-path: generated frame unchanged");
+    }
+    // Same picture in, same bytes out, whichever fence the presentation queue waited for.
+    check(reads.size() == 2 && reads[0] == picture(1) && reads[1] == picture(3), "gpu-path: both waits read exactly what the graph wrote");
+    check(!gpu.debugErrors(), "gpu-path: no D3D12 debug-layer error across the two queues");
+}
+
 void testHudLock(Gpu& gpu) {
     constexpr uint32_t W = 256, H = 144;
     constexpr DXGI_FORMAT F = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -1989,6 +2118,7 @@ int main(int argc, char** argv) {
         {"hud-sampler", [](Gpu& g) { testHudSampler(g); }},
         {"pipeline-probe", [](Gpu& g) { testPipelineProbe(g); }},
         {"hud-lock", [](Gpu& g) { testHudLock(g); }},
+        {"gpu-path-real-wait", [](Gpu& g) { testGpuPathRealWait(g); }},
         {"clean-dither", [](Gpu& g) { testCleanDither(g); }},
         {"stream-change", [](Gpu& g) { testStreamChange(g); }},
         {"pushflow-sizes", [](Gpu&) { testPushFlowSizes(); }},

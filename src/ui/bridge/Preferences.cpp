@@ -1,5 +1,6 @@
 // QML bridge: Preferences responsibilities.
 #include "../QmlPlayerBridge_p.h"
+#include "veyra/engine/PushNrRuntime.h"
 #include "veyra/engine/PushStreamOverlay.h"
 #include "veyra/engine/PushAudioMix.h"
 #include "veyra/Brand.h"
@@ -452,6 +453,12 @@ bool QmlPlayerBridge::setPreference(const QString& key, const QVariant& value) {
         const QString v = value.toString();
         static const QStringList modes{"", "ultra-low-latency", "competitive", "balanced", "maximum-smoothness"};
         if (!modes.contains(v)) return false;
+        stored = v;
+    } else if (key == QLatin1String("pushNrHeldOff")) {
+        // PushFPS stream "laghunt": the original-runtime neural layers held off at start until the user switches them
+        // on (engine/PushNrRuntime.h pushNrHoldValid: "0c1-<8 hex layout print>", at most 8 keys; empty = none).
+        const QString v = value.toString();
+        if (v.size() > qsizetype(engine::kPushNrHoldMaxText) || !engine::pushNrHoldValid(v.toStdString())) return false;
         stored = v;
     } else if (key == QLatin1String("pushSmoothTarget")) {
         // PushFPS Smoothness Mode (PushSmoothnessRow.qml, engine/PushSmoothness.h): the displayed rate it holds,

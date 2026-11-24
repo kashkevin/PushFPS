@@ -2,6 +2,7 @@
 // Copyright (C) 2026 DosukaSOL and the PushFPS contributors. Part of PushFPS, a modified version of Veyra.
 #pragma once
 #include "veyra/Log.h"
+#include "veyra/engine/PushLegacy.h"
 #include "veyra/engine/SlipstreamSettings.h"
 
 #include <QByteArray>
@@ -10,8 +11,12 @@
 #include <windows.h>
 
 #include <cstddef>
+#include <cwchar>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace veyra::ui {
 // The Windows half of slipstream.ini (parser and rules: veyra/engine/SlipstreamSettings.h).
@@ -67,7 +72,33 @@ inline std::string readSmallFile(const std::wstring& path, bool& found) {
 }
 } // namespace slipstream_file_detail
 
-inline void applySlipstreamSettingsFile() {
+namespace slipstream_file_detail {
+// VEYRA_EXP_* and VEYRA_TEST_* variables of this process, ASCII (anything else as '?').
+inline std::vector<std::pair<std::string, std::string>> experimentEnvironment() {
+    std::vector<std::pair<std::string, std::string>> out;
+    wchar_t* block = GetEnvironmentStringsW();
+    if (!block) return out;
+    for (const wchar_t* entry = block; *entry; entry += std::wcslen(entry) + 1) {
+        const std::wstring_view text(entry);
+        const std::size_t equals = text.find(L'=', 1);
+        if (equals == std::wstring_view::npos) continue;
+        const std::wstring_view name = text.substr(0, equals);
+        if (!(name.starts_with(L"VEYRA_EXP_") || name.starts_with(L"VEYRA_TEST_"))) continue;
+        const auto narrow = [](std::wstring_view w) {
+            std::string a;
+            a.reserve(w.size());
+            for (const wchar_t c : w) a.push_back(c >= 0x20 && c < 0x7F ? static_cast<char>(c) : '?');
+            return a;
+        };
+        out.emplace_back(narrow(name), narrow(text.substr(equals + 1)));
+    }
+    FreeEnvironmentStringsW(block);
+    return out;
+}
+} // namespace slipstream_file_detail
+
+// fromFile: the names this start set from the file.
+inline void applySlipstreamSettingsFileOnly(std::vector<std::string>& fromFile) {
     namespace d = slipstream_file_detail;
     if (GetEnvironmentVariableW(L"VEYRA_TEST_RP_NO_SETTINGS_FILE", nullptr, 0) > 0) {
         log::info("remoteplay-settings", "slipstream.ini not read (VEYRA_TEST_RP_NO_SETTINGS_FILE is set)");
@@ -90,9 +121,11 @@ inline void applySlipstreamSettingsFile() {
         log::warn("remoteplay-settings", "slipstream.ini ignored, nothing applied: " + settings.error);
         return;
     }
+    // Stream "lagfix": only input, network, audio and update switches come from the file (slipstreamFileMayApply).
+    const engine::SlipstreamFileSplit split = engine::splitSlipstreamForFile(settings);
     std::size_t applied = 0;
     std::string kept;   // names the environment already had: the environment wins
-    for (const engine::SlipstreamSwitch& item : settings.switches) {
+    for (const engine::SlipstreamSwitch& item : split.apply) {
         const std::wstring name = d::widen(item.name);
         if (d::inEnvironment(name, item.name)) {
             if (!kept.empty()) kept += ' ';
@@ -102,10 +135,32 @@ inline void applySlipstreamSettingsFile() {
         const std::wstring value = d::widen(item.value);
         const bool win32 = SetEnvironmentVariableW(name.c_str(), value.c_str()) != FALSE;
         const bool qt = qputenv(item.name.c_str(), QByteArray(item.value.data(), static_cast<qsizetype>(item.value.size())));
-        if (win32 && qt) ++applied;
-        else log::warn("remoteplay-settings", "slipstream.ini: could not set " + item.name);
+        if (win32 && qt) {
+            ++applied;
+            fromFile.push_back(item.name);
+        } else log::warn("remoteplay-settings", "slipstream.ini: could not set " + item.name);
     }
     log::info("remoteplay-settings", "slipstream.ini " + engine::describeSlipstreamSettings(settings) + " applied=" + std::to_string(applied) +
                                          " alreadyInEnvironment=[" + kept + "]");
+    if (!split.ignored.empty())
+        log::info("remoteplay-settings", "slipstream.ini ignored=[" + engine::describeIgnoredSlipstreamSwitches(split.ignored) +
+                                             "] (frame-path and test switches are not taken from slipstream.ini, so a line left from a test cannot change "
+                                             "normal play; the test kit sets them in the environment)");
+}
+
+// Applies slipstream.ini (above), then logs once which experiment and test switches are in force and from where.
+inline void applySlipstreamSettingsFile() {
+    std::vector<std::string> fromFile;
+    applySlipstreamSettingsFileOnly(fromFile);
+    const auto environment = slipstream_file_detail::experimentEnvironment();
+    const engine::PushEnvLookup lookup = [&environment](std::string_view name) -> std::optional<std::string> {
+        for (const auto& [key, value] : environment)
+            if (key == name) return value;
+        return std::nullopt;
+    };
+    log::info("experiment-switches", "in force at start: " + engine::describeSwitchesInForce(environment, fromFile) + "; Package 14 rollback " +
+                                         engine::pushLegacyDescribe(lookup) +
+                                         " (ini: set from slipstream.ini at this start; env: in the environment the program was started with; the "
+                                         "interface's modes may add theirs when a PS5 connection starts, logged as [push-mode])");
 }
 } // namespace veyra::ui

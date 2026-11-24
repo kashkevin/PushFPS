@@ -2,11 +2,13 @@
 // Copyright (C) 2026 DosukaSOL and the PushFPS contributors. Part of PushFPS, a modified version of Veyra.
 #pragma once
 #include "veyra/engine/PushPerformanceMode.h"
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace veyra::engine {
@@ -38,6 +40,8 @@ namespace veyra::engine {
 //     only as "1". For those the file
 //     reads 0, off, false and no as "unset" and writes every other value as 1. Switches that carry a value
 //     (a poll interval, a sensitivity) keep what was written, a 0 included.
+//   - Since stream "lagfix" a plain install takes only input, network, audio and update switches (and the LEGACY_
+//     rollback switches) from the file: slipstreamFileMayApply below. The rest is parsed, logged and ignored.
 //   - The last of two equal keys counts.
 //   - One malformed line makes the whole file void: nothing is applied, and the error names the line
 //     number but never repeats its text.
@@ -193,7 +197,22 @@ inline SlipstreamSettings parseSlipstreamSettings(std::string_view text) {
     return out;
 }
 
-// One line for the log: what the file asked for. Values are cut at 48 characters.
+// How a switch is written in the log lines (review of Package 14, 24 Nov 2026): NAME=value only when the value is a
+// number or a short enumeration (letters, digits and . , : _ + -, at most 24 characters) and the switch does not carry
+// free text or a path; otherwise the NAME alone (a clip path, a key-binding text, a profile file, an autorun plan, a
+// picture-path list could name a folder or a person).
+constexpr bool slipstreamFreeTextSwitch(std::string_view name) {
+    return name == "VEYRA_TEST_RP_CLIP" || name == "VEYRA_EXP_RP_KBM_BINDS" || name == "VEYRA_EXP_RP_KBM_PROFILE" ||
+           name == "VEYRA_EXP_RP_KBM_INPUT_PROFILE" || name == "VEYRA_TEST_RP_AUTORUN" || name == "VEYRA_TEST_RP_PIPELINE";
+}
+inline std::string slipstreamLogSwitch(std::string_view name, std::string_view value) {
+    bool plain = !slipstreamFreeTextSwitch(name) && value.size() <= 24;
+    for (const char c : value)
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '.' || c == ',' || c == ':' || c == '_' || c == '+' || c == '-'))
+            plain = false;
+    return plain ? std::string(name) + '=' + std::string(value) : std::string(name);
+}
+// One line for the log: what the file asked for (values by slipstreamLogSwitch).
 inline std::string describeSlipstreamSettings(const SlipstreamSettings& settings) {
     if (!settings.valid) return "invalid: " + settings.error;
     std::string text = "mode=" + std::string(settings.mode ? pushPerformanceModeName(*settings.mode) : std::string_view("none"));
@@ -203,7 +222,7 @@ inline std::string describeSlipstreamSettings(const SlipstreamSettings& settings
     for (std::size_t i = 0; i < settings.switches.size(); ++i) {
         const SlipstreamSwitch& item = settings.switches[i];
         if (i) text += ' ';
-        text += item.name + '=' + item.value.substr(0, 48);
+        text += slipstreamLogSwitch(item.name, item.value);
         text += item.origin == SlipstreamOrigin::File ? "" : item.origin == SlipstreamOrigin::Mode ? "(mode)" : "(lan)";
     }
     text += "] off=[";
@@ -212,5 +231,61 @@ inline std::string describeSlipstreamSettings(const SlipstreamSettings& settings
     for (std::size_t i = 0; i < settings.unknownKeys.size(); ++i) text += (i ? " " : "") + settings.unknownKeys[i];
     text += ']';
     return text;
+}
+
+// --- what a plain install takes from slipstream.ini (stream "lagfix", the owner's 24th message) ----------------------
+// Package 13 was reported laggy, and a slipstream.ini left from a test can carry frame-path experiments into normal play.
+// So the file may set only switches that cannot change how frames are processed, scheduled or presented: input,
+// network and connection, audio, and update checks (the list below; a new switch is NOT on it until someone adds it).
+// Every other key the file names (the frame-generation, phase, pacing, delivery, GPU and statistics experiments, and
+// every VEYRA_TEST_RP_ test switch but the VEYRA_TEST_RP_LEGACY_* ones), including ADAPTIVE_PHASE as a `mode` line sets
+// it, is ignored and logged once. The LEGACY_* switches stay: docs/SETUP.md's rollback step 1 asks the user to write one
+// in this file, and each only brings back the original Veyra code for its part.
+// The hardware test kit is unaffected: it sets its switches in the environment (and VEYRA_TEST_RP_NO_SETTINGS_FILE).
+// The interface's modes set their own switches through the environment as before (pushInterfaceSwitches).
+constexpr bool slipstreamFileMayApply(std::string_view name) {
+    if (name.starts_with("VEYRA_TEST_RP_LEGACY_")) return true;   // the original code for one part (rollback)
+    if (!name.starts_with("VEYRA_EXP_RP_")) return false;         // other VEYRA_TEST_RP_*: test switches, never from the file
+    const std::string_view rest = name.substr(13);
+    if (rest == "KBM" || rest.starts_with("KBM_") || rest.starts_with("AUDIO_")) return true;
+    constexpr std::string_view allowed[] = {"PAD_POLL_MS", "TRIGGER_FILTER", "LATENCY_BUTTONS", "LAN_PROFILE", "SMARTLINK", "SMARTLINK_MODEL",
+                                            "SMARTLINK_TRACE", "RCVBUF", "REORDER_ADAPTIVE", "REORDER_US", "REORDER_WRAP_FIX", "EARLY_LOSS",
+                                            "IDR_RETRY_MS", "RECONNECT_PATIENT", "WIFI_STREAMING_MODE", "HEALTH", "BACKLOG", "THREAD_PRIORITY",
+                                            "RESUME_AFTER_DEVICE_LOSS", "NO_UPDATE"};
+    for (const std::string_view a : allowed)
+        if (rest == a) return true;
+    return false;
+}
+struct SlipstreamFileSplit {
+    std::vector<SlipstreamSwitch> apply;    // to set (unless the environment has them)
+    std::vector<SlipstreamSwitch> ignored;  // frame-path or test switches: not set from the file
+};
+inline SlipstreamFileSplit splitSlipstreamForFile(const SlipstreamSettings& settings) {
+    SlipstreamFileSplit out;
+    for (const SlipstreamSwitch& item : settings.switches) (slipstreamFileMayApply(item.name) ? out.apply : out.ignored).push_back(item);
+    return out;
+}
+inline std::string describeIgnoredSlipstreamSwitches(const std::vector<SlipstreamSwitch>& ignored) {
+    std::string text;
+    for (const SlipstreamSwitch& item : ignored) {
+        if (!text.empty()) text += ' ';
+        text += slipstreamLogSwitch(item.name, item.value);
+        text += item.origin == SlipstreamOrigin::File ? "" : item.origin == SlipstreamOrigin::Mode ? "(mode)" : "(lan)";
+    }
+    return text;
+}
+// The start-up line of every experiment and test switch in force (VEYRA_EXP_* and VEYRA_TEST_* in the environment once
+// slipstream.ini was applied), each with where it came from: "ini" when this start set it from slipstream.ini, else
+// "env" (the environment the program was started with: the kit, a shortcut, a system variable). "none" without any.
+// Values by slipstreamLogSwitch; sorted by name.
+inline std::string describeSwitchesInForce(std::vector<std::pair<std::string, std::string>> environment, const std::vector<std::string>& fromFile) {
+    std::sort(environment.begin(), environment.end());
+    std::string text;
+    for (const auto& [name, value] : environment) {
+        if (!(name.starts_with("VEYRA_EXP_") || name.starts_with("VEYRA_TEST_"))) continue;
+        if (!text.empty()) text += ' ';
+        text += slipstreamLogSwitch(name, value) + (slipstream_detail::contains(fromFile, name) ? "(ini)" : "(env)");
+    }
+    return text.empty() ? std::string("none") : text;
 }
 } // namespace veyra::engine

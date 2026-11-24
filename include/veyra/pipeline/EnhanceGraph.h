@@ -644,7 +644,8 @@ public:
     }
     uint64_t presentationReadyFence(unsigned slot,bool generated)const {
         if(generated&&slot<kGeneratedPoolSlots){if(auto lease=generatedLeases_[slot].lock())return lease->readyFence;}
-        return uploadFences_[slot%2];
+        // Stream "gpupath" (PushGpuPath.h): the real frame's own lists' fence where no later list of its pair touches it.
+        return realPresentFences_[slot%2]?realPresentFences_[slot%2]:uploadFences_[slot%2];
     }
     ID3D12Fence* presentationReadyFenceObject(unsigned slot,bool generated)const;
     void presentationSubmitted(unsigned slot,ID3D12Fence* fence,uint64_t value){
@@ -695,6 +696,9 @@ public:
         // PushFPS stream "delay90": live capture frames that came in an upload buffer the GPU still read when the
         // callback wrote it, so the callback wrote its CPU planes and this graph copied them again on the engine thread.
         uint64_t captureUploadCpuCopies = 0;
+        // PushFPS stream "gpupath": real frames whose presentation-queue wait is their own lists' fence instead of the
+        // pair's last list (PushGpuPath.h). Counts frames, not time saved: only frames shown before that list mattered.
+        uint64_t realPresentOwnFence = 0;
     };
     const Metrics& metrics() const { return metrics_; }
     const std::string& mvecSource() const { return mvecSource_; }
@@ -1239,6 +1243,7 @@ private:
     std::weak_ptr<FrameLease> realLeases_[2],generatedLeases_[kGeneratedPoolSlots];
     uint32_t nextListSlot_ = 0;
     uint64_t uploadFences_[2] = {};
+    uint64_t realPresentFences_[2] = {};   // stream "gpupath": the presentation queue's wait for a real frame (PushGpuPath.h)
     std::array<Microsoft::WRL::ComPtr<ID3D12Fence>,2> presentationFences_;
     std::array<uint64_t,2> presentationValues_{};
     // FFmpeg may recycle a hardware surface as soon as its AVFrame is freed.

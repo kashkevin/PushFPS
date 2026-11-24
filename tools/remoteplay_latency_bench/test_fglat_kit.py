@@ -19,21 +19,13 @@ KIT = os.path.join(ROOT, "scripts", "remoteplay", "testkit")
 sys.path.insert(0, HERE)
 import report  # noqa: E402
 
-ARMS = ["flt-off", "flt-fg2", "flt-fg2-phase", "flt-fg2-hold", "flt-fg2-grace", "flt-fg2-headroom", "flt-fg2-ull",
-        "flt-fg2-ull-prio", "flt-fg2-ull-low"]
-PAIRS = {"flt-off": "flt-off", "flt-fg2": "flt-off", "flt-fg2-phase": "flt-fg2", "flt-fg2-hold": "flt-fg2",
-         "flt-fg2-grace": "flt-fg2", "flt-fg2-headroom": "flt-fg2", "flt-fg2-ull": "flt-fg2", "flt-fg2-ull-prio": "flt-fg2-ull",
-         "flt-fg2-ull-low": "flt-fg2-ull"}
+# Since Package 14 every part of VEYRA_EXP_RP_FG_ULL is inert: its arms were removed (they could only have read as "the
+# experiment did not help"); the set keeps frame generation off against 2x as installed.
+ARMS = ["flt-off", "flt-fg2"]
+PAIRS = {"flt-off": "flt-off", "flt-fg2": "flt-off"}
 # What each arm adds to its pair: (pipeline keys added, pipeline keys removed, other switches added)
 ADDS = {
     "flt-fg2": (["fg=vfg", "fgMultiplier=2"], ["fg=off"], set()),
-    "flt-fg2-phase": ([], [], {"VEYRA_EXP_RP_FG_ULL=phase"}),
-    "flt-fg2-hold": ([], [], {"VEYRA_EXP_RP_FG_ULL=hold"}),
-    "flt-fg2-grace": ([], [], {"VEYRA_EXP_RP_FG_ULL=grace"}),
-    "flt-fg2-headroom": ([], [], {"VEYRA_EXP_RP_FG_ULL=headroom"}),
-    "flt-fg2-ull": ([], [], {"VEYRA_EXP_RP_FG_ULL=1"}),
-    "flt-fg2-ull-prio": ([], [], {"VEYRA_TEST_PRESENT_QUEUE_PRIORITY=high"}),
-    "flt-fg2-ull-low": (["fgTier=0"], [], set()),
 }
 
 
@@ -86,7 +78,7 @@ class FgLatKit(unittest.TestCase):
             self.assertFalse(theirs_other - mine_other, name)
             want_added, want_removed, want_extra = ADDS[name]
             self.assertEqual((added, removed, mine_other - theirs_other), (sorted(want_added), sorted(want_removed), want_extra), name)
-            self.assertEqual(row["differs"], "fgTier" if name == "flt-fg2-ull-low" else "", name)
+            self.assertEqual(row["differs"], "", name)
 
     def test_part_names_are_the_engines(self):
         # pushUllParse turns an unknown part into "nothing on": a typo would make an arm a copy of its pair
@@ -109,7 +101,7 @@ class FgLatKit(unittest.TestCase):
         found = re.findall(r"    '(\w+)' = @\{ plan = '([^']+)'; rounds = (\d+);", self.kit)
         plans = {s: p for s, p, _r in found}
         rounds = {s: int(r) for s, _p, r in found}
-        self.assertEqual(report.about_minutes(rounds["smoothness"] * len(ARMS) * report.plan_seconds(plans["smoothness"])), 25)
+        self.assertEqual(report.about_minutes(rounds["smoothness"] * len(ARMS) * report.plan_seconds(plans["smoothness"])), 6)
 
     def test_the_lines_it_compares_are_kept(self):
         lines = [

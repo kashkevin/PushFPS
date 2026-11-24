@@ -67,13 +67,13 @@ IN THIS PACKAGE
         Run-First-Test.cmd -Session framegen    about 20 minutes   every frame generation method, 2x and 3x
         Run-First-Test.cmd -Session neural      about 20 minutes   the neural layer at four internal sizes
         Run-First-Test.cmd -Session pacing      about 8 minutes    the window region: slow first seconds?
-        Run-First-Test.cmd -Session smoothness  about 36 minutes   which frame rate is evenly paced on your panel?
+        Run-First-Test.cmd -Session smoothness  about 30 minutes   which frame rate is evenly paced on your panel?
                                                                    run it twice: add -Pass 120 (Windows at 120 Hz),
                                                                    then -Pass 180 (Windows at 180 Hz)
         Run-First-Test.cmd -Session retest      about 25 minutes   50 against 100 Mbit/s in one moving scene, three
                                                                    runs each, with matched picture captures, and
                                                                    two audio and clock A/B arms at each bitrate
-        Run-First-Test.cmd -Session capture     about 42 minutes   with a capture card instead of Remote Play: what the card
+        Run-First-Test.cmd -Session capture     about 36 minutes   with a capture card instead of Remote Play: what the card
                                                                    and the game really deliver, passthrough against frame
                                                                    generation 2x-6x; the kit asks you to choose the card once
       The kit prints its own time estimate first. What each page tells you and what it cannot:

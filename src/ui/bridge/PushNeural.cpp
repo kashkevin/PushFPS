@@ -27,6 +27,7 @@
 // answers { available: false }.
 #if __has_include("veyra/engine/PushPipelinePlan.h")
 #include "veyra/engine/PushPipelinePlan.h"
+#include "veyra/engine/PushLegacyEnv.h"
 #define VEYRA_PUSH_PIPELINE_PLAN 1
 #endif
 
@@ -43,6 +44,7 @@
 #include <QGuiApplication>
 #include <QScreen>
 #include <QStandardPaths>
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -457,6 +459,75 @@ engine::NrRuntime pushNeuralDefaultRuntime(engine::NrRuntime runtime) {
     return engine::NrRuntime::NvidiaOriginal;
 }
 
+// Stream "laghunt" (engine::pushNrStartupHold, PushNrRuntime.h): after the start-up checks, an original-runtime (nr3)
+// neural layer the user saved ON is kept off in the running chain when its marker is set or when the runtime's blocker
+// needs a deliberate act (file missing, not a signed original); the saved session is never changed, the marker is the
+// preference pushNrHeldOff. A marker key carries its node list's neural layout print, so after nodes were deleted,
+// inserted or reordered it is dropped (and logged), never applied to another node. One [nr-hold] line names the rule at
+// every start. Returns true when the preference changed (the caller saves it). Does NOT undo a setup that already has
+// the layer on with a working runtime: it only prevents a future silent switch-on.
+namespace {
+bool neuralNode(const engine::ChainNode& n) { return n.type == engine::EffectType::NrEnhance; }
+int neuralRuntimeId(const engine::ChainNode& n) { return int(engine::currentNrRuntime(n.nr.runtime)); }
+}
+bool pushNeuralStartupHold(engine::ChainSession& running, const engine::ChainSession& saved, QVariantMap& prefs) {
+    auto& s = neuralState();
+    const auto status = engine::pushNrSlotStatus(installedFacts(s), gpuFacts(), engine::PushNrSlot::Original);
+    // Package 14's rollback (PushLegacy.h): VEYRA_TEST_RP_LEGACY_NR_HOLD / _PACKAGE13 = 1, VEYRA_TEST_NR_KEEP_SAVED_ON as alias.
+    const bool keepSavedOn = engine::pushLegacyRestored(engine::PushLegacyPart::NrHold, engine::pushEnvironment());
+    const std::string before = prefs.value(QStringLiteral("pushNrHeldOff")).toString().toStdString();
+    const std::string marker = engine::pushNrHoldValid(before) ? before : std::string();
+    std::vector<std::string> keys;
+    std::vector<std::pair<std::string, engine::PushNrHoldDecision>> looked;
+    std::string dropped;
+    bool announce = false;
+    const auto visit = [&](unsigned configuration, bool editor, const engine::EffectChain& kept, engine::EffectChain* now) {
+        if (kept.nodeCount != (now ? now->nodeCount : kept.nodeCount)) return;
+        const std::uint32_t print = engine::pushNrLayoutPrint(kept, neuralNode, neuralRuntimeId);
+        for (uint32_t i = 0; i < kept.nodeCount; ++i) {
+            const auto& node = kept.nodes[i];
+            if (node.type != engine::EffectType::NrEnhance) continue;
+            engine::PushNrHoldInputs in;
+            in.originalLayer = engine::currentNrRuntime(node.nr.runtime) == engine::NrRuntime::NvidiaOriginal;
+            if (!in.originalLayer) continue;   // other neural layers: never touched
+            const auto key = engine::pushNrHoldKey(configuration, editor, i, print);
+            in.savedEnabled = node.enabled;
+            in.usable = status.usable;
+            in.blocker = status.blocker;
+            in.marked = engine::pushNrHoldHas(marker, configuration, editor, i, print);
+            in.keepSavedOn = keepSavedOn;
+            const auto d = engine::pushNrStartupHold(in);
+            if (d.offThisStart && now && !keepSavedOn) now->nodes[i].enabled = false;
+            if (keepSavedOn ? in.marked : d.marked) keys.push_back(key);
+            announce = announce || d.announce;
+            looked.emplace_back(key, d);
+        }
+    };
+    for (unsigned c = 0; c < unsigned(saved.configurations.size()); ++c) {
+        const auto& kept = saved.configurations[c];
+        auto& now = running.configurations[c];
+        visit(c, false, kept.chain, &now.chain);
+        if (kept.editor && now.editor) {
+            auto editor = std::make_shared<engine::NodeEditorDocument>(*now.editor);
+            visit(c, true, kept.editor->nodes, &editor->nodes);
+            if (!(*editor == *now.editor)) now.editor = std::move(editor);
+        }
+    }
+    // Keys of the old marker that no longer name their layer (its list's layout changed, or the node is gone).
+    for (const auto k : engine::pushNrHoldKeys(marker))
+        if (std::find(keys.begin(), keys.end(), std::string(k)) == keys.end() && !keepSavedOn) {
+            if (!dropped.empty()) dropped += ',';
+            dropped += std::string(k);
+        }
+    const std::string after = keepSavedOn ? marker : engine::pushNrHoldJoin(keys);
+    veyra::log::info("nr-hold", engine::pushNrHoldLine(looked, after, status.blocker, keepSavedOn, dropped));
+    if (announce) veyra::log::info("nr-hold", "the neural layer is available again; it stays off until you switch it on");
+    if (after == before) return false;
+    if (after.empty()) prefs.remove(QStringLiteral("pushNrHeldOff"));
+    else prefs[QStringLiteral("pushNrHeldOff")] = QString::fromStdString(after);
+    return true;
+}
+
 void QmlPlayerBridge::pushNeuralLoadChoice() { neuralState().chosen = impl_->prefBool("pushNrRuntimeChosen", false); }
 
 void QmlPlayerBridge::pushNeuralRuntimePicked() {
@@ -485,6 +556,35 @@ bool QmlPlayerBridge::pushNeuralApplyDefault() {
 // Once per start, from the bridge's poll timer (PushAutorun.cpp): [nr-runtime-status].
 void QmlPlayerBridge::pushNeuralTick() {
     auto& s = neuralState();
+    // Stream "laghunt": while a marker (pushNrHeldOff) exists, every key is checked against the node list it belongs to
+    // (its configuration's list chain "c" or node editor chain "e", as the session is now). A key whose list's neural
+    // layout changed is dropped alone (it no longer names its layer); if any held node is on (his switch, in either
+    // list), the WHOLE marker is cleared at once: the safe side, no layer stays held by a key that might be stale.
+    if (impl_->prefs.contains(QStringLiteral("pushNrHeldOff"))) {
+        const std::string marker = impl_->prefs.value(QStringLiteral("pushNrHeldOff")).toString().toStdString();
+        const auto session = impl_->currentSession();
+        std::vector<std::string> kept;
+        std::string droppedKeys;
+        bool cleared = !engine::pushNrHoldValid(marker);
+        for (const auto k : engine::pushNrHoldKeys(cleared ? std::string_view() : std::string_view(marker))) {
+            const auto key = engine::pushNrHoldParse(k);
+            if (!key || key->configuration >= session.configurations.size()) { cleared = true; break; }
+            const auto& configuration = session.configurations[key->configuration];
+            const engine::EffectChain* list = key->editor ? (configuration.editor ? &configuration.editor->nodes : nullptr) : &configuration.chain;
+            const auto check = engine::pushNrHoldCheckKey(*key, list, neuralNode, neuralRuntimeId);
+            if (check == engine::PushNrHoldCheck::ClearedByUser) { cleared = true; break; }
+            if (check == engine::PushNrHoldCheck::Keep) kept.emplace_back(k);
+            else { if (!droppedKeys.empty()) droppedKeys += ','; droppedKeys += std::string(k); }
+        }
+        const std::string after = cleared ? std::string() : engine::pushNrHoldJoin(kept);
+        if (after != marker) {
+            if (after.empty()) impl_->prefs.remove(QStringLiteral("pushNrHeldOff"));
+            else impl_->prefs[QStringLiteral("pushNrHeldOff")] = QString::fromStdString(after);
+            if (!impl_->savePrefs()) veyra::log::warn("ui-prefs", "neural layer marker change not saved");
+            if (cleared) veyra::log::info("nr-hold", "the neural layer was switched on by the user; no layer is held off at start any more");
+            else veyra::log::info("nr-hold", "marker keys dropped (their node list changed): " + droppedKeys);
+        }
+    }
     if (s.statusLogged) return;
     s.statusLogged = true;
     auto in = installedFacts(s);

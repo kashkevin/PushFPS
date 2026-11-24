@@ -258,30 +258,18 @@ bool D3D12DeviceContext::initialize(const DeviceContextDesc& desc, Status& statu
     queueDesc.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
     queueDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
     queueDesc.NodeMask = 0;
-    // PushFPS stream "delay90": VEYRA_EXP_RP_GRAPH_QUEUE_PRIORITY=high (exactly "high", off by default) asks for a
-    // HIGH-priority direct queue for the graph (the base work and every generated frame's D3D12 lists; VFG's own CUDA
-    // work is not on this queue), as VEYRA_TEST_PRESENT_QUEUE_PRIORITY does for the presentation queue. Only when the
-    // device reports the priority as supported; unset: the NORMAL queue as before. Unverified on Windows.
+    // PushFPS stream "delay90" asked for a HIGH-priority graph queue with VEYRA_EXP_RP_GRAPH_QUEUE_PRIORITY=high. Stream
+    // "lagfix" (the owner's 24th message) made it inert: the presentation queue stays NORMAL, so a real frame's blit
+    // could wait behind graph work of the next pair, and raising both queues only moves the same contention elsewhere;
+    // nothing on Linux can show which is better. The value is still read and logged; the queue stays NORMAL.
     {
         wchar_t graphPriority[8]{};
         const DWORD length = GetEnvironmentVariableW(L"VEYRA_EXP_RP_GRAPH_QUEUE_PRIORITY", graphPriority, 8);
-        if (length == 4 && std::wstring_view(graphPriority, length) == L"high") {
-            D3D12_FEATURE_DATA_COMMAND_QUEUE_PRIORITY support{queueDesc.Type, D3D12_COMMAND_QUEUE_PRIORITY_HIGH, FALSE};
-            const HRESULT queried = device_->CheckFeatureSupport(D3D12_FEATURE_COMMAND_QUEUE_PRIORITY, &support, sizeof(support));
-            if (SUCCEEDED(queried) && support.PriorityForTypeIsSupported) queueDesc.Priority = D3D12_COMMAND_QUEUE_PRIORITY_HIGH;
-            veyra::log::info("graph-priority", std::format("requested=HIGH supported={} queryHr=0x{:X} selected={} (VEYRA_EXP_RP_GRAPH_QUEUE_PRIORITY)",
-                support.PriorityForTypeIsSupported ? 1 : 0, unsigned(queried), queueDesc.Priority));
-        }
+        if (length > 0)
+            veyra::log::info("graph-priority", std::format("requested={} selected=NORMAL disabled: can make playback worse (VEYRA_EXP_RP_GRAPH_QUEUE_PRIORITY)",
+                length < 8 && std::wstring_view(graphPriority, length) == L"high" ? "HIGH" : "unknown"));
     }
     result = device_->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&queue_));
-    if (FAILED(result) && queueDesc.Priority != D3D12_COMMAND_QUEUE_PRIORITY_NORMAL) {
-        // The experiment above must never cost the device: a refused HIGH queue is created again at NORMAL.
-        const HRESULT refused = result;
-        queueDesc.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
-        result = device_->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&queue_));
-        veyra::log::info("graph-priority", std::format("requested=HIGH createHr=0x{:X} selected=NORMAL fallback=1 retryHr=0x{:X} (VEYRA_EXP_RP_GRAPH_QUEUE_PRIORITY)",
-            unsigned(refused), unsigned(result)));
-    }
     if (FAILED(result)) {
         status = Status::DeviceFailure;
         veyra::log::error("gfx", std::format("CreateCommandQueue failed hr={}", veyra::hresultString(result)));

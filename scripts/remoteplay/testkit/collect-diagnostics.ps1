@@ -26,7 +26,8 @@
         [frame-flow] [frame-rate] [pacing] [present-deviation] [fg-validity] [fg-drops]
         [display-vrr] [display-refresh] [display-latency] [display-query]
         [gpu-failure] [gpu-reconnect] [reset-lifecycle] [engine-hang] [engine-test] [crash]
-        [overlay-hooks] [log-backpressure], and [qml] lines that start with [update-check]
+        [overlay-hooks] [log-backpressure] [capture-timing] [content-dedup] and the kit's other families (run-tests.ps1),
+        and [qml] lines that start with [update-check]
     and the line holds none of these words: registration, regist_key, rp_key, account, psn (except in psnr=),
     token, secret, passw, ssid, morning, nickname. In every text of the zip: folder and file paths become [path];
     IPv4 addresses keep only their private-range prefix (192.168.x.x ...), any other becomes x.x.x.x; IPv6
@@ -81,7 +82,7 @@ function Get-UtcStamp {
 # --- redaction -----------------------------------------------------------------------------------
 # The same rules as run-tests.ps1 and tools/remoteplay_latency_bench/report.py (redact_line); a test holds
 # the three copies equal. Change them together.
-$allowedLine = '\[(INFO |WARN |ERROR|TRACE)\] \[(push-(latency|quality|benchmark|mode|hardware|profile|adaptive-fg)|remoteplay(-[a-z0-9-]+)?|slipstream-(governor|gpu-budget|watch|config|latency|latency-test|press|delivery|sr|fg|autorun|smartlink|swapchain|present|pipeline|nr|clean|quality|input|input-poll|scanout|cadence|net|smooth|capture|sizes)|capture-(driver-age|buffer)|nr-(runtime-status|adapt|reuse|model)|frame-(flow|rate)|pacing|present-deviation|present-contract|present-priority|graph-priority|qml-window|ui-(dialog|fullscreen|window|resume)|fg-(validity|drops|ull)|display-(vrr|refresh|latency|query)|gpu-(failure|reconnect)|reset-lifecycle|engine-(hang|test)|crash|overlay-hooks|log-backpressure|qml\] \[update-check)\] '
+$allowedLine = '\[(INFO |WARN |ERROR|TRACE)\] \[(push-(latency|quality|benchmark|mode|hardware|profile|adaptive-fg)|remoteplay(-[a-z0-9-]+)?|slipstream-(governor|gpu-budget|watch|config|latency|latency-test|press|delivery|sr|fg|autorun|smartlink|swapchain|present|pipeline|nr|clean|quality|input|input-poll|scanout|cadence|net|smooth|capture|sizes)|capture-(driver-age|buffer|timing)|content-dedup|experiment-switches|nr-(runtime-status|adapt|reuse|model|hold)|frame-(flow|rate)|pacing|present-deviation|present-contract|present-priority|graph-priority|qml-window|ui-(dialog|fullscreen|window|resume)|fg-(validity|drops|ull|sched)|display-(vrr|refresh|latency|query)|gpu-(failure|reconnect|path)|reset-lifecycle|engine-(hang|test)|crash|overlay-hooks|log-backpressure|qml\] \[update-check)\] '
 $refusedLine = '\[remoteplay-discovery\]|registration|regist[_ -]?key|rp[_ -]?key|account|psn(?!r=)|token|secret|passw|ssid|morning|nickname'
 
 function Protect-Text([string]$Line) {
@@ -479,12 +480,24 @@ foreach ($copy in $copies) {
         $versions += ('  {0}: version {1}' -f $library.Name, ($libraryVersion -replace '\.', '_'))
     }
 
-    # slipstream.ini: the NAMES of the switches only
+    # slipstream.ini: its key = value lines (Package 13A: values too; a value is kept only when it is plain letters, digits
+    # and , . : _ -, so nothing else can travel), then below what the program itself accepted ([remoteplay-settings]).
     $ini = Join-Path $folder 'slipstream.ini'
     if (Test-Path -LiteralPath $ini) {
         $names = @()
-        foreach ($row in @(Get-Content -LiteralPath $ini)) { if ($row -match '^\s*([A-Za-z0-9_]+)\s*=') { $names += $Matches[1] } }
-        $compatibility += ('Copy "' + $label + '": slipstream.ini is present and sets: ' + ($names -join ' '))
+        $pairs = @()
+        foreach ($row in @(Get-Content -LiteralPath $ini)) {
+            if ($row -match '^\s*([A-Za-z0-9_]+)\s*=\s*(.*?)\s*$') {
+                # Both captures first: the -notmatch below replaces $Matches when the value is plain.
+                $key = [string]$Matches[1]
+                $value = [string]$Matches[2]
+                $names += $key
+                if ($value -notmatch '^[A-Za-z0-9,.:_-]{0,48}$') { $value = '[value not shown]' }
+                $pairs += ($key + '=' + $value)
+            }
+        }
+        $compatibility += ('Copy "' + $label + '": slipstream.ini is present and sets: ' + ($pairs -join ' '))
+        $short.Add(('Copy "' + $label + '": slipstream.ini ' + ($pairs -join ' ')))
         if ($names.Count -gt 0) { $problems.Add(('Copy "' + $label + '" has a slipstream.ini with ' + $names.Count + ' switch(es): experiments are on. Rename the file to test without them.')) }
     } else { $compatibility += ('Copy "' + $label + '": no slipstream.ini (default behaviour)') }
 
@@ -519,6 +532,25 @@ foreach ($copy in $copies) {
         } elseif ($line -match '\] \[qml\] \[update-check\] (.*)$') { $seen['version'] = $Matches[1] }
     }
     if ($seen.ContainsKey('version')) { $versions += ('  the program reported: ' + $seen['version']) }
+    # Package 13A: what the program itself accepted from slipstream.ini at its last start, and its neural runtime status.
+    $accepted = @($lines | Where-Object { $_ -match '\] \[remoteplay-settings\] slipstream\.ini mode=' })
+    if ($accepted.Count -gt 0) {
+        $text = ([string]$accepted[$accepted.Count - 1]) -replace '^.*\] \[remoteplay-settings\] ', ''
+        $compatibility += ('Copy "' + $label + '": the program accepted at its last start: ' + $text)
+        $short.Add(('Copy "' + $label + '": accepted at the last start: ' + $text))
+    }
+    # Stream "lagfix": what the program ignored from slipstream.ini, and every switch in force at its last start.
+    $ignored = @($lines | Where-Object { $_ -match '\] \[remoteplay-settings\] slipstream\.ini ignored=' })
+    if ($ignored.Count -gt 0) { $compatibility += ('Copy "' + $label + '": ' + (([string]$ignored[$ignored.Count - 1]) -replace '^.*\] \[remoteplay-settings\] ', '')) }
+    $inForce = @($lines | Where-Object { $_ -match '\] \[experiment-switches\] ' })
+    if ($inForce.Count -gt 0) {
+        $text = ([string]$inForce[$inForce.Count - 1]) -replace '^.*\] \[experiment-switches\] ', ''
+        $compatibility += ('Copy "' + $label + '": ' + $text)
+        $short.Add(('Copy "' + $label + '": ' + ($text -replace ' \(ini: .*$', '')))
+    }
+    $runtime = @($lines | Where-Object { $_ -match '\] \[nr-runtime-status\] ' })
+    if ($runtime.Count -gt 0) { $compatibility += ('Copy "' + $label + '": neural runtime at the last start: ' + (([string]$runtime[$runtime.Count - 1]) -replace '^.*\] \[nr-runtime-status\] ', '')) }
+    $short.Add(('Copy "' + $label + '": program version ' + ($fileVersion -replace '\.', '_') + ' (also in versions.txt)'))
 }
 if ($sessionTotal -gt 0) { $short.Add(('PushFPS: {0} PS5 session(s) in the part of the log that was read' -f $sessionTotal)) }
 elseif ($copies.Count -gt 0) { $short.Add('PushFPS: found, but its log shows no PS5 session yet') }
@@ -561,10 +593,11 @@ $summary += @(
     '  hardware.json      processor, memory, graphics card and driver, screens, network adapter type and speed, Windows settings for games',
     '  network.txt        wired or Wi-Fi, link speed, pings to the router (and the PS5 when its address was given)',
     '  versions.txt       versions of PushFPS and of the libraries beside it, Windows, PowerShell',
-    '  compatibility.txt  overlay and capture tools, crashes, graphics failures, experiment switches (names only)',
+    '  compatibility.txt  overlay and capture tools, crashes, graphics failures, experiment switches (plain values only, any other value withheld)',
     '  sessions-*.csv     one row per PS5 session: length, stream settings, frames per second, reconnects, loss, jitter.',
     '                     softwareLatencyMeanMs is the built-in test (a software clock inside the program), not the delay from button to screen.',
     '  log-*.txt          the log lines of PushFPS about streaming, frames, the display and the graphics card, with addresses, names and paths masked',
+    '                     tools\remoteplay_latency_bench\triage.py of the test package reads them: "is it smooth, and if not, why", per session',
     '',
     'WHAT IS NOT IN THE ZIP',
     '  - passwords and other credentials',

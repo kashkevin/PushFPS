@@ -3423,6 +3423,14 @@ Remote Play is untouched; nothing changes for a user who sets nothing. Unverifie
 
 ## Ultra Low Latency Frame Generation (stream "fglat", `VEYRA_EXP_RP_FG_ULL`)
 
+> **Stream "lagfix" (23 Nov 2026): every part is inert.** After Package 13 was reported laggy, the scheduling simulator
+> (`tests/remoteplay/FgScheduleSim.h`, a model of the program's decisions at made-up 4K-like costs, not a measurement)
+> showed that each part can show fewer generated frames, make intervals less even or delay real frames compared with the
+> default (numbers in `PushFgLatency.h`, `pushUllPartsInForce`). The switch is still read and logged
+> (`[fg-ull] ... disabled=<parts>: can make playback worse, nothing changed`); playback is the default's. The learned
+> stream phase stays reachable through `VEYRA_EXP_RP_ADAPTIVE_PHASE=1` (and the interface's modes), now never above the
+> fixed phase (`pushStreamPairDelay`). The kit arms that set `VEYRA_EXP_RP_FG_ULL` were removed in Package 14.
+
 Read once per process; off unless set. Named `VEYRA_EXP_RP_*` so the kit may set it (its switch rule); it applies to
 capture cards as well as PS5 streams. `1` or `all` turns every part on; otherwise a comma-separated list of parts
 (`hold`, `phase`, `headroom`, `grace`). Any other value (an unknown or empty part, upper case, spaces) turns nothing on
@@ -3455,7 +3463,7 @@ generation only (not XeSS, which paces inside its own presenter). Unverified on 
   (Present call minus deadline), `deadPhaseFps` (real frames on an FG phase with no generated frame of their pair shown)
   and `fallbackFps` (real frames shown when ready because a hold, LiveFgRejectionHold or the ULL hold, held frame
   generation off). Software times on the PC's clock, CPU observations of GPU fences; never input-to-photon.
-- Kit: `sm-fg2-ull`, `sm-fg3-ull`, `cap-fg4-ull`, `cap-fg6-ull` set `VEYRA_EXP_RP_FG_ULL=1`, every part at once (in the 3X / 6X
+- Kit (arms removed in Package 14: the switch is inert): `sm-fg2-ull`, `sm-fg3-ull`, `cap-fg4-ull`, `cap-fg6-ull` set `VEYRA_EXP_RP_FG_ULL=1`, every part at once (in the 3X / 6X
   arms the headroom part also lowers the multiplier); a part can become a default only after an arm of its own.
 
 ## Neural layer with frame generation: adaptive inference reuse (stream "nrperf", 22 Nov 2026)
@@ -3493,6 +3501,11 @@ admission). Unverified on Windows; nothing measured; nothing changes for a user 
   generation).
 
 ## The delay of 30 FPS at 90 FPS: working sizes and the delay part by part (stream "delay90", 23 Nov 2026)
+
+> **Stream "lagfix" (23 Nov 2026): `VEYRA_EXP_RP_GRAPH_QUEUE_PRIORITY` is inert.** A HIGH graph queue with a NORMAL
+> presentation queue can make a real frame's blit wait behind the next pair's graph work; nothing short of the owner's
+> PC can show whether raising both helps. The value is still read and logged (`[graph-priority] ... selected=NORMAL
+> disabled: can make playback worse`); the queue stays NORMAL.
 
 Analysis: docs/drafts/DELAY_90.md. Unverified on Windows; nothing here was measured; no switch here changes a default.
 - `[slipstream-sizes]` (always on, like `[slipstream-config]`; `engine/PushSizes.h` + `PushSizesHook.h`, tests
@@ -3542,3 +3555,74 @@ Analysis: docs/drafts/DELAY_90.md. Unverified on Windows; nothing here was measu
     `[slipstream-cadence]` and `presentLateP99Ms`.
   - `VEYRA_EXP_RP_FG_ULL` at 3X for 90 FPS: use the parts `hold,phase,grace`, not `1`/`headroom`: the headroom part
     starts Smoothness Mode, which may step 3X down to 2X under load (60 FPS), against the owner's stable 90.
+
+## Package 13 lag: scheduling simulator, inert switches, plain-install safety (stream "lagfix", 23 Nov 2026)
+
+Nothing here is called fixed: nothing ran on a GPU, a capture card, a PS5 or a display. The simulator
+(`tests/remoteplay/FgScheduleSim.h`, printed by the core tests as `[fg-schedule-sim]`) runs 29.97 FPS pairs at 3X
+through the program's own decision code with made-up 4K-like costs; the engine's glue is modelled and every modelled
+piece is named in the header. It is evidence about the logic, not about the owner's PC. Graph-queue priority cannot be
+simulated.
+
+- 12A and 13 run the same scheduling code (diff: logging, the once-a-second `[slipstream-sizes]` look, a counter), so
+  their default rows are one row.
+- Every part of `VEYRA_EXP_RP_FG_ULL` and `VEYRA_EXP_RP_GRAPH_QUEUE_PRIORITY` is inert (see the notes at the top of their
+  sections). A PS5 stream's learned phase (`VEYRA_EXP_RP_ADAPTIVE_PHASE=1`, also set by the interface's modes) is never
+  above its fixed phase (`pushStreamPairDelay`).
+- slipstream.ini: a plain install takes only input, network, audio and update switches (and the LEGACY rollback
+  switches) from it (`slipstreamFileMayApply`); every start logs `[experiment-switches] in force at start: ...`.
+
+Existing behaviour of the default path at 4K 3X, the same in both builds, reported and NOT changed (each change could
+add delay or drop frames somewhere; proposals for the owner):
+1. Near the GPU's limit with occasional slow generated frames (simulator set `near-limit`: base 3-5 ms, 11.5 ms per
+   generated frame, 2 % +10 ms), a capture card skips about 11 pairs a second and shows about 35 of 60 generated frames:
+   admission compares the FG cost's P95 over the last 2 s with the deadline, a few slow groups put that P95 over it, and
+   no new FG sample arrives while pairs are skipped, so the rejection lasts until the slow samples are 2 s old
+   (`FgRecoveryBudget`). Proposal: measure on the owner's PC first (`[live-fg-admission]` rejectedPairs, `[vfg-probe]`).
+2. After each run of skipped pairs the card's learned phase jumps (to ~63 ms in the simulator) and comes down 0.5 ms a
+   pair: the queue behind the probe's slower groups raises the readiness `LivePairLatency` learns, although those groups
+   themselves are excluded as warmup. Real frames then wait up to ~60 ms at P95.
+3. A PS5 stream presents on each frame's decode time (no `LiveArrivalSmoother`, which cards use): decode-time jitter
+   goes straight to the panel (21-31 % of present intervals more than 1 ms off at 1.5 ms jitter in the model). The real
+   jitter is unknown; `[slipstream-cadence] offPct` on the owner's PC tells.
+4. With the learned stream phase, the card's 1 s rejection hold also applies to the stream (`marginPair` gates it): near
+   the limit that showed 1.4 fewer generated frames a second and a 62 ms gap where the fixed phase showed 41 ms.
+
+## GPU path of one pair: two waits lowered by default, one experiment (stream "gpupath", 24 Nov 2026)
+
+Map of every GPU and CPU event of one 3X pair: `docs/drafts/GPU_PATH_MAP.md`. Decisions: `include/veyra/pipeline/PushGpuPath.h`
+(tests `tests/remoteplay/GpuPathTests.inc`, WARP test `gpu-path-real-wait` in `tests/integration/PushGpuTests.cpp`).
+Nothing here ran on a GPU other than WARP in CI; no benefit is measured or claimed.
+
+- **On by default** (each only lowers a fence value something waits for: no added wait, copy or list, same pictures,
+  same order of presents); every start logs `[gpu-path] realFrameWait=... uploadRelease=...`:
+  - The real frame's presentation-queue wait is its own lists' fence instead of the pair's last list, with VFG and
+    neither HUD Lock nor exclusion. Matters when its generated frames are not shown (a probe pair while
+    LiveFgRejectionHold / FgCostSettling hold generation off, whose real frame goes out when ready; a generated frame
+    dropped late): the real frame's blit no longer waits for the generated frames nobody shows. Restore:
+    `VEYRA_TEST_GPU_REAL_WAITS_GROUP=1`. Counter: `EnhanceGraph::Metrics::realPresentOwnFence`.
+  - The capture upload buffer is released after the base list (was `VEYRA_EXP_RP_UPLOAD_EARLY_RELEASE=1`, now the
+    default; the old switch is read only for the log). Restore: `VEYRA_TEST_UPLOAD_LATE_RELEASE=1`. Counter:
+    `uploadCpuCopyFps` (expected 0 in steady state either way).
+- **Off by default**: `VEYRA_EXP_RP_VFG_BACK_TO_BACK=1`: VFG's later subframes of a pair wait for the pair's first
+  producer value, so CUDA runs them back to back instead of idling for a D3D12 round trip after each copy back. Same
+  pictures; but the first generated frame's copy back may then share the GPU with the second Run, so it could be
+  ready later. Decided by `gpuFg1P50/P95Ms`, `gpuFgP50Ms` and `VEYRA_TEST_VFG_GPU_PROFILE`'s `handoffIdle` on the
+  owner's PC, against the same arm without it.
+
+## Stream "laghunt": the original-runtime neural layer is held off until switched on (default on, experimental copy)
+
+At start the app switches off a saved neural layer whose runtime cannot run, for that start only, and keeps it on in
+the saved session (upstream's rule). Before this change, the first start after `nvngx_dlssnr.dll` appeared ran the
+layer again by itself. Now, for a layer on the NVIDIA original runtime (nr3) only, and only when the blocker needs a
+deliberate act (the file is missing, or it is not an NVIDIA-signed original), the preference `pushNrHeldOff` marks the
+layer (keys `<mode 0|1><c|e><node>-<layout print>`, validated in Preferences.cpp; a key whose node list's
+neural layout changed, after nodes were deleted, inserted or reordered, is dropped and logged, never applied to another
+node; any held node switched on clears the whole marker). A marked layer stays off at start, also after the
+runtime becomes usable (`[nr-hold] ... available again`); the user's own switch clears the marker. The saved session
+keeps his choice; other neural layers and transient blockers (signature not checkable now, driver, GPU answer) are not
+touched. One `[nr-hold] startup rule=...` line every start names the rule, the reason and the marker.
+This does NOT undo a setup whose saved session already has the layer on with a working runtime: it only prevents a
+future silent switch-on. `VEYRA_TEST_NR_KEEP_SAVED_ON=1` restores the old behaviour (no marker read or written).
+Tests: `laghunt_original_neural_layer_is_held_off_only_by_a_marker` (tests/remoteplay/LagHuntTests.inc). Unverified on
+Windows.

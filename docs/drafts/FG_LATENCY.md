@@ -1,5 +1,14 @@
 # Frame-generation latency: where the delay comes from in our code (stream "fglat", 22 Nov 2026)
 
+> **Stream "lagfix" (23 Nov 2026): every part is inert.** After Package 13 was reported laggy, the scheduling simulator
+> (`tests/remoteplay/FgScheduleSim.h`, a model of the program's decisions at made-up 4K-like costs, not a measurement)
+> showed that each part can show fewer generated frames, make intervals less even or delay real frames compared with the
+> default (numbers in `PushFgLatency.h`, `pushUllPartsInForce`). The switch is still read and logged
+> (`[fg-ull] ... disabled=<parts>: can make playback worse, nothing changed`); playback is the default's. The learned
+> stream phase stays reachable through `VEYRA_EXP_RP_ADAPTIVE_PHASE=1` (and the interface's modes), now never above the
+> fixed phase (`pushStreamPairDelay`). The kit arms that set `VEYRA_EXP_RP_FG_ULL` were removed in Package 14.
+
+
 Scope: the owner's seventeenth message (lowest-latency frame generation on an RTX 5070, 2560x1440 180 Hz OLED, PS5
 over Remote Play now and through an HDMI capture card next). Base: exp/s6-capture (which merges exp/s6-fps). Read
 first and not repeated here: docs/drafts/CAPTURE_FG.md (capture assessment, GPU cost per backend, camera procedure),

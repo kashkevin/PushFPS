@@ -8,10 +8,12 @@
 // Decisions use capability answers only (the GPU supports the runtime yes/no, the driver is new enough yes/no/unknown),
 // never a card model or device id. Tests: tests/remoteplay/NrRuntimeTests.inc.
 #include "veyra/engine/PushPipelineHook.h"
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -271,6 +273,201 @@ constexpr PushNrDecision pushNrDecide(const PushNrInstalled& in, const PushNrGpu
     // original that is refused; or, on a card that runs the original but not this slot, the missing original).
     if (in.original.present || (gpu.supportsOriginal && !own.usable && own.blocker == PushNrBlocker::GpuNotSupported)) d.blocker = original.blocker;
     return d;
+}
+
+// --- Stream "laghunt": the original-runtime layer at start-up --------------------------------------------------
+// At start the app switches off a saved neural layer whose runtime cannot run (Hardware.cpp disableUnavailableEffects)
+// for that session only and keeps it ON in the saved file (upstream's rule for every effect), so on the first start
+// after nvngx_dlssnr.dll appeared (an installer "yes", a copy added in Settings) the neural layer ran again by itself:
+// a heavy 4K stage nobody chose that day. The rule below never changes what the user saved (`enabled` stays as he
+// saved it). For a layer on the NVIDIA original runtime (nr3) only, and only when the blocker needs a deliberate act to
+// clear (the runtime file is missing, or it is not an NVIDIA-signed original), it sets a separate marker (preference
+// pushNrHeldOff, PushFPS's own, keyed to the layer). While the marker is set the layer is kept off at start, also once
+// the runtime is usable again (then logged once: "available again; switch it on to use it"); the user's own switch
+// clears it. A blocker that can pass by itself (signature not checkable now, driver, GPU answer) sets no marker: the
+// layer is off for that start only, as before. Other neural layers (nr2, nr4, upstream's) are never touched.
+// VEYRA_TEST_NR_KEEP_SAVED_ON=1 restores the old behaviour (no marker read or written).
+// This does NOT undo a setup where the saved session already has the layer on with a working runtime: that layer runs
+// as before. It only prevents a future silent switch-on.
+enum class PushNrHoldRule : std::uint8_t {
+    NotOriginal,     // not an original-runtime layer: untouched
+    KeepSavedOn,     // VEYRA_TEST_NR_KEEP_SAVED_ON=1: the old behaviour
+    SavedOff,        // the user saved it off: nothing to hold (a stale marker is dropped)
+    Runs,            // usable and not held: runs as saved
+    Transient,       // cannot run now for a reason that can pass by itself: off for this start only, no marker
+    MarkerSet,       // cannot run now and needs a deliberate act (file missing / not a signed original): marker set
+    HeldWaiting,     // marker set earlier, still not usable: stays off
+    AvailableAgain   // marker set earlier, usable now: stays off until the user switches it on (logged once)
+};
+constexpr std::string_view pushNrHoldRuleName(PushNrHoldRule r) {
+    switch (r) {
+    case PushNrHoldRule::NotOriginal: return "not-original";
+    case PushNrHoldRule::KeepSavedOn: return "keep-saved-on";
+    case PushNrHoldRule::SavedOff: return "saved-off";
+    case PushNrHoldRule::Runs: return "runs";
+    case PushNrHoldRule::Transient: return "transient";
+    case PushNrHoldRule::MarkerSet: return "marker-set";
+    case PushNrHoldRule::HeldWaiting: return "held-waiting";
+    case PushNrHoldRule::AvailableAgain: return "available-again";
+    }
+    return "runs";
+}
+struct PushNrHoldInputs {
+    bool originalLayer = false;   // the layer's saved runtime is the NVIDIA original (nr3)
+    bool savedEnabled = false;    // as the user saved it
+    bool usable = false;          // pushNrSlotStatus(..., Original).usable now
+    PushNrBlocker blocker = PushNrBlocker::None;
+    bool marked = false;          // the marker for this layer is set
+    bool keepSavedOn = false;     // VEYRA_TEST_NR_KEEP_SAVED_ON=1
+};
+struct PushNrHoldDecision {
+    PushNrHoldRule rule = PushNrHoldRule::NotOriginal;
+    bool offThisStart = false;    // keep the layer off in the running chain (the saved file is not changed)
+    bool marked = false;          // the marker afterwards
+    bool announce = false;        // "available again; switch it on to use it" (once)
+};
+// Blockers that need a deliberate act (install / replace the file) to clear.
+constexpr bool pushNrBlockerNeedsAct(PushNrBlocker b) {
+    return b == PushNrBlocker::RuntimeMissing || b == PushNrBlocker::NotSignedOriginal;
+}
+constexpr PushNrHoldDecision pushNrStartupHold(const PushNrHoldInputs& in) {
+    if (!in.originalLayer) return {PushNrHoldRule::NotOriginal, false, in.marked, false};
+    if (in.keepSavedOn) return {PushNrHoldRule::KeepSavedOn, !in.usable && in.savedEnabled, in.marked, false};
+    if (!in.savedEnabled) return {PushNrHoldRule::SavedOff, false, false, false};
+    if (in.marked) return in.usable ? PushNrHoldDecision{PushNrHoldRule::AvailableAgain, true, true, true}
+                                    : PushNrHoldDecision{PushNrHoldRule::HeldWaiting, true, true, false};
+    if (in.usable) return {PushNrHoldRule::Runs, false, false, false};
+    if (pushNrBlockerNeedsAct(in.blocker)) return {PushNrHoldRule::MarkerSet, true, true, false};
+    return {PushNrHoldRule::Transient, true, false, false};
+}
+// After start-up: the user switched a held layer on (any of his own switches) -> its marker goes.
+constexpr bool pushNrUserClears(bool marked, bool enabledNow) { return marked && enabledNow; }
+
+// The marker (preference pushNrHeldOff): comma-separated keys "<configuration 0|1><c chain|e node editor><node index>-
+// <layout print>", e.g. "0c1-0a1b2c3d"; at most kPushNrHoldMaxKeys keys; empty = no marker. Validated in Preferences.cpp
+// with pushNrHoldValid. The node index alone would follow a POSITION: after he deletes, inserts or reorders nodes it could
+// point at another layer and hold off a usable layer he chose. So each key carries the print of its node list's neural
+// layout (pushNrLayoutPrint: the node count and the index and runtime of every neural node); a key whose list no longer
+// has that print is dropped (logged in [nr-hold]), never applied to another node.
+inline constexpr std::size_t kPushNrHoldMaxKeys = 8;
+inline constexpr std::size_t kPushNrHoldMaxText = 128;
+// FNV-1a over the list's node count and, per neural node, its index and runtime id. Chain: nodeCount, nodes[i];
+// isNr(node) / runtimeOf(node) say what a node is (engine::EffectType::NrEnhance, engine::NrRuntime as an int).
+template<class Chain, class IsNr, class RuntimeOf>
+std::uint32_t pushNrLayoutPrint(const Chain& chain, IsNr isNr, RuntimeOf runtimeOf) {
+    std::uint32_t h = 2166136261u;
+    const auto mix = [&h](std::uint32_t v) {
+        for (int b = 0; b < 4; ++b) { h ^= (v >> (8 * b)) & 0xFFu; h *= 16777619u; }
+    };
+    mix(static_cast<std::uint32_t>(chain.nodeCount));
+    for (std::uint32_t i = 0; i < static_cast<std::uint32_t>(chain.nodeCount); ++i)
+        if (isNr(chain.nodes[i])) { mix(i); mix(static_cast<std::uint32_t>(runtimeOf(chain.nodes[i]))); }
+    return h;
+}
+inline std::string pushNrHoldKey(unsigned configuration, bool editor, unsigned node, std::uint32_t print) {
+    static constexpr char hex[] = "0123456789abcdef";
+    std::string k = std::to_string(configuration) + (editor ? "e" : "c") + std::to_string(node) + "-";
+    for (int b = 7; b >= 0; --b) k += hex[(print >> (4 * b)) & 0xFu];
+    return k;
+}
+struct PushNrHoldKeyParts { unsigned configuration = 0; bool editor = false; unsigned node = 0; std::uint32_t print = 0; };
+inline std::optional<PushNrHoldKeyParts> pushNrHoldParse(std::string_view k) {
+    const std::size_t dash = k.find('-');
+    if (dash == std::string_view::npos || dash < 3 || dash > 4 || k.size() != dash + 9) return std::nullopt;
+    if ((k[0] != '0' && k[0] != '1') || (k[1] != 'c' && k[1] != 'e')) return std::nullopt;
+    PushNrHoldKeyParts p;
+    p.configuration = unsigned(k[0] - '0');
+    p.editor = k[1] == 'e';
+    for (std::size_t i = 2; i < dash; ++i) {
+        if (k[i] < '0' || k[i] > '9') return std::nullopt;
+        p.node = p.node * 10u + unsigned(k[i] - '0');
+    }
+    for (std::size_t i = dash + 1; i < k.size(); ++i) {
+        const char c = k[i];
+        const unsigned v = c >= '0' && c <= '9' ? unsigned(c - '0') : c >= 'a' && c <= 'f' ? unsigned(c - 'a' + 10) : 16u;
+        if (v > 15u) return std::nullopt;
+        p.print = (p.print << 4) | v;
+    }
+    return p;
+}
+// Every key of a marker text, in order (empty when the text is not valid).
+inline std::vector<std::string_view> pushNrHoldKeys(std::string_view text) {
+    std::vector<std::string_view> keys;
+    if (text.empty()) return keys;
+    std::size_t pos = 0;
+    while (true) {
+        const std::size_t end = std::min(text.find(',', pos), text.size());
+        keys.push_back(text.substr(pos, end - pos));
+        if (end == text.size()) break;
+        pos = end + 1;
+    }
+    return keys;
+}
+inline bool pushNrHoldValid(std::string_view text) {
+    if (text.size() > kPushNrHoldMaxText) return false;
+    const auto keys = pushNrHoldKeys(text);
+    if (keys.size() > kPushNrHoldMaxKeys) return false;
+    for (const auto k : keys)
+        if (!pushNrHoldParse(k)) return false;
+    return true;
+}
+// Whether the marker holds this node: a key for this configuration, list and index whose print is the list's print now.
+// keyed: set when a key for this node exists at all (with any print), so a stale one can be reported as dropped.
+inline bool pushNrHoldHas(std::string_view text, unsigned configuration, bool editor, unsigned node, std::uint32_t printNow,
+                          bool* keyed = nullptr) {
+    if (keyed) *keyed = false;
+    for (const auto k : pushNrHoldKeys(text)) {
+        const auto p = pushNrHoldParse(k);
+        if (!p || p->configuration != configuration || p->editor != editor || p->node != node) continue;
+        if (keyed) *keyed = true;
+        if (p->print == printNow) return true;
+    }
+    return false;
+}
+inline std::string pushNrHoldJoin(const std::vector<std::string>& keys) {
+    std::string out;
+    for (std::size_t i = 0; i < keys.size() && i < kPushNrHoldMaxKeys; ++i) {
+        if (i) out += ',';
+        out += keys[i];
+    }
+    return out;
+}
+// After start-up, at each bridge tick while a marker exists: what one key says about the node list it belongs to now.
+// Keep: still held. Dropped: that list's neural layout changed (nodes deleted, inserted, reordered, another runtime): the
+// key no longer names the layer it was set for. ClearedByUser: its own node is on (his switch). The caller drops the
+// whole marker on any ClearedByUser (the safe side: no layer stays held by a key that might be stale) and drops single
+// keys that say Dropped.
+enum class PushNrHoldCheck : std::uint8_t { Keep, Dropped, ClearedByUser };
+template<class Chain, class IsNr, class RuntimeOf>
+PushNrHoldCheck pushNrHoldCheckKey(const PushNrHoldKeyParts& key, const Chain* list, IsNr isNr, RuntimeOf runtimeOf) {
+    if (!list || pushNrLayoutPrint(*list, isNr, runtimeOf) != key.print || key.node >= static_cast<unsigned>(list->nodeCount))
+        return PushNrHoldCheck::Dropped;
+    const auto& node = list->nodes[key.node];
+    if (!isNr(node)) return PushNrHoldCheck::Dropped;
+    return pushNrUserClears(true, node.enabled) ? PushNrHoldCheck::ClearedByUser : PushNrHoldCheck::Keep;
+}
+
+// The one [nr-hold] start-up line: the rule of every original-runtime layer looked at, the marker, and the keys dropped
+// because their node list's layout changed.
+inline std::string pushNrHoldLine(const std::vector<std::pair<std::string, PushNrHoldDecision>>& layers, std::string_view marker,
+                                  PushNrBlocker blocker, bool keepSavedOn, std::string_view dropped = {}) {
+    std::string s = "startup rule=held-off-until-switched-on";
+    if (keepSavedOn) s = "startup rule=keep-saved-on (VEYRA_TEST_NR_KEEP_SAVED_ON=1, the old behaviour)";
+    s += " originalReason=";
+    s += pushNrBlockerName(blocker);
+    s += " marker=";
+    s += marker.empty() ? std::string("none") : std::string(marker);
+    s += " layers=";
+    if (layers.empty()) s += "none";
+    for (std::size_t i = 0; i < layers.size(); ++i) {
+        if (i) s += ',';
+        s += layers[i].first + ":" + std::string(pushNrHoldRuleName(layers[i].second.rule));
+    }
+    if (!dropped.empty()) {
+        s += " droppedLayoutChanged=";
+        s += dropped;
+    }
+    return s;
 }
 
 // [nr-runtime-status] (contract item 3: its keys first, in its order; originalTested and resolvedDefault follow).

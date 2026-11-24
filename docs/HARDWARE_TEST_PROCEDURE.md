@@ -35,9 +35,9 @@ or Wi-Fi both work: on Wi-Fi every heading says "Wi-Fi: diagnostic only, not a w
 | 5 | `Run-First-Test.cmd -Session framegen` | 20 min | keep the picture moving steadily (drive or walk straight) |
 | 6 | `Run-First-Test.cmd -Session neural` | 20 min | stand in one place; hands off |
 | 7 | `Run-First-Test.cmd -Session pacing` | 8 min | hands off |
-| 8 | `Run-First-Test.cmd -Session smoothness` | 36 min | the same steady motion in every run (drive or turn slowly); watch each run |
+| 8 | `Run-First-Test.cmd -Session smoothness` | 30 min | the same steady motion in every run (drive or turn slowly); watch each run |
 | 9 | `Run-First-Test.cmd -Session retest` | 25 min | follow the `>>>` lines: one route, keep moving in every run |
-| 10 | `Run-First-Test.cmd -Session capture` | 42 min | only with a capture card (PS5 picture over HDMI, DualSense plugged into the PS5, PS5 HDCP off): choose the card once when the kit asks, then the same steady motion in every run; once with a 30 FPS game and once with a 60 FPS game (docs/drafts/CAPTURE_FG.md; the camera procedure for input-to-photon is its section 9) |
+| 10 | `Run-First-Test.cmd -Session capture` | 36 min | only with a capture card (PS5 picture over HDMI, DualSense plugged into the PS5, PS5 HDCP off): choose the card once when the kit asks, then the same steady motion in every run; once with a 30 FPS game and once with a 60 FPS game (docs/drafts/CAPTURE_FG.md; the camera procedure for input-to-photon is its section 9) |
 
 Package 8 comes in three downloads: **8A** (restoration and the picture profiles; start with `-Session visual`, then
 the "look with your own eyes" step below, then `-Session builds`), **8B** (+ mouse and keyboard, pacing and audio:
@@ -202,34 +202,25 @@ Where each millisecond of a 30 FPS game shown at 90 FPS (3x) goes, at 4K (docs/d
 VRR on, a game running at 30 FPS, the camera moving steadily, the same scene in every run. Every arm works at 4K unless
 its note says DIAGNOSTIC; the diagnostic arms (3x at the screen's size, 2x) are references, not recommendations.
 - Remote Play (DLSS upscaling to 4K, the experimental stream duplicate removal `VEYRA_EXP_RP_STREAM_DEDUP` on):
-  `Run-First-Test.cmd -Session smoothness -Pass 180 -Arms d90-off,d90-fg3,d90-fg3-ull,d90-fg3-prio,d90-fg3-pprio,d90-fg3-all,d90-fg3-low,d90-fg3-dlss,d90-fg3-flow,d90-fg3-fit,d90-fg2`
-  (about 30 minutes).
+  `Run-First-Test.cmd -Session smoothness -Pass 180 -Arms d90-off,d90-fg3,d90-fg3-pprio,d90-fg3-low,d90-fg3-dlss,d90-fg3-flow,d90-fg3-fit,d90-fg2`
+  (about 22 minutes).
 - 4K capture card (card format 3840x2160):
-  `Run-First-Test.cmd -Session capture -Pass 180 -Arms d90c-off,d90c-fg3,d90c-fg3-ull,d90c-fg3-early,d90c-fg3-prio,d90c-fg3-pprio,d90c-fg3-all,d90c-fg3-low,d90c-fg3-dlss,d90c-fg3-flow,d90c-fg2`
-  (about 30 minutes).
+  `Run-First-Test.cmd -Session capture -Pass 180 -Arms d90c-off,d90c-fg3,d90c-p13,d90c-l-robust,d90c-l-grid,d90c-l-cadence,d90c-l-gpuwaits,d90c-l-upload,d90c-l-nrhold,d90c-fg3-pprio,d90c-fg3-low,d90c-fg3-dlss,d90c-fg3-flow,d90c-fg2`
+  (about 39 minutes). Package 14: `d90c-p13` is the same program with `VEYRA_TEST_RP_LEGACY_PACKAGE13=1` (every new default
+  as in Package 13) and each `d90c-l-*` one restore switch alone, all against `d90c-fg3` (the new defaults).
+Since Package 14 the arms of switches that became inert (`VEYRA_EXP_RP_FG_ULL`, the graph queue priority, the early upload
+release, which is now the default) are removed: they could only have read as "the experiment did not help".
 Read "where the delay goes" (pickup wait, base, first generated frame, the 22.2 ms interpolation wait, margin, present
 lateness, their sum and the measured total), "first generated frame on the GPU" and "processing sizes". The `-dlss` arms
 are the same 4K output made by another method: compare the picture by eye and keep your current method unless it looks at
 least as good. The `-low` and `-flow` arms are DIAGNOSTIC references (lower frame generation quality), not solutions.
 
-### Frame generation latency, part by part (the fglat set, inside the smoothness session)
+### Frame generation latency (the fglat set, inside the smoothness session)
 
-What frame generation adds, and how much of it each part of `VEYRA_EXP_RP_FG_ULL` takes back (docs/drafts/FG_LATENCY.md
-sections 0, 5 and 6). Remote Play, Windows at 120 Hz:
-`Run-First-Test.cmd -Session smoothness -Pass 120 -Arms flt-off,flt-fg2,flt-fg2-phase,flt-fg2-hold,flt-fg2-grace,flt-fg2-headroom,flt-fg2-ull,flt-fg2-ull-prio,flt-fg2-ull-low`
-(about 25 minutes). Set Windows to 120 Hz first: `-Pass 120` only says what the kit asks for, it does not change the
-display. Keep the camera moving steadily in every run (the same scene each time).
-
-- `flt-off` (no frame generation) against `flt-fg2` (VFG 2x as installed): what frame generation adds.
-- `flt-fg2-phase`, `flt-fg2-hold`, `flt-fg2-grace`, `flt-fg2-headroom`: one part each against `flt-fg2`; `flt-fg2-ull`:
-  all four parts (`VEYRA_EXP_RP_FG_ULL=1`, what one line in `slipstream.ini` turns on).
-- The headroom part (and so every `-ull` arm) runs Smoothness Mode with a target under the VRR ceiling when variable
-  refresh is active: 90 at 120 Hz, 120 at 180 Hz. A 60 fps game still runs 2x, but Smoothness Mode may step down under load
-  and measures each pair's cost; check that `[slipstream-smooth] chosen=` is the same 2x as in `flt-fg2` and note any
-  step-down. Without variable refresh the part does nothing.
-- `flt-fg2-ull-prio`: all parts with the presentation queue at high priority (`[present-priority]` says whether the card
-  allowed it) against `flt-fg2-ull`; `flt-fg2-ull-low`: all parts with VFG Low (the cheapest first generated frame;
-  judge the picture) against `flt-fg2-ull`.
+What frame generation adds (docs/drafts/FG_LATENCY.md sections 0, 5 and 6). Remote Play, Windows at 120 Hz:
+`Run-First-Test.cmd -Session smoothness -Pass 120 -Arms flt-off,flt-fg2` (about 6 minutes): `flt-off` (no frame generation)
+against `flt-fg2` (VFG 2x as installed). Set Windows to 120 Hz first: `-Pass 120` only says what the kit asks for. The arms of
+the parts of `VEYRA_EXP_RP_FG_ULL` were removed in Package 14: every part is inert (it changes nothing).
 
 Read per arm (software times inside the PC, never input-to-photon): `[slipstream-smooth]` real-frame age P50 / P95 / P99
 (`realAge*`), the estimate `addedEstMs`, the phase in force (`phaseMs`, `phaseLearned`), presents late (`presentLateP99Ms` on the

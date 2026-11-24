@@ -190,7 +190,7 @@ class KitFiles(unittest.TestCase):
                  "of their pair is shown; 3 admitted pairs in a row resume)"]
         self.assertEqual(report.safe_lines(lines), lines)
         for name in ("run-tests.ps1", "collect-diagnostics.ps1"):
-            with open(os.path.join(self.kit, name), encoding="ascii") as f: self.assertIn("fg-(validity|drops|ull)", f.read())
+            with open(os.path.join(self.kit, name), encoding="ascii") as f: self.assertIn("fg-(validity|drops|ull|sched)", f.read())
 
     def test_arm_table_is_well_formed(self):
         with open(os.path.join(self.kit, "run-tests.ps1"), encoding="ascii") as f: kit_text = f.read()

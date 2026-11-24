@@ -443,16 +443,6 @@ void RemotePlaySessionSource::run(std::stop_token stop, RemotePlayConnectDesc de
                     const auto at=remoteplay::monotonic100ns();
                     net.observeBytes(at,snapshot.receivedBytes);net.observeWaitingIdr(at,snapshot.video.waitingForIdr);net.observeIngressDepth(snapshot.video.depth);
                     if(result==SourceReadStatus::Frame&&frame)net.frameDecoded(packet.arrivalHost100ns,packet.decodedHost100ns,static_cast<std::uint32_t>(frame->width),static_cast<std::uint32_t>(frame->height));
-                    if(net.due(at)){
-                        const auto transport=remoteplay::readTransportCounters();
-                        consoleUnits.learn(transport,static_cast<double>(desc.request.video.bitrateKbps));
-                        logConsoleUnits();
-                        const auto window=net.sample(at,remoteplay::healthCounters(transport,snapshot,skippedNow-skippedBase,static_cast<double>(desc.request.video.bitrateKbps),&consoleUnits),remoteplay::systemNetCounters(netRoute.interfaceIndex));
-                        if(window){
-                            log::info("slipstream-net",remoteplay::formatNetLine(*window));
-                            std::lock_guard lock(mutex_);net_=*window;
-                        }
-                    }
                 }
                 if(experiments.reorderAdaptive&&!smartWait)adaptReorder(now);
                 if(smart){if(result==SourceReadStatus::Frame&&frame)smart->frameArrived(packet.arrivalHost100ns);smart->tick(remoteplay::monotonic100ns(),snapshot);logConsoleUnits();}
@@ -507,6 +497,22 @@ void RemotePlaySessionSource::run(std::stop_token stop, RemotePlayConnectDesc de
                             wake_->waitFor(left);
                         }
                     }else std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }
+                // VEYRA_EXP_RP_STATS=1: the 5 s [slipstream-net] window (system network queries, a log line) runs only
+                // after this pass's frame was published: a statistics switch never delays a picture (stream "laghunt";
+                // before, one frame every 5 s waited for these queries between decode and publish).
+                if(netStats){
+                    const auto at=remoteplay::monotonic100ns();
+                    if(net.due(at)){
+                        const auto transport=remoteplay::readTransportCounters();
+                        consoleUnits.learn(transport,static_cast<double>(desc.request.video.bitrateKbps));
+                        logConsoleUnits();
+                        const auto window=net.sample(at,remoteplay::healthCounters(transport,snapshot,skippedNow-skippedBase,static_cast<double>(desc.request.video.bitrateKbps),&consoleUnits),remoteplay::systemNetCounters(netRoute.interfaceIndex));
+                        if(window){
+                            log::info("slipstream-net",remoteplay::formatNetLine(*window));
+                            std::lock_guard lock(mutex_);net_=*window;
+                        }
+                    }
                 }
             }
         }
@@ -603,10 +609,12 @@ void RemotePlaySessionSource::publishDelivery(Frame item){
     if(deliveryStats_)deliveryStatistics_.published(arrival,decoded,replaced);
 }
 // Engine thread. The pickup of the one-slot path, through DeliverySlots; the
-// statistics line is formatted and logged after the lock is released.
+// statistics (consumer side of DeliveryStats: engine thread only, the ring is
+// SPSC) are recorded after the lock is released, so VEYRA_EXP_RP_STATS never
+// holds the lock the decoder owner publishes under (stream "laghunt").
 SourceReadStatus RemotePlaySessionSource::readDelivery(pipeline::FramePacket& packet,const AVFrame** frame){
-    std::optional<remoteplay::DeliveryLine> line;
     SourceReadStatus status=SourceReadStatus::Frame;
+    remoteplay::HostTime takenAt=0;bool takenReplaced=false,takenCaughtUp=false;
     {std::lock_guard lock(mutex_);
         if(failed_)return SourceReadStatus::Error;
         if(!slots_.pending())return started_?SourceReadStatus::Waiting:SourceReadStatus::Error;
@@ -624,13 +632,13 @@ SourceReadStatus RemotePlaySessionSource::readDelivery(pipeline::FramePacket& pa
         if(frame)*frame=view_.get();
         // The held newer frame: wake a waiting engine slice at once.
         if(taken->morePending&&frameEvent_)SetEvent(static_cast<HANDLE>(frameEvent_));
-        if(deliveryStats_){
-            if(pipeline::hasFrameFlag(packet.flags,pipeline::FrameFlagBits::Discontinuity))deliveryStatistics_.consumerRestart();
-            deliveryStatistics_.took(now,packet.decodedHost100ns,taken->replaced,taken->caughtUp);
-            line=deliveryStatistics_.due(now,deliveryPolicy_);
-        }
+        takenAt=now;takenReplaced=taken->replaced;takenCaughtUp=taken->caughtUp;
     }
-    if(line)log::info("slipstream-delivery",remoteplay::formatDeliveryLine(*line));
+    if(deliveryStats_){
+        if(pipeline::hasFrameFlag(packet.flags,pipeline::FrameFlagBits::Discontinuity))deliveryStatistics_.consumerRestart();
+        deliveryStatistics_.took(takenAt,packet.decodedHost100ns,takenReplaced,takenCaughtUp);
+        if(const auto line=deliveryStatistics_.due(takenAt,deliveryPolicy_))log::info("slipstream-delivery",remoteplay::formatDeliveryLine(*line));
+    }
     return status;
 }
 SourceReadStatus RemotePlaySessionSource::read(pipeline::FramePacket& packet,const AVFrame** frame) {

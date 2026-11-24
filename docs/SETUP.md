@@ -141,7 +141,8 @@ generator's own time. 30 to 180 (6X) and 60 to 90 (1.5X) are not available.
 
 **What the file does today, and what it does not.** `mode` switches on the experiment switches that mode
 asks for: a 2 ms controller poll for `ultra-low-latency` and `competitive`, the adaptive pair phase for
-every mode but `ultra-low-latency`. It does **not** yet set frame generation, its multiplier or variable
+every mode but `ultra-low-latency` (that one no longer comes from the file since stream "lagfix", see
+section 5; the same mode chosen in the interface still asks for it). It does **not** yet set frame generation, its multiplier or variable
 refresh: set those in the interface to the values in the table (quick setup, *Target FPS*; *Smooth frame
 pacing* on for anything with frame generation on a 180 Hz screen). `automatic` and `ceiling` are accepted
 and logged, and `automatic` sets the adaptive pair phase like the generating modes, but nothing in the
@@ -175,7 +176,14 @@ program wins over the file. A switch written in the file wins over what `mode` w
 | `ceiling` | a mode other than `automatic` | highest-latency mode `automatic` may use (not used yet) |
 | `lan` | `1` / `0` | LAN profile: sets `VEYRA_EXP_RP_LAN_PROFILE=1`. Only a build that contains the network work reads it |
 | `VEYRA_EXP_RP_PAD_POLL_MS` | `1` to `8` | controller, keyboard and mouse poll interval in ms (default 4) |
-| `VEYRA_EXP_RP_ADAPTIVE_PHASE` | `1` / `0` | with frame generation: learn the pair phase instead of holding a full source frame |
+| `VEYRA_EXP_RP_ADAPTIVE_PHASE` | `1` / `0` | **ignored in the file since stream "lagfix"** (environment or the interface's modes only): with frame generation, learn the pair phase instead of holding a full source frame |
+| `VEYRA_TEST_RP_LEGACY_PACKAGE13` | `1` | **every change that Package 14 turned on by default behaves as in Package 13** (the six rows below at once) |
+| `VEYRA_TEST_RP_LEGACY_ROBUST_ADMIT` | `1` | capture card: admission by the 2 s P95 rule alone |
+| `VEYRA_TEST_RP_LEGACY_GRID_EARLY` | `1` | capture card: a skipped pair's real frame at the full phase |
+| `VEYRA_TEST_RP_LEGACY_DEDUP_CADENCE` | `1` | capture card: duplicate removal's old content cadence |
+| `VEYRA_TEST_RP_LEGACY_GPU_REAL_WAITS` | `1` | a real frame waits for its whole pair's GPU lists |
+| `VEYRA_TEST_RP_LEGACY_UPLOAD_RELEASE` | `1` | the capture upload buffer is released after the pair's last list |
+| `VEYRA_TEST_RP_LEGACY_NR_HOLD` | `1` | the neural layer's saved state is kept as it is (no hold marker) |
 | `VEYRA_TEST_RP_LEGACY_TIMING` | `1` / `0` | the original timing of all three changed parts (the rollback switch); also restores the original answer to an expired controller state (as `_INPUT_EXPIRY`) |
 | `VEYRA_TEST_RP_LEGACY_INPUT` | `1` / `0` | original controller dispatch and 8 ms poll only |
 | `VEYRA_TEST_RP_LEGACY_OWNER_WAIT` | `1` / `0` | original 1 ms polling of the session loop only |
@@ -194,6 +202,16 @@ skip the file; the test kit uses it so that every test arm has exactly its own s
 
 To check what was applied: after a start, the newest `[remoteplay-settings]` line in
 `PushFPS-slipstream\logs\veyra-qml.log` lists the mode, every switch set and every key ignored.
+
+**Only input, network, audio and update switches come from the file** (stream "lagfix", 23 Nov 2026): the
+keys in the table above except `VEYRA_EXP_RP_ADAPTIVE_PHASE`, the other `VEYRA_EXP_RP_KBM*` and
+`VEYRA_EXP_RP_AUDIO_*` switches, `smartlink`, `_TRIGGER_FILTER`, `_LATENCY_BUTTONS`, `_REORDER_*`, `_EARLY_LOSS`,
+`_RECONNECT_PATIENT`, `_WIFI_STREAMING_MODE`, `_RESUME_AFTER_DEVICE_LOSS`, `_NO_UPDATE` and the rollback switches
+`VEYRA_TEST_RP_LEGACY_*`. Every other switch the file names (frame generation, pair phase, pacing, frame
+delivery, GPU, statistics, other test switches) is listed once as `[remoteplay-settings] slipstream.ini
+ignored=[...]` and not set, so a line left from a test cannot change normal play. The test kit sets its
+switches in the environment and is unaffected. Every start also logs which switches are in force and from
+where: `[experiment-switches] in force at start: NAME=value(ini|env) ...` (`none` without any).
 
 ## 6. Rollback
 

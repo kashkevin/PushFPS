@@ -55,9 +55,21 @@ public:
     // reduction is off while it is unknown). A floor in time keeps a 120 Hz signal as tolerant as a 60 Hz one. 0 (the
     // default): six transport periods, as before. Kept across reset().
     void setMinimumContinuity(int64_t span100ns) { minContinuous_ = span100ns > 0 ? span100ns : 0; }
+    // PushFPS stream "lagfix" (the owner's capture-card scope, 23 Nov 2026): two cadence repairs, on unless this is set
+    // (VEYRA_TEST_RP_DEDUP_LEGACY_CADENCE=1 in EngineController). Kept across reset(). Tests:
+    // tests/remoteplay/DedupCadenceTests.inc.
+    //  - A content rate that falls (a 60 FPS menu, then the 30 FPS game): the old period still fits inside each new
+    //    picture's window, so the fit kept placing every second picture one sample early, content intervals 16.7 / 50 ms
+    //    for ~1.5 s until the least-squares slope caught up. Three kept pictures in a row whose sample span is more than
+    //    1.4 x the fitted period now relearn the cadence (1.4: a 2,2,2,1,3 paced 30 FPS game, 40 FPS in 60 Hz and a
+    //    single dropped game frame never give three in a row).
+    //  - After a still picture (a hold), the fit restarted from the HELD sample's time, so its first span was one
+    //    transport period and the slope came out short (31.9 instead of 33.4 ms): content times drifted earlier by
+    //    0.3 ms a picture until two misses. The fit now restarts from the first new picture.
+    void setLegacyCadence(bool legacy) { legacyCadence_ = legacy; }
     void reset() {
         haveKept_ = haveContent_ = skipSpan_ = holding_ = false; prevSample_ = 0; lastKeptSample_ = 0; lastContent_ = 0;
-        timeCount_ = 0; timeHead_ = 0; period_ = 0; misses_ = 0;
+        timeCount_ = 0; timeHead_ = 0; period_ = 0; misses_ = 0; longSpans_ = 0;
         rateCount_ = rateHead_ = 0; observedPeriod_ = 0;ratePictures_=rateLastPicture_=rateLastSequence_=0;
     }
     // picture: picture number of the sample, or nullptr (no CPU picture: keep everything).
@@ -131,7 +143,11 @@ private:
             observeRate(pts, transport, skipSpan_,*picture,captureSequence);
             // A span that started at a held (still-screen) frame is not a content period.
             if (skipSpan_) { timeCount_ = 0; timeHead_ = 0; }
-            if (timeCount_ == 0) push(lastKeptSample_);
+            if (timeCount_ == 0 && (legacyCadence_ || !skipSpan_)) push(lastKeptSample_);
+            if (!legacyCadence_ && period_ > 0 && !skipSpan_) {
+                longSpans_ = (pts - lastKeptSample_) * 10 > period_ * 14 ? longSpans_ + 1 : 0;
+                if (longSpans_ >= 3) { timeCount_ = 0; timeHead_ = 0; period_ = 0; misses_ = 0; longSpans_ = 0; push(lastKeptSample_); }
+            }
             push(pts);
             if (timeCount_ >= 8) {
                 // Least-squares slope of sample time over kept-frame index: the
@@ -204,7 +220,8 @@ private:
     std::array<int64_t, kTimes> rateTimes_{};
     std::array<uint64_t, kTimes> rateCounts_{};
     uint64_t ratePictures_=0,rateLastPicture_=0,rateLastSequence_=0;
-    unsigned timeCount_ = 0, timeHead_ = 0, misses_ = 0;
+    unsigned timeCount_ = 0, timeHead_ = 0, misses_ = 0, longSpans_ = 0;
+    bool legacyCadence_ = false;
     unsigned rateCount_ = 0, rateHead_ = 0;
     bool haveKept_ = false, haveContent_ = false, skipSpan_ = false, holding_ = false;
     int64_t prevSample_ = 0, lastKeptSample_ = 0, lastContent_ = 0, period_ = 0, holdDue_ = 0;

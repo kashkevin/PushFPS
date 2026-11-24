@@ -94,12 +94,22 @@ public:
         fit.targetAsked = f.srTargetAsked;
         fit.targetUsed = f.srTarget;
         f.verdict = pushFitVerdict(fit);
+        // Stream "laghunt": a new live graph (another graph object, or a settings revision) is written at once; a
+        // line written after held-back changes says how many looks were held (PushSizesGate).
+        if (in.graph != lastGraph_ || in.plan->settingsRevision != lastRevision_) gate_.forceNext();
+        lastGraph_ = in.graph;
+        lastRevision_ = in.plan->settingsRevision;
         const std::string line = pushSizesLine(f);
-        if (gate_.changed(line)) veyra::log::info("slipstream-sizes", line);
+        if (gate_.changed(line)) {
+            const std::uint64_t held = gate_.takeHeld();
+            veyra::log::info("slipstream-sizes", held ? line + " held=" + std::to_string(held) : line);
+        }
     }
 
 private:
     PushSizesGate gate_;
+    const pipeline::EnhanceGraph* lastGraph_ = nullptr;   // stream "laghunt": a rebuild is written at once
+    std::uint64_t lastRevision_ = 0;
     // The last display facts read (see observe): reused until the monitor, the plan or the back buffer changes.
     HMONITOR cachedMonitor_ = nullptr;
     std::uint64_t cachedRevision_ = 0;

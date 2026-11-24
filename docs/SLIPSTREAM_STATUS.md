@@ -12,6 +12,32 @@ has no graphics card (software renderer), no PS5 and no screen to measure (see "
 in the other documents that come from Linux models and simulators are models. Software timestamps are
 not proof of input-to-photon latency: only a camera or a light sensor on the screen is.
 
+## Package 14 (24 November 2026): the Package 13 lag, and frame generation that does not drop out (capture card)
+
+The owner reported Package 13 as worse on his PC (delay readout about 32 ms instead of about 30 ms, "lag mid frames").
+His PC could not be read; this package is built from code reading, a scheduling simulator, tests, reviews and CI. **None
+of it has run on a gaming PC, a graphics card or a capture card. Nothing is called fixed.** Scope: capture card, 4K,
+30 FPS game shown as 90 FPS. SIMULATED = `tests/remoteplay/FgScheduleSim.h` (the program's own decision code with
+made-up 4K-like costs).
+
+| Part | Default | Evidence | Undo (`= 1` in slipstream.ini) | Hardware-verified |
+|---|---|---|---|---|
+| Every part of `VEYRA_EXP_RP_FG_ULL` and `VEYRA_EXP_RP_GRAPH_QUEUE_PRIORITY` inert; slipstream.ini cannot set frame-path switches; `[experiment-switches]` start-up line | on | SIMULATED (the parts dropped generated frames or delayed real frames under load), tested | none (they stay inert) | no |
+| robustAdmit with its stop (`include/veyra/engine/PushFgSchedule.h`): admission cannot lock out for 2 s after a few slow groups | on, capture cards | SIMULATED: more generated frames shown than Package 13 in every hard set; with the tests' fixed random draw no measure worse in any of 16 card sets, other draws can show a longer single gap; where it acts the readout's average rises (bimodal-5: 23.4 -> 42.5 ms); tested | `VEYRA_TEST_RP_LEGACY_ROBUST_ADMIT` | no |
+| gridEarly: a skipped pair's real frame on the earliest 11.1 ms grid slot | on, capture cards | SIMULATED, tested, reviewed for order | `VEYRA_TEST_RP_LEGACY_GRID_EARLY` | no |
+| ContentDedup cadence repairs (falling content rate; restart after a still picture) | on, capture cards | tested: steady rates give identical content times | `VEYRA_TEST_RP_LEGACY_DEDUP_CADENCE` | no |
+| The real frame's presentation waits for its own lists (VFG, no HUD Lock / exclusion) | on | reviewed list by list; WARP test of the queue contract; benefit unmeasured | `VEYRA_TEST_RP_LEGACY_GPU_REAL_WAITS` | no |
+| Capture upload buffer released after the base list | on | reviewed reader by reader; benefit unmeasured | `VEYRA_TEST_RP_LEGACY_UPLOAD_RELEASE` | no |
+| Original-runtime neural layer held off by a marker until switched on | on | tested, reviewed twice | `VEYRA_TEST_RP_LEGACY_NR_HOLD` | no |
+| `VEYRA_EXP_RP_STATS` on a PS5 stream: statistics no longer between decode and publish | with the switch | tested | - | no |
+| Steadiness in `[capture-timing]` (onGrid1msPct, shownPct, robustAdmits, gridEarly, skippedPairs), `triage.py` | always on (log only) | tested | - | no |
+| All default-on parts at once back to Package 13 | - | tested: the simulator's rows equal Package 13's | `VEYRA_TEST_RP_LEGACY_PACKAGE13` | - |
+| The predicted-frame pass and `VEYRA_EXP_RP_FG_SCHEDULE` (Package 15's lower-delay schedule, GPU half) | NOT in this package (branch `exp/s7-predict`) | - | - | no |
+
+The owner's acceptance number (99 % of intervals on the 11.1 ms grid, 99 % of frames shown): SIMULATED it holds when the
+GPU has room (99.2 % or more) and falls short with GPU spikes (96.8-98.8 % on grid). Not known for his PC; the log now
+measures it in normal play.
+
 ## Package 13 (23 November 2026): the delay of a 30 FPS game at a steady 90 FPS, at 4K
 
 The owner's rule (23 November 2026): 4K (3840x2160) processing is kept; the delay is reduced by scheduling, buffering,
