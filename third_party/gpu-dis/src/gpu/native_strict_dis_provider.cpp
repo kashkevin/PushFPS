@@ -49,8 +49,9 @@ struct Pipeline {
     ComPtr<ID3D12RootSignature> root;
     ComPtr<ID3D12PipelineState> state;
     uint32_t srvs=0,uavs=0,constants=0;
+    std::string name;   // Veyra/PushFPS 2026-11-25: for the test trace only
     void create(ID3D12Device* d,const std::string& file,uint32_t s,uint32_t u,uint32_t n) {
-        srvs=s; uavs=u; constants=n;
+        srvs=s; uavs=u; constants=n; name=file.substr(file.find_last_of("/\\")+1);
         D3D12_DESCRIPTOR_RANGE ranges[2]{};
         ranges[0].RangeType=D3D12_DESCRIPTOR_RANGE_TYPE_SRV; ranges[0].NumDescriptors=s;
         ranges[1].RangeType=D3D12_DESCRIPTOR_RANGE_TYPE_UAV; ranges[1].NumDescriptors=u;
@@ -138,22 +139,35 @@ class StrictDis final : public MotionProvider {
     ProviderConfig config_;
     StrictDisPreset preset_;
     StrictDisInput input_profile_;
+    bool float_only_=false;   // Veyra/PushFPS 2026-11-25: shaders compiled with double as float (no FP64 needed)
     uint32_t stride_=4,gd_inner_=8;
     uint32_t finest_=2,coarsest_=0;
     Pipeline luma_,rgba_gray_,area_,gradient_,hor_,ver_,patch_,dense_,up_,v1_,v2_,system_,sor_,update_,zero_,final_;
     std::vector<Slot> slots_;
     uint64_t shader_dispatches_=0;
+    // Veyra/PushFPS 2026-11-25 (tests only): record at most test_limit_ dispatches of one record() (-1: all; the skipped
+    // ones keep their barriers) and keep the pipeline name of each, to find the first dispatch whose execution fails.
+    int64_t test_limit_=-1; uint64_t test_recorded_=0; bool test_trace_=false;
+    std::vector<std::string> test_names_;
     void dispatch(ID3D12GraphicsCommandList* list,const Pipeline& p,const Binding& b,
                   const void* constants,uint32_t x,uint32_t y=1) {
+        if(test_trace_) test_names_.push_back(p.name+" "+std::to_string(x)+"x"+std::to_string(y));
+        const bool skip=test_limit_>=0 && test_recorded_>=uint64_t(test_limit_);
+        ++test_recorded_;
+        if(skip) return;
         b.bind(list,p,constants); list->Dispatch(x,y,1); ++shader_dispatches_;
     }
     void allocate(Slot& s);
     void record_image(Slot& s,uint32_t index,const FrameLease& frame,ID3D12GraphicsCommandList* list);
     void record_direction(Slot& s,uint32_t direction,ID3D12GraphicsCommandList* list);
 public:
-    explicit StrictDis(std::string directory,StrictDisPreset preset,StrictDisInput input):shader_directory_(std::move(directory)),preset_(preset),input_profile_(input) {}
-    const char* backend_name() const noexcept override { return preset_==StrictDisPreset::Medium?"gpu-dis-cpu-medium-strict-v1":"gpu-dis-cpu-fast-strict-v1"; }
+    explicit StrictDis(std::string directory,StrictDisPreset preset,StrictDisInput input,bool floatOnly=false):shader_directory_(std::move(directory)),preset_(preset),input_profile_(input),float_only_(floatOnly) {}
+    const char* backend_name() const noexcept override {
+        if(float_only_) return preset_==StrictDisPreset::Medium?"gpu-dis-medium-float-v1":"gpu-dis-fast-float-v1";
+        return preset_==StrictDisPreset::Medium?"gpu-dis-cpu-medium-strict-v1":"gpu-dis-cpu-fast-strict-v1"; }
     uint64_t shader_dispatches() const noexcept { return shader_dispatches_; }
+    void set_test(int64_t limit,bool trace) { test_limit_=limit; test_trace_=trace; }
+    const std::vector<std::string>& test_names() const noexcept { return test_names_; }
     bool initialize(ID3D12Device* device,const ProviderConfig& config,std::string& error) override;
     bool record(const FrameLease* previous,const FrameLease& current,uint32_t slot,
                 RecordContext& context,MotionPacket& packet,Counters& counters,std::string& error) override;
@@ -165,7 +179,7 @@ bool StrictDis::initialize(ID3D12Device* device,const ProviderConfig& config,std
             throw std::runtime_error("Strict DIS requires source >=32x32 and 1..8 slots");
         D3D12_FEATURE_DATA_D3D12_OPTIONS options{};
         checked(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS,&options,sizeof(options)),"DIS double feature");
-        if(!options.DoublePrecisionFloatShaderOps) throw std::runtime_error("Strict DIS CPU rounding requires GPU double shader operations");
+        if(!float_only_&&!options.DoublePrecisionFloatShaderOps) throw std::runtime_error("Strict DIS CPU rounding requires GPU double shader operations");
         device_=device; config_=config;
         finest_=preset_==StrictDisPreset::Medium?1:2;
         stride_=preset_==StrictDisPreset::Medium?3:4;
@@ -369,6 +383,7 @@ bool StrictDis::record(const FrameLease* previous,const FrameLease& current,uint
         if(previous && current.metadata.previous_source_frame_id!=previous->metadata.source_frame_id)
             throw std::runtime_error("Strict DIS adjacent source-frame ID mismatch");
         // All validation precedes recording; the host supplies producer GPU waits.
+        test_recorded_=0; test_names_.clear();
         record_image(s,0,current,context.list);
         record_image(s,1,previous?*previous:current,context.list);
         record_direction(s,0,context.list);
@@ -392,8 +407,18 @@ bool StrictDis::record(const FrameLease* previous,const FrameLease& current,uint
 std::unique_ptr<MotionProvider> make_strict_dis_provider(const std::string& shader_directory,StrictDisPreset preset,StrictDisInput input) {
     return std::make_unique<StrictDis>(shader_directory,preset,input);
 }
+std::unique_ptr<MotionProvider> make_float_dis_provider(const std::string& shader_directory,StrictDisPreset preset,StrictDisInput input) {
+    return std::make_unique<StrictDis>(shader_directory,preset,input,true);
+}
 uint64_t strict_dis_shader_dispatches(const MotionProvider& provider) noexcept {
     auto* strict=dynamic_cast<const StrictDis*>(&provider);
     return strict?strict->shader_dispatches():0;
+}
+void strict_dis_set_test(MotionProvider& provider,int64_t limit,bool trace) noexcept {
+    if(auto* strict=dynamic_cast<StrictDis*>(&provider)) strict->set_test(limit,trace);
+}
+std::vector<std::string> strict_dis_test_names(const MotionProvider& provider) {
+    auto* strict=dynamic_cast<const StrictDis*>(&provider);
+    return strict?strict->test_names():std::vector<std::string>{};
 }
 } // namespace xess_gpu
