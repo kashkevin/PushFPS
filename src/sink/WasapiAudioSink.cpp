@@ -757,6 +757,7 @@ bool AudioRenderer::start(AudioFormat input,double requestedBufferMs,std::wstrin
     std::lock_guard endpointLock(endpointMutex_);
     if(client_||enum_)return checked(E_UNEXPECTED,"Endpoint already initialized");
     lastError_=S_OK;bufferedMs_=0;smoothedGain_=0;fadeInRemaining_=0;underruns_=0;underrunFrames_=0;silenceFrames_=0;
+    lowLatencyActive_=false;
     liveGap_.reset();
     emptyPulls_=0;recoveryFades_=0;
     clockStalledGaps_=0;
@@ -825,11 +826,38 @@ bool AudioRenderer::start(AudioFormat input,double requestedBufferMs,std::wstrin
     sampleRate_ = kAudioRate;
     requestedBufferMs=std::clamp(requestedBufferMs,5.0,50.0);
     const REFERENCE_TIME requestedBufferHns=static_cast<REFERENCE_TIME>(std::llround(requestedBufferMs*10000.0));
-    hr = client_->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK |
-        AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
-        requestedBufferHns, 0, &mix.Format, nullptr);
-    const bool initOk = checked(hr,"Initialize AudioClient");
-    if (!initOk) return false;
+    lowLatencyActive_=false;
+    bool lowLatencyOpened=false;
+    if(lowLatency_){
+        // Experiment: the engine's smallest shared-mode period. It needs the format the engine
+        // accepts without conversion; anything else fails here and the original call below runs.
+        IAudioClient3* client3=nullptr;
+        HRESULT lowHr=client_->QueryInterface(__uuidof(IAudioClient3),reinterpret_cast<void**>(&client3));
+        UINT32 defaultPeriod=0,fundamentalPeriod=0,minPeriod=0,maxPeriod=0;
+        if(SUCCEEDED(lowHr)&&client3){
+            lowHr=client3->GetSharedModeEnginePeriod(&mix.Format,&defaultPeriod,&fundamentalPeriod,&minPeriod,&maxPeriod);
+            if(SUCCEEDED(lowHr)&&minPeriod>0&&minPeriod<defaultPeriod){
+                lowHr=client3->InitializeSharedAudioStream(AUDCLNT_STREAMFLAGS_EVENTCALLBACK,minPeriod,&mix.Format,nullptr);
+                lowLatencyOpened=SUCCEEDED(lowHr);
+            }else if(SUCCEEDED(lowHr))lowHr=S_FALSE; // nothing below the default period: original call
+            client3->Release();
+        }
+        log::info("audio",std::format("low-latency period request hr=0x{:08X} defaultFrames={} minFrames={} fundamentalFrames={} opened={}",unsigned(lowHr),defaultPeriod,minPeriod,fundamentalPeriod,lowLatencyOpened));
+        if(!lowLatencyOpened&&FAILED(lowHr)&&client3){
+            // A client whose initialization failed is not reused: activate a fresh one.
+            client_->Release();client_=nullptr;
+            hr = device_->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,reinterpret_cast<void**>(&client_));
+            if (!checked(hr,"Activate AudioClient")) return false;
+        }
+    }
+    if(!lowLatencyOpened){
+        hr = client_->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK |
+            AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+            requestedBufferHns, 0, &mix.Format, nullptr);
+        const bool initOk = checked(hr,"Initialize AudioClient");
+        if (!initOk) return false;
+    }
+    lowLatencyActive_=lowLatencyOpened;
     if (!checked(client_->GetBufferSize(&bufferFrames_),"GetBufferSize")) return false;
     REFERENCE_TIME devicePeriod=0;
     if(!checked(client_->GetDevicePeriod(&devicePeriod,nullptr),"GetDevicePeriod"))return false;
@@ -882,7 +910,7 @@ bool AudioRenderer::pumpOnce(AudioPcmSource& pipeline, double* firstWrittenPtsMs
     UINT32 padding = 0;
     if (!checked(client_->GetCurrentPadding(&padding),"GetCurrentPadding")) return false;
     if(padding>bufferFrames_)return checked(E_UNEXPECTED,"Invalid endpoint padding");
-    bufferedMs_=1000.0*padding/sampleRate_;
+    bufferedMs_=1000.0*padding/sampleRate_;paddingBeforeMs_=1000.0*padding/sampleRate_;
     const UINT32 avail = bufferFrames_ - padding;
     if (avail == 0) return true;
     // The endpoint can play silence after a live source runs dry. Its device
@@ -894,7 +922,7 @@ bool AudioRenderer::pumpOnce(AudioPcmSource& pipeline, double* firstWrittenPtsMs
         const auto gap=liveGap_.observe(padding,consumed,timelineWriteFrame_.load());
         if(gap.frames){
             underrunFrames_.fetch_add(gap.frames);
-            if(gap.began){underruns_.fetch_add(1);fadeInRemaining_=240;recoveryFades_.fetch_add(1);}
+            if(gap.began){underruns_.fetch_add(1);fadeInRemaining_=240;recoveryFades_.fetch_add(1);if(!smoother_.tailed())unfadedGaps_.fetch_add(1);}
         }
         timelineWriteFrame_=std::max(timelineWriteFrame_.load(),consumed);
     }
@@ -944,12 +972,18 @@ bool AudioRenderer::pumpOnce(AudioPcmSource& pipeline, double* firstWrittenPtsMs
     // owner applies the bounded fade/re-anchor policy only for a persistent
     // starvation.
     const bool padSilence=started_&&pipeline.padUnderruns();
-    const UINT32 written=padSilence?avail:static_cast<UINT32>(got);
+    // VEYRA_EXP_RP_AUDIO_SMOOTH (live sources): the engine reaches the end of the data before the next
+    // pump, so append a short faded continuation instead of stopping on a non-zero sample. Not PCM of
+    // the source: it is left out of the media timeline like a gap (AudioPopGuard.h).
+    if(smoothEdges_)smoother_.setFadeMs(4.0,double(sampleRate_));
+    const size_t tail=smoothEdges_&&started_&&!pausedEndpoint_&&!padSilence&&inputFormat_.channels<=AudioEdgeSmoother::kMaxChannels&&
+        smoother_.due(padding,got,devicePeriodMs_*sampleRate_/1000.0)?std::min<size_t>(avail-got,smoother_.config().fadeFrames):0;
+    const UINT32 written=padSilence?avail:static_cast<UINT32>(got+tail);
     if(started_&&!pausedEndpoint_&&!padSilence){
         const double nowMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
         if(liveGap_.observeEmpty(padding,got,nowMs,devicePeriodMs_)){
             underruns_.fetch_add(1);clockStalledGaps_.fetch_add(1);
-            fadeInRemaining_=240;recoveryFades_.fetch_add(1);
+            fadeInRemaining_=240;recoveryFades_.fetch_add(1);if(!smoother_.tailed())unfadedGaps_.fetch_add(1);
             log::warn("audio-gap",std::format("persistent empty endpoint periodMs={:.3f} clockMeasuredMissingFrames=unknown recoveryFadeArmed=true",devicePeriodMs_));
         }
     }
@@ -958,16 +992,19 @@ bool AudioRenderer::pumpOnce(AudioPcmSource& pipeline, double* firstWrittenPtsMs
         const float target=std::clamp(gain_.load(),0.0f,1.0f);
         applyPcmGain(chunk_.data(),got,inputFormat_.channels,target,smoothedGain_);
         if(fadeInRemaining_)fadePcmHead(chunk_.data(),got,inputFormat_.channels,fadeInRemaining_);
+        if(smoothEdges_)smoother_.remember(chunk_.data(),got,inputFormat_.channels);
+        if(tail)writeSmoothTail(got,tail);
         if(target!=loggedGain_&&std::abs(smoothedGain_-target)<.00001f){loggedGain_=target;log::info("audio-gain",std::format("target={} reached={} framesWritten={} clockPreserved=true applicationPCM=true",target,smoothedGain_,framesWritten_.load()));}
-        if(!copyPcm(dest,chunk_.data(),got)){render_->ReleaseBuffer(0,0);return false;}
-        if (got < written) {
+        if(!copyPcm(dest,chunk_.data(),got+tail)){render_->ReleaseBuffer(0,0);return false;}
+        if (got+tail < written) {
             std::memset(dest + got * outputFormat_.channels*4, 0, (written - got) * outputFormat_.channels*4);
             underruns_.fetch_add(1);
             underrunFrames_.fetch_add(written-got);
             silenceFrames_.fetch_add(written-got);
         }
     } else {
-        std::memset(dest, 0, static_cast<size_t>(written) * outputFormat_.channels*4);
+        if(tail){writeSmoothTail(0,tail);if(!copyPcm(dest,chunk_.data(),tail)){render_->ReleaseBuffer(0,0);return false;}}
+        else std::memset(dest, 0, static_cast<size_t>(written) * outputFormat_.channels*4);
         if(started_&&!padSilence)emptyPulls_.fetch_add(1);
         if(padSilence){
             underruns_.fetch_add(1);
@@ -990,6 +1027,14 @@ bool AudioRenderer::pumpOnce(AudioPcmSource& pipeline, double* firstWrittenPtsMs
     bufferedMs_=1000.0*(padding+written)/sampleRate_;
     framesWritten_ += written;
     return true;
+}
+
+void AudioRenderer::writeSmoothTail(size_t offset,size_t frames)
+{
+    const unsigned channels=inputFormat_.channels;
+    const size_t made=smoother_.writeTail(chunk_.data()+offset*channels,frames,channels);
+    if(made<frames)std::fill(chunk_.begin()+ptrdiff_t((offset+made)*channels),chunk_.begin()+ptrdiff_t((offset+frames)*channels),0.0f);
+    fadeInRemaining_=240;smoothTails_.fetch_add(1);
 }
 
 double AudioRenderer::mediaTimeMs() const
@@ -1020,6 +1065,7 @@ void AudioRenderer::stopAndReset()
     bufferedMs_=0;smoothedGain_=0;
     {std::lock_guard lock(timelineMutex_);outputTimeline_.clear();timedPcm_=false;}
     fading_=false;pausedEndpoint_=false;fadeInRemaining_=0;liveGap_.reset();std::fill(lastRaw_.begin(),lastRaw_.end(),0);
+    smoother_.reset();
 }
 
 AudioFadeResult AudioRenderer::fadeAndReset(AudioPcmSource& source,const std::atomic<bool>& cancel)
@@ -1073,7 +1119,7 @@ void AudioRenderer::shutdown()
     if (event_ != nullptr) { CloseHandle(event_); event_ = nullptr; }
     running_ = false;
     started_ = false;
-    fading_=false;pausedEndpoint_=false;fadeInRemaining_=0;liveGap_.reset();
+    fading_=false;pausedEndpoint_=false;fadeInRemaining_=0;liveGap_.reset();smoother_.reset();
     bufferedMs_=0;framesWritten_=0;clockFrequency_=0;
     timelineWriteFrame_=0;
     {std::lock_guard lock(timelineMutex_);outputTimeline_.clear();timedPcm_=false;}
