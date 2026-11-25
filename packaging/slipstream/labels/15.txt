@@ -1,0 +1,297 @@
+# START-HERE.txt of a package with this label (slipstream_package.py label_text): the text before
+# the separator line replaces @SHORTEST_AND_NEW@, the text after it @NEURAL_INSTALL@.
+# Lines starting with # are left out. ASCII only.
+THE SHORTEST WAY
+  1. Double-click  Install-Slipstream.cmd          10 to 20 minutes. Then play as you do now:
+                                                   capture card, 4K, 30 FPS game, 90 FPS.
+  2. For the lower delay: start PushFPS from the experimental copy as with Package 14 (folder
+     %LOCALAPPDATA%\Programs\PushFPS-slipstream-exp), play from the capture card, and in
+     quick setup switch  "Lower delay (one predicted frame per real frame)"  on. The row shows
+     only while the capture card picture plays with NVIDIA VFG at 3X; if something is missing
+     it says what. One click, it applies at once (the picture may pause for a moment) and is
+     remembered for the next start. The same click switches it off.
+  Nothing to edit, no test to run: section 2 and later of this file (the measuring kit) are
+  optional. Step 1 alone gives you parts B, C and D below.
+  NOTHING IN THIS PACKAGE HAS RUN ON YOUR PC OR ON ANY REAL GRAPHICS CARD. Nothing is called
+  fixed. If you ever want to tell us how it went with numbers, play a few minutes and
+  double-click Collect-Diagnostics.cmd (one zip).
+
+WHAT PACKAGE 15 CHANGES   (capture card, 4K, 30 FPS shown as 90 FPS; picture size untouched)
+  Each line says how far it is proven: SIMULATED = our scheduling code run with made-up 4K-like
+  timings; TESTED = unit tests / the Windows build machine's software renderer; nothing is
+  HARDWARE-VERIFIED yet.
+  A. "Lower delay" mode   (OFF until you switch it on; only NVIDIA VFG at 3X on a capture card)
+     - Today each real frame waits until BOTH generated frames before it have been shown: by
+       the schedule's arithmetic that is 22 ms of your 31 ms (part D shows your own split). With
+       the mode on, the real frame is shown one displayed frame earlier: one generated frame,
+       then the real frame, then one frame PREDICTED from the motion so far. The wait drops
+       from 22 to 11 ms. 90 FPS and the 4K size stay.
+     - What to expect on the readout: 11 ms less by the schedule's arithmetic, about 9 ms less
+       in the simulation, so roughly 20 to 22 ms where you read 31 ms now, when the GPU has
+       room. That is an expectation, not a measurement and not a promise. SIMULATED over 16
+       kinds of GPU load (the simulator's own figures run higher than your readout; only the
+       difference counts): average 37.6 -> 28.3 ms, a narrower spread, and more frames on the
+       90 FPS grid (99.1 against 91.1 %), because a pair needs one NVIDIA generation run, not
+       two. It is NOT the 15 ms you asked for: see "What 15 ms needs" below.
+     - The price, honestly: one shown frame in three is a prediction, not a frame generated
+       between two real ones. Where the app does not trust the motion it keeps the real
+       picture in that part of the frame. You may see: a slight judder in fast camera turns,
+       smoke, rain, explosions, flashes and fades; front edges of moving objects and thin lines
+       (wires, railings) bending or jittering slightly; that frame a little softer where it
+       moved. How visible this is, nobody knows yet: no simulation shows the picture.
+     - It protects itself: it leaves the mode by itself when most predictions are unusable (45
+       of the last 60, about 2 seconds) or when more than 2 of the last 60 predicted frames come
+       too late, and tries again after 10 to 60 seconds. A third exit (three seconds in a row
+       below 98 % on the 90 FPS grid) acts only after normal frame generation was measured at
+       98 % or better for a whole second in the same session; with the row already on at start
+       it usually has not been, so that exit does not act. A predicted frame in which more than
+       half of the moving parts cannot be trusted is replaced by the real picture as a whole.
+       It pauses during the app's own tests and comparison clips. It does not run with Live HUD
+       Lock, exclusion boxes or Smoothness Mode, or whenever the multiplier in use is not 3X
+       (adaptive multiplier or an output cap); the row says why. When the GPU is very busy some
+       frames can have MORE delay than with the mode off (SIMULATED: where the old method would
+       have skipped the pair; about 9 % of pairs near the GPU's limit, about half far over it).
+     - The biggest unknown: the mode asks NVIDIA's frame generation for the second in-between
+       frame without the first. That request has never run on a graphics card. If yours
+       refuses it, the row says so, the mode stops for that run (the switch still shows on;
+       off and on tries once more) and frame generation goes on as before. Only that decision
+       and the row's text are TESTED; the refusal itself has never run (it needs a real card).
+     - With the row off, every frame takes Package 14's path (an independent review of every
+       changed line; the simulator agrees, but it runs this package's code, not Package 14's).
+  B. The delay badge no longer blocks the fast display path   (ON)
+     - The badge and the statistics overlay used to be cut out of the video window, which makes
+       the window's shape complex. In your earlier Remote Play logs (120 FPS), frames reached
+       the screen a median 7 to 9 ms after PushFPS handed them over while the shape was complex,
+       with variable refresh reported off, and about 1 ms when it was one rectangle. That is a
+       pattern in logs, not proof. Hovering the badge (part D) cuts its tip out again meanwhile.
+     - Now they are drawn inside the picture itself, so while nothing else is over the picture
+       the window stays one rectangle. By reading the code they are not in recordings, clips or
+       streams (no test checks that yet). The readout number does NOT show this change: it
+       stops where the frame is handed to Windows. Whether it helps on your screen, and whether
+       G-SYNC then engages, is not known until your PC shows it.
+  C. NVIDIA low latency can no longer keep holding back captured frames   (ON)
+     - With "NVIDIA low latency" on, the app asks the driver to pause before each frame is read.
+       On a capture card the console sets the pace, so a pause that runs past a frame's arrival
+       can only add delay to that frame. The app now measures that, and if it keeps happening
+       (not for a hiccup at start-up) it switches NVIDIA low latency off for that playback. The
+       app's own settings (short queue, one frame waiting at most, sync, G-SYNC) stay.
+  D. The readout says what it is made of   (ON, display and log only)
+     - Hover the delay badge: picture processing + first generated frame + waiting for the
+       frames shown before it + margin. The waiting part is calculated from the schedule.
+       The number never includes the game, the console, the capture card or the display.
+     - The log now always carries how the picture reaches the screen ([present-path]) and,
+       every 10 seconds, delay average / median / P95 / P99, frame pacing, dropped and repeated
+       frames and GPU time per stage ([fg-health]).
+  E. In the box but switched off: finishing a frame's last copy early and handing it to Windows
+     exactly on time (steadier timing, estimate). It cannot be proven never to delay the next
+     frame's work, so it stays off (developers' switch VEYRA_EXP_RP_PRESENT_BLIT_AHEAD).
+
+WHAT TO EXPECT, HONESTLY
+  - Step 1 only: the readout stays about 31 ms. Part B acts after the point where the readout
+    stops; part C lowers it only if the driver's pause really ran past the frames' arrival.
+  - With "Lower delay" on: roughly 20 to 22 ms if the request works on your card and the GPU
+    has room (expected, not measured).
+  - Your 99 % steadiness target: SIMULATED, with the mode on it is missed in 5, 6 or 7 of the
+    16 kinds of GPU load when a predicted frame costs 3, 6 or 10 ms (Package 14: 8 of 16); the
+    average over all 16 is 99.1 % (Package 14: 91.1 %). Your real figure is in the log.
+  - WHAT 15 MS NEEDS. Three research reports (NVIDIA Streamline / Reflex / Optical Flow, AMD
+    frame generation and Windows presentation, frame generation models) agree: every method
+    that generates frames BETWEEN two real ones holds the newest real frame back; only
+    prediction removes that wait. With one predicted frame the delay is the real frame's own
+    work + the first generated frame + 11 ms + margins; NVIDIA's generation costs about 6 to 7
+    ms at 4K by an upstream developer's figure (not measured on your PC): about 20 ms.
+    Mid-teens needs a much cheaper first generated frame: motion worked out once per pair at
+    a smaller size, then both extra frames built from it at full 4K (our estimate 14 to 20 ms;
+    whether it looks as good as NVIDIA's model is unproven). That is the next experimental
+    branch. Two predicted frames would read a few ms, but the one published comparison found
+    (a video-only model against interpolation) shows prediction from video alone clearly
+    worse, so it will only ever be an option, never the default.
+  - Not usable for captured video (checked against the documentation): NVIDIA's DLSS frame
+    generation through Streamline, Reflex 2 Frame Warp, AMD's and Intel's frame generation
+    (these need the game's own depth and motion data), NVIDIA's frame interpolation library
+    (interpolation only, no D3D12 path).
+
+TO UNDO  (one line in slipstream.ini next to the experimental copy's PushFPS.exe,
+          %LOCALAPPDATA%\Programs\PushFPS-slipstream-exp)
+       VEYRA_TEST_RP_LEGACY_PACKAGE14 = 1
+  puts parts B and C back to Package 14's behaviour. "Lower delay" is undone by its own switch.
+  Single parts: VEYRA_TEST_RP_LEGACY_VIDEO_OVERLAY = 1 (B), VEYRA_TEST_RP_LEGACY_REFLEX_SLEEP = 1
+  (C). Package 14's own undo line (VEYRA_TEST_RP_LEGACY_PACKAGE13 = 1) still works and includes
+  these. Step 1 replaces Package 14 in the experimental copy; Packages 14, 13, 12A and 7 stay
+  downloadable, and Package 7's copy stays installed in its own folder.
+  The undo lines leave part D (the badge's hover split and the new log lines) and the
+  measuring of the driver's pause in place: they only show and log.
+
+NEW IN PACKAGE 14 (also in this package; installed by step 1, nothing to switch)
+  Each line says how far it is proven: SIMULATED = our scheduling code run with made-up 4K-like
+  timings; TESTED = unit tests / the Windows build machine; nothing is HARDWARE-VERIFIED yet.
+  A. The Package 13 test switches can no longer hurt.
+     - Every part of the low-latency scheduling test (VEYRA_EXP_RP_FG_ULL) and the GPU priority
+       test now does nothing. SIMULATED: under load they dropped generated frames, made the
+       picture jump and pause, or delayed real frames. Whether they caused your lag is not known.
+     - slipstream.ini can no longer set anything that changes frame scheduling (input, network,
+       audio, the undo lines below and Package 15's VEYRA_TEST_RP_LOWDELAY_LEAVE_ON_UNUSABLE
+       still work). Each start logs which switches are in force.
+  B. Frame generation that does not drop out (ON for capture cards).
+     - Before: a few slow generated frames could switch generation off for up to 2 seconds at a
+       time (30 FPS stretches inside 90 FPS play). Now a few slow frames no longer do that.
+       SIMULATED with one slow pair in twenty: generated frames shown 15 -> 58 of 60 a second,
+       longest gap 77 -> 33 ms, frames on the 90 FPS grid 48 -> 93 %. At the GPU's very limit:
+       35 -> 49 of 60. Unchanged when the GPU has room. If late frames keep coming it stops
+       itself for a few seconds. In every hard simulated case it shows more frames than Package
+       13 on average; a single longest gap can now and then be a few ms longer.
+     - A real frame whose generated frames are skipped is shown on the earliest slot of the 90 FPS
+       grid instead of waiting the whole delay. The grid is never left.
+     - A real frame is shown as soon as ITS OWN GPU work is done; it no longer waits for
+       generated frames that are not going to be shown (TESTED on the build machine's software
+       renderer; benefit not measured).
+     - A 60 Hz capture of a 30 FPS game: after a change of the game's rate (a 60 FPS menu, then
+       the 30 FPS game) the old code gave about 1.5 s of uneven steps, and after a still picture
+       the timing drifted. Both changed; steady play gives exactly the old timing (TESTED).
+  C. The neural ("DLSS 5") layer can no longer switch itself on when its runtime file appears.
+     Your saved choice is kept; one switch in the app turns it on. This does not change a setup
+     that already runs the layer.
+  D. Steadiness is now measured in normal play: the log's [capture-timing] line carries the share
+     of frames on the 90 FPS grid and the share of frames shown, every second, with no switch.
+     Your target is 99 %. SIMULATED: 99.2 % or more when the GPU has room; 96.8 to 98.8 % with
+     occasional GPU spikes (a generated frame that finishes a few ms late is shown late rather
+     than dropped, because dropping it showed fewer frames). Your real figure is unknown.
+  Undo line for these parts: VEYRA_TEST_RP_LEGACY_PACKAGE13 = 1 (slipstream.ini, as above).
+  Where part B acts (the GPU now and then too slow) the readout can read HIGHER than with
+  Package 13, because 30 FPS stretches whose real frames were shown early are gone (SIMULATED).
+
+NEW IN PACKAGE 13 (also in this package; its test switches for scheduling are now disabled, see A)
+  NOTE for this and the older sections below: since Package 14 the test switches they name
+  (VEYRA_EXP_RP_STATS, FG_ULL, GRAPH_QUEUE_PRIORITY, UPLOAD_EARLY_RELEASE, NR_ADAPT and the like)
+  can no longer be set from slipstream.ini; the test kit sets what it needs itself. The mouse and
+  keyboard, network and audio lines (for example VEYRA_EXP_RP_KBM_CONTROL) still work there.
+  Package 15 builds one predicted frame (its part A, off until you switch it on): lines below
+  that say predicted frames or extrapolation are not built describe those older packages.
+  - What the code says about your setup (docs\DELAY_90.md; arithmetic, not measurements): the
+    4K setting applies to every stage. Frame generation and the output work at 3840x2160 and
+    the result is scaled to your screen at the very end. A real frame's delay at 3X is: its
+    own processing + the first generated frame + 22.2 ms (the wait for the next real frame:
+    a property of today's method, which shows the newer real frame last, not of your hardware)
+    + small margins. With the developers' own figures for an RTX 5070 that is about 28 to 33
+    ms, so your 30 ms is close to what today's method allows at 4K. What can still be removed
+    without changing the picture is small on a capture card (about 0 to 3 ms by estimate) and
+    larger over Remote Play (about 4 to 7 ms).
+  - Always in the log now: [slipstream-sizes], the real size of every stage (source, upscaler,
+    frame generation, output, the window). It changes nothing.
+  - With VEYRA_EXP_RP_STATS = 1: the delay of real frames split into waiting to be picked up,
+    their own processing, the first generated frame, the interpolation wait, the scheduler's
+    margin and late presents, plus the GPU time of the first generated frame alone. Software
+    times inside the PC, not the delay from your hand to the screen.
+  - Three switches to try at 4K, none changes the picture:
+      VEYRA_EXP_RP_FG_ULL = hold,phase,grace     Package 12's low-latency scheduling without its
+                                                  headroom part (that part could drop 90 to 60)
+      VEYRA_EXP_RP_GRAPH_QUEUE_PRIORITY = high   the picture work gets GPU priority (could make
+                                                  showing frames wait: the test checks evenness)
+      VEYRA_EXP_RP_UPLOAD_EARLY_RELEASE = 1      capture card: avoids a second copy of the 4K
+                                                  picture when one happens (the log counts them)
+  - Over Remote Play, 30 -> 90 needs the experimental duplicate removal of the stream
+    (VEYRA_EXP_RP_STREAM_DEDUP = 1, still off by default); the test's Remote Play runs set it.
+  - Not built, and why (docs\DELAY_90.md): anything that lowers the size or the quality; a
+    cheaper model for the first generated frame only (it changes that frame's picture);
+    predicted frames (your earlier rule: not before the current path is measured on your PC).
+  - Next, once this package's results are in: other ways of scheduling frame generation that
+    could shorten the 22.2 ms wait itself at 4K and an even 90 FPS.
+NEW IN PACKAGE 12 (also in this package)
+  - Where frame generation's delay comes from: docs\FG_LATENCY.md. The three largest parts: the
+    wait for the next real frame (inherent to any interpolation); a real frame held for the whole
+    frame generation delay even when no generated frame is shown (avoidable); and Remote Play's
+    fixed delay instead of a measured one (avoidable, about 4 ms at 60 -> 120 by arithmetic).
+  - Low-latency frame generation, switch VEYRA_EXP_RP_FG_ULL = 1 (or only some parts: hold, phase,
+    headroom, grace). It removes the two avoidable parts. It can only show frames earlier, never
+    later; it may drop a few more generated frames, and the picture jumps forward once when a hold
+    starts and stands still once when it ends. There is no menu entry yet: nothing is measured.
+  - Predicting frames instead of waiting for the next one (extrapolation) was studied and not
+    built: NVIDIA's frame generation only interpolates, and it could not beat frame generation off
+    for responsiveness.
+  - The "DLSS 5" stutter: docs\NR_STUTTER.md. The option is NVIDIA's own neural runtime run on the
+    decoded video, not NVIDIA's DLSS 5 built into games. Most likely cause (from the code, the size
+    is an estimate): when a frame's work takes longer than one frame of the game, decoded frames are
+    replaced before they are used and late frames lose their generated frames. The four-way test of
+    Package 12 measures it on your PC.
+  - Switch VEYRA_EXP_RP_NR_ADAPT = 1: when time runs short, the neural layer reuses its last result
+    on the next frames instead of running again. No buffer and no wait; its own motion pass adds a
+    little GPU time to each real frame. Judge the picture by eye: a reused result is one frame old.
+  - To try a switch in normal play: put its line in a file named slipstream.ini next to the
+    experimental copy's PushFPS.exe (%LOCALAPPDATA%\Programs\PushFPS-slipstream-exp), one switch
+    per line, then restart it. Delete the line to switch it off. The test kit ignores this file.
+NEW IN PACKAGE 11 (also in this package)
+  - Capture card frame generation: docs\CAPTURE_FG.md says what to expect (60 -> 120 at 2X should
+    fit; 30 -> 120 needs 4X; 180 is a stretch; frame generation always waits for the next real
+    frame: at least about 25 ms at 4X for a 30 FPS game, plus processing). NVIDIA's in-game DLSS
+    frame generation cannot work on a captured picture; the session's DLSS-path arms feed NVIDIA's
+    frame generation with motion estimated from the pictures. The capture session measures real
+    and generated frames apart; repeated frames are never counted as new ones.
+  - GTA V-style keys (button "Apply GTA V-style keys"): WASD, mouse camera, left click fire, right
+    click aim, Shift run, Space jump, F vehicle, R melee, Q cover, Ctrl crouch, Tab weapon wheel,
+    mouse wheel quick-swaps the weapon while aiming, E interact, Esc pause; on foot, aiming,
+    vehicle and menu keys. GTA VI's reload button is not published: if it is another button in the
+    game, put R on it. Every key can be changed. The button also sets the lowest-latency mouse
+    handling (no smoothing window, no carry, report timing, 8-bit stick steps) and keeps your own
+    sensitivities. This is a controller emulated from mouse and keyboard, not native mouse
+    support: the PS5 only ever sees a controller.
+  - Camera feel (switches, measured by the input session): mouse speed from the mouse's own report
+    times, a stop that never keeps the stick moving after your hand stops, whole 8-bit stick
+    steps. Your existing profiles send exactly what they sent before (tested on 1.6 million
+    events).
+  - Mouse and keyboard beside a capture card: add the line VEYRA_EXP_RP_KBM_CONTROL = 1 to a file
+    named slipstream.ini next to the experimental copy's PushFPS.exe
+    (%LOCALAPPDATA%\Programs\PushFPS-slipstream-exp), then in the capture card dialog switch the
+    PS5 controller control on. The picture comes from the card; only the buttons go over Remote
+    Play. Veyra users reported the controller control working on real consoles; whether the PS5
+    keeps its HDMI picture (resolution, HDR) meanwhile is not known: check it on your card.
+  - Guides: docs\KEYBOARD_MOUSE.md (last sections), docs\KBM_AUDIT.md.
+ON WITHOUT A CHOICE  (experimental build only; Package 7 and your own PushFPS unchanged)
+  - New in Package 15: B, C and D of "WHAT PACKAGE 15 CHANGES" (A is off until you switch it on).
+  - New in Package 14: A to D of "NEW IN PACKAGE 14" (undo lines above).
+  - Still on, from Package 10 and earlier:
+  - Fixes taken from Veyra: the controller queue drops inputs that are too old, the neural layer's
+    clean shutdown, and the loader fix for its DLL.
+  - chiaki-ng fixes: reorder-queue drop, send-buffer teardown, HTTP header bounds, PIN log line.
+  - The FPS readout says "N FPS shown" or "N FPS submitted" (and "uneven" when it is); "shown" is
+    worked out from the present times, not read from the screen.
+  - The variable-refresh state is read again 5 s and 15 s after the picture starts. If G-SYNC
+    engages only then, variable-refresh presentation starts mid-session (before, at the next
+    display change).
+  - Neural runtime: at an update, an unchosen packaged copy is removed (see section 1). When the
+    file is present, its signature and SHA-256 are checked at start (about 1 s, an estimate); the
+    NVIDIA runtime choice is offered only for a verified original, and a neural layer you never
+    changed moves to the verified original once one is installed. New log lines [nr-runtime-status]
+    and [nr-runtime-check].
+  - Package 10, three fixes that can only remove delay or wasted work (each has a test switch to
+    compare with the old behaviour; tested on Linux and GitHub only):
+    * Sound now follows each picture's real arrival. In Package 9 it waited for an estimated
+      video clock that falls behind when the PS5 sends fewer than 60 frames a second, up to 1.5 s.
+    * A queued frame that arrived after the app's clock reading is no longer thrown away as
+      stale (the rule Veyra and PushFPS themselves use).
+    * Under a frame cap, frame generation no longer makes frames the cap throws away (e.g. 2X
+      instead of 3X under a 120 FPS cap with a 59.94 FPS stream). It only ever lowers the
+      multiplier; with variable refresh confirmed the counter can read below the cap (115, not 120).
+  - Always logged: the PS5's real frame rate ([remoteplay-clock] wireFps=, about every 10 s), the
+    expiry rule and the causes of each keyframe wait ([remoteplay-ingress]), the audio rule in use
+    ([remoteplay-audio] pictureTerm=), each cap-fit change ([push-cap-fit]) and the share of dated
+    presents (scanoutKnownPct=).
+KNOWN ISSUES IN 15
+  - Nothing in Package 15 has run on a gaming PC or a real graphics card. The figures marked
+    SIMULATED come from our own scheduling code with made-up timings.
+  - "Lower delay": NVIDIA's frame generation has never been asked for the second in-between
+    frame alone, and how the predicted frame looks is unknown.
+  - The kit's test sets changed in Package 14: runs whose only difference was a now-disabled
+    switch are gone.
+----- the install question (section 1) -----
+   THE ONE QUESTION: the neural layer needs NVIDIA's own runtime file. The installer keeps it only
+   when you say yes, and only when the file is an NVIDIA-signed original; it never installs a
+   modified file. Without it everything else works, and the neural arms of the kit say
+   "not installed: skipped". To answer in advance:
+       Install-Slipstream.cmd -NeuralRuntime Yes       (or No; Ask is the default)
+   UPDATING an earlier experimental copy (Package 7, 8A or 8B): an NVIDIA runtime copy that came with
+   an earlier package without your yes is removed at this update, and a layer saved on it becomes
+   unavailable. Answering no removes every copy, also one you added in Settings. Answer yes, or add
+   it later in that copy's Settings, Components and licenses.
+   THE OTHER THREE COPIES (original, stable, Package 7) use their older installers: on an NVIDIA PC
+   they keep the NVIDIA-signed runtime file from Veyra's package without asking, as PushFPS 3.2.1
+   does. Their neural layer still stays off until you turn it on.

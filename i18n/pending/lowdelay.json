@@ -1,0 +1,97 @@
+{
+ "需要 NVIDIA VFG 补帧，倍数设为 3×": {
+  "en": "Needs NVIDIA VFG frame generation set to 3×",
+  "zh-TW": "需要 NVIDIA VFG 補幀，倍數設為 3×",
+  "ja": "NVIDIA VFG のフレーム生成を 3× に設定する必要があります"
+ },
+ "这台电脑或当前设置不能运行，补帧照常（原因见日志）": {
+  "en": "Cannot run on this PC or with these settings; frame generation works as usual (the log says why)",
+  "zh-TW": "這台電腦或目前設定無法執行，補幀照常（原因見日誌）",
+  "ja": "この PC または現在の設定では実行できません。フレーム生成は通常どおりです（理由はログを参照）"
+ },
+ "更低延迟（每个真实帧配一个预测帧）": {
+  "en": "Lower delay (one predicted frame per real frame)",
+  "zh-TW": "更低延遲（每個真實幀配一個預測幀）",
+  "ja": "低遅延（実際のフレームごとに予測フレーム 1 枚）"
+ },
+ "正在开启：补帧管线重建中（画面可能停顿片刻）": {
+  "en": "Turning on: rebuilding the frame-generation pipeline (the picture may pause for a moment)",
+  "zh-TW": "正在開啟：補幀管線重建中（畫面可能停頓片刻）",
+  "ja": "オンにしています：フレーム生成のパイプラインを作り直しています（映像が一瞬止まることがあります）"
+ },
+ "引擎未接受更低延迟设置，原补帧方式保留": {
+  "en": "The engine did not accept Lower delay; frame generation stays as it was",
+  "zh-TW": "引擎未接受更低延遲設定，原補幀方式保留",
+  "ja": "エンジンが低遅延の設定を受け付けませんでした。フレーム生成は元のままです"
+ },
+ "不能在这里运行：当前输出格式不支持（需要 SDR 或 HDR10）": {
+  "en": "Cannot run here: the current output format is not supported (needs SDR or HDR10)",
+  "zh-TW": "無法在這裡執行：目前輸出格式不支援（需要 SDR 或 HDR10）",
+  "ja": "ここでは使えません：現在の出力形式は非対応です（SDR または HDR10 が必要）"
+ },
+ "不能在这里运行：当前补帧方式自己负责呈现": {
+  "en": "Cannot run here: the current frame generation method presents frames itself",
+  "zh-TW": "無法在這裡執行：目前補幀方式自行負責呈現",
+  "ja": "ここでは使えません：現在のフレーム生成方式は表示を自分で行います"
+ },
+ "已暂停：正在测试补帧画质": {
+  "en": "Paused: the frame quality test is running",
+  "zh-TW": "已暫停：正在測試補幀畫質",
+  "ja": "一時停止中：フレーム生成の画質テストを実行中です"
+ },
+ "已暂停：正在为这台电脑做优化测试": {
+  "en": "Paused: the optimisation test for this PC is running",
+  "zh-TW": "已暫停：正在為這台電腦做最佳化測試",
+  "ja": "一時停止中：この PC 向けの最適化テストを実行中です"
+ },
+ "已暂停：正在检测 HUD": {
+  "en": "Paused: HUD detection is running",
+  "zh-TW": "已暫停：正在偵測 HUD",
+  "ja": "一時停止中：HUD を検出しています"
+ },
+ "已暂停：正在录制对比片段": {
+  "en": "Paused: a comparison clip is being recorded",
+  "zh-TW": "已暫停：正在錄製對比片段",
+  "ja": "一時停止中：比較クリップを録画しています"
+ },
+ "已暂停": {
+  "en": "Paused",
+  "zh-TW": "已暫停",
+  "ja": "一時停止中"
+ },
+ "由测试开关开启（关闭这一行不会停止它）": {
+  "en": "On through the test switch (switching this row off does not stop it)",
+  "zh-TW": "由測試開關開啟（關閉這一列不會停止它）",
+  "ja": "テスト用スイッチでオンになっています（この行をオフにしても止まりません）"
+ },
+ "从采集卡送来画面到这一帧交给显示（Present 返回）的时间，最近 1 秒真实帧的平均值。": {
+  "en": "The time from the capture card delivering a picture to that frame being handed to the display (Present returned), averaged over the real frames of the last second.",
+  "zh-TW": "從擷取卡送來畫面到這一幀交給顯示（Present 返回）的時間，最近 1 秒真實幀的平均值。",
+  "ja": "キャプチャーカードから映像が届いてから、そのフレームを表示に渡す（Present が戻る）までの時間。直近 1 秒間の実際のフレームの平均です。"
+ },
+ "不包括游戏本身、主机的视频输出、采集卡和显示器的延迟。": {
+  "en": "It does not include the delay of the game itself, the console's video output, the capture card or the display.",
+  "zh-TW": "不包括遊戲本身、主機的視訊輸出、擷取卡和顯示器的延遲。",
+  "ja": "ゲーム自体、ゲーム機の映像出力、キャプチャーカード、ディスプレイの遅延は含みません。"
+ },
+ "真实画面提前一个显示帧出现：少等约三分之一个游戏帧。实验功能，尚未在任何电脑上实测：延迟减少多少、画面如何，都要你自己看。每三帧中有一帧是预测的：快速转动镜头、爆炸/烟雾/雨、闪光和渐变时，那一帧会停在真实画面上，看起来会有轻微顿挫；运动物体的前缘和细线（电线、栏杆）可能轻微抖动或变形。预测不好的帧会照常显示（不可靠的部分保持真实画面），只有长时间大部分不可用或帧开始迟到时才自动改回普通补帧。GPU 很吃紧时，个别帧的延迟可能反而比关闭时高。只用于采集卡、NVIDIA VFG、3× 补帧。开启和关闭都立即生效：补帧管线重建一次，画面可能停顿片刻。": {
+  "en": "The real picture is shown one displayed frame earlier: about a third of a game frame less wait. Experimental and not yet measured on any PC: how much delay it saves and how the picture looks, you have to see for yourself. One frame in three is predicted: during fast camera turns, explosions / smoke / rain, flashes and fades that frame stays on the real picture and you may see a slight judder; the front edges of moving objects and thin lines (wires, railings) can jitter or bend slightly. Bad predictions are still shown (their unreliable parts keep the real picture); it switches back to normal frame generation by itself only when prediction is mostly unusable for a long time or frames start arriving late. When the GPU is very busy, some frames can even have more delay than with it off. Only for a capture card with NVIDIA VFG at 3×. Turning it on or off applies at once: the frame-generation pipeline is rebuilt once, and the picture may pause for a moment.",
+  "zh-TW": "真實畫面提前一個顯示幀出現：少等約三分之一個遊戲幀。實驗功能，尚未在任何電腦上實測：延遲減少多少、畫面如何，都要你自己看。每三幀中有一幀是預測的：快速轉動鏡頭、爆炸/煙霧/雨、閃光和漸變時，那一幀會停在真實畫面上，看起來會有輕微頓挫；運動物體的前緣和細線（電線、欄杆）可能輕微抖動或變形。預測不好的幀會照常顯示（不可靠的部分保持真實畫面），只有長時間大部分不可用或幀開始遲到時才自動改回一般補幀。GPU 很吃緊時，個別幀的延遲可能反而比關閉時高。只用於擷取卡、NVIDIA VFG、3× 補幀。開啟和關閉都立即生效：補幀管線重建一次，畫面可能停頓片刻。",
+  "ja": "実際の映像が表示 1 フレーム分早く現れます：ゲームの 1 フレームの約 3 分の 1 だけ待ち時間が減ります。実験的な機能で、まだどの PC でも実測していません。遅延がどれだけ減るか、映像がどう見えるかはご自身で確かめてください。3 枚に 1 枚は予測したフレームです：カメラを素早く回したとき、爆発・煙・雨、フラッシュやフェードでは、そのフレームは実際の映像のままになり、わずかなカクつきに見えることがあります。動く物体の前の縁や細い線（電線、手すり）がわずかに揺れたり歪んだりすることがあります。予測が良くないフレームもそのまま表示されます（信頼できない部分は実際の映像のままです）。予測がほとんど使えない状態が長く続くか、フレームが遅れ始めたときだけ、通常のフレーム生成に自動で戻ります。GPU に余裕がないときは、一部のフレームの遅延がオフのときより大きくなることもあります。キャプチャーカード、NVIDIA VFG、3× のフレーム生成でのみ使えます。オンとオフはどちらもすぐに反映されます。フレーム生成のパイプラインが 1 回作り直され、映像が一瞬止まることがあります。"
+ },
+ "看到抖动、撕裂或拖影就关掉这一行：关闭立即恢复原来的补帧方式。": {
+  "en": "If you see judder, tearing or smearing, switch this row off: off restores the previous frame generation at once.",
+  "zh-TW": "看到抖動、撕裂或拖影就關掉這一列：關閉立即恢復原來的補幀方式。",
+  "ja": "カクつき、ティアリング、にじみが見えたらこの行をオフにしてください。オフにすると元のフレーム生成にすぐ戻ります。"
+ },
+ "%1 ms = %2 画面处理 + %3 第一个生成帧 + %4 等待前面要显示的帧（按排程计算，不是测量） + %5 余量": {
+  "en": "%1 ms = %2 picture processing + %3 first generated frame + %4 waiting for the frames shown before it (calculated from the schedule, not measured) + %5 margin",
+  "zh-TW": "%1 ms = %2 畫面處理 + %3 第一個生成幀 + %4 等待前面要顯示的幀（按排程計算，不是測量） + %5 餘量",
+  "ja": "%1 ms = 映像処理 %2 + 最初の生成フレーム %3 + 先に表示するフレームの待ち %4（スケジュールからの計算値で、測定ではありません） + 余裕 %5"
+ },
+ "这台电脑的 VFG 不接受单独生成这一帧：本次运行中已停用，补帧照常（关闭再开启这一行可再试一次）": {
+  "en": "This PC's VFG does not accept generating that frame on its own: turned off for this run, frame generation works as usual (switch this row off and on to try once more)",
+  "zh-TW": "這台電腦的 VFG 不接受單獨生成這一幀：本次執行中已停用，補幀照常（關閉再開啟這一列可再試一次）",
+  "ja": "この PC の VFG はそのフレームだけを単独で生成することを受け付けません。今回の実行では停止し、フレーム生成は通常どおりです（この行をオフにしてからオンにすると、もう一度試せます）"
+ }
+}

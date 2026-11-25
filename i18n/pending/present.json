@@ -1,0 +1,32 @@
+{
+ "显示 %1 FPS": {
+  "en": "%1 FPS shown",
+  "zh-TW": "顯示 %1 FPS",
+  "ja": "表示 %1 FPS"
+ },
+ "提交 %1 FPS": {
+  "en": "%1 FPS submitted",
+  "zh-TW": "提交 %1 FPS",
+  "ja": "送出 %1 FPS"
+ },
+ " · 不均匀": {
+  "en": " · uneven",
+  "zh-TW": " · 不均勻",
+  "ja": " · 不均一"
+ },
+ "来源 %1 · 游戏 %2 · 提交 %3": {
+  "en": "source %1 · game %2 · submitted %3",
+  "zh-TW": "來源 %1 · 遊戲 %2 · 提交 %3",
+  "ja": "ソース %1 · ゲーム %2 · 送出 %3"
+ },
+ "英伟达低延迟：等待多次晚于采集画面到达，本次播放已关闭；当前使用低排队": {
+  "en": "NVIDIA Low Latency: its wait repeatedly ended after the captured frame had arrived, so it is off for this playback; using low queue depth",
+  "zh-TW": "NVIDIA 低延遲：等待多次晚於擷取畫面到達，本次播放已關閉；目前使用低排隊",
+  "ja": "NVIDIA 低遅延：待機がキャプチャ画面の到着より何度も遅れて終わったため、今回の再生ではオフにしました。低遅延キューを使用中です"
+ },
+ "英伟达低延迟：等待多次晚于采集画面到达，本次播放已关闭": {
+  "en": "NVIDIA Low Latency: its wait repeatedly ended after the captured frame had arrived, so it is off for this playback",
+  "zh-TW": "NVIDIA 低延遲：等待多次晚於擷取畫面到達，本次播放已關閉",
+  "ja": "NVIDIA 低遅延：待機がキャプチャ画面の到着より何度も遅れて終わったため、今回の再生ではオフにしました"
+ }
+}
