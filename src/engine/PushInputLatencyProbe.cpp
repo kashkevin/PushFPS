@@ -25,20 +25,53 @@ int64_t PushInputLatencyProbe::now100ns() {
 
 void PushInputLatencyProbe::beginWindow() {
     std::lock_guard lock(m_);
-    open_ = true; sent_ = 0; answerMs_ = -1; detector_.reset();
+    open_ = true; sent_ = 0; answerMs_ = -1; answerPresent_ = 0; answerPts_ = 0; pictureMoving_ = false; detector_.reset();
+    judged_ = {}; judgedNext_ = 0;
+    collecting_.store(true, std::memory_order_relaxed);
 }
 void PushInputLatencyProbe::endWindow() {
     std::lock_guard lock(m_);
     open_ = false;
+    collecting_.store(false, std::memory_order_relaxed);
 }
 void PushInputLatencyProbe::markSent(int64_t sentHost100ns) {
     std::lock_guard lock(m_);
-    sent_ = sentHost100ns; answerMs_ = -1;
+    sent_ = sentHost100ns; answerMs_ = -1; answerPresent_ = 0; answerPts_ = 0; pictureMoving_ = false;
+    judged_ = {}; judgedNext_ = 0;
+}
+void PushInputLatencyProbe::setDetectorMode(latency::Detector::Mode mode) {
+    std::lock_guard lock(m_);
+    detector_.setMode(mode);
+}
+void PushInputLatencyProbe::setMinimumAnswerMs(double ms) {
+    std::lock_guard lock(m_);
+    detector_.setMinimumAnswerMs(ms);
+}
+void PushInputLatencyProbe::noteArrival(int64_t pts100ns, int64_t arrivalHost100ns) {
+    if (!collecting_.load(std::memory_order_relaxed) || pts100ns <= 0 || arrivalHost100ns <= 0) return;
+    std::lock_guard lock(m_);
+    arrivals_[arrivalNext_ % arrivals_.size()] = Arrival{pts100ns, arrivalHost100ns};
+    ++arrivalNext_;
+}
+PushInputLatencyProbe::PressTiming PushInputLatencyProbe::timing() const {
+    std::lock_guard lock(m_);
+    PressTiming t;
+    t.sent = sent_;
+    if (answerMs_ >= 0) t.present = answerPresent_;
+    int64_t bestPts = 0;
+    for (const auto& a : arrivals_) {
+        if (a.host <= 0) continue;
+        // The frame that showed the answer: its own arrival for a real frame (same timestamp), for a generated
+        // one the real frame it was made towards (the smallest timestamp not before it).
+        if (answerMs_ >= 0 && answerPts_ > 0 && a.pts >= answerPts_ && (!bestPts || a.pts < bestPts)) { bestPts = a.pts; t.arrival = a.host; }
+        if (sent_ > 0 && a.host <= sent_ && a.host > t.lastArrivalBeforeSent) t.lastArrivalBeforeSent = a.host;
+    }
+    return t;
 }
 
 bool PushInputLatencyProbe::record(ID3D12GraphicsCommandList* list, const Frame& frame) {
     std::lock_guard lock(m_);
-    if (!open_ || !list || !frame.texture || answerMs_ >= 0) return false;
+    if (!open_ || !list || !frame.texture || answerMs_ >= 0 || pictureMoving_) return false;
     quality::OutputLayout layout;
     if (!layoutOf(frame.format, layout)) return false;
     Slot* slot = nullptr;
@@ -78,6 +111,7 @@ bool PushInputLatencyProbe::record(ID3D12GraphicsCommandList* list, const Frame&
     slot->height = std::min<uint32_t>(frame.height ? frame.height : desc.Height, desc.Height);
     slot->layout = layout;
     slot->host100ns = now100ns();   // just before this frame's Present: when it is shown
+    slot->pts100ns = frame.pts100ns;
     slot->order = ++order_;
     slot->state = Slot::State::Pending;
     return true;
@@ -121,9 +155,20 @@ double PushInputLatencyProbe::poll() {
         next->state = Slot::State::Free; next->fence.Reset();
         if (!ok || next->order <= lastRead_) continue;
         lastRead_ = next->order;
-        if (!open_ || answerMs_ >= 0) continue;
-        if (!sent_ || next->host100ns < sent_) detector_.before(luma);
-        else if (detector_.answered(luma)) answerMs_ = double(next->host100ns - sent_) / 10000.0;
+        if (!open_ || answerMs_ >= 0 || pictureMoving_) continue;
+        if (!sent_ || next->host100ns < sent_) { detector_.before(luma); continue; }
+        // Bottom (the PS button): judge() is the original answered(); Anywhere (v2): it can also say PictureMoving.
+        const double ms = double(next->host100ns - sent_) / 10000.0;
+        judged_[judgedNext_ % judged_.size()] = Judged{next->host100ns, next->pts100ns};
+        ++judgedNext_;
+        const auto verdict = detector_.judge(luma, ms);
+        if (verdict == latency::Detector::Verdict::Answered) {
+            // The onset frame (the frame just judged unless the jump confirmed a change that began earlier).
+            const size_t back = std::min(size_t(std::max(0, detector_.onsetFramesBack())), std::min(judgedNext_, judged_.size()) - 1);
+            const Judged& onset = judged_[(judgedNext_ - 1 - back) % judged_.size()];
+            answerMs_ = double(onset.host - sent_) / 10000.0; answerPresent_ = onset.host; answerPts_ = onset.pts;
+        }
+        else if (verdict == latency::Detector::Verdict::PictureMoving) pictureMoving_ = true;
     }
 }
 

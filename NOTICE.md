@@ -30,6 +30,19 @@ then (latest change: see the date of the newest commit). The modifications, in s
 The complete, dated list of changes is the Git history of https://github.com/DosukaSOL/PushFPS, starting
 after Veyra's commit that PushFPS was forked from.
 
+## Slipstream development builds (GPL-3.0 section 5a)
+
+Builds whose version ends in `-slipstream` are **not PushFPS releases**. They are a further modified version
+of PushFPS, changed from PushFPS commit `ed317efb` (version 3.2.1) from **2026-11-18** onwards by the maintainer
+of https://github.com/kashkevin/PushFPS for low-latency PS5 Remote Play testing. The modifications, in short:
+event-driven hand-off between network, decoder and engine in the Remote Play path; controller input sent on
+change; keyboard and mouse as a controller with profiles and calibration; same-LAN transport experiments
+(Chiaki patches `scripts/remoteplay/patches/0003` and `0004`); connection health, audio, GPU budget and latency
+governor experiments; performance modes in the interface; a hardware test kit and package tooling; the in-app
+updater switched off in these builds. Every experiment is off unless switched on (`docs/PS5_REMOTE_PLAY_EXPERIMENTS.md`).
+The exact source of a build is the commit named in the package's `SOURCE.txt`; the files written for these
+changes are under the same license terms as the files written for PushFPS.
+
 ## License
 
 PushFPS is free software: you can redistribute it and/or modify it under the terms of the GNU General
@@ -116,3 +129,15 @@ See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and the [licenses](licenses
 (NVIDIA DLSS, Intel XeSS, AMD FidelityFX) are downloaded at build time from their publishers under their
 own licenses and are not part of this repository. The runtime package the installer downloads is
 distributed by Veyra's author from Veyra's GitHub releases; PushFPS does not rehost it.
+
+## NVIDIA's neural-rendering runtime (optional, experimental)
+
+"AI picture enhancement" can use NVIDIA's `nvngx_dlssnr.dll`. PushFPS does not contain, modify, host or download
+that file. It is used only when the user chose to install it (the installer's `-NeuralRuntime` question, or
+*Settings → Components and licenses → Install from a file you have…*) and only after the app has verified the
+installed copy as an NVIDIA-signed original (Authenticode chain, signer NVIDIA Corporation, version resource,
+SHA-256 of the versions on record). The layer applies NVIDIA's model to a decoded video stream without the game's
+motion vectors, depth or masks; it is not NVIDIA's game-integrated DLSS 5 and not endorsed by NVIDIA. NVIDIA has
+published no DLSS 5 SDK and no terms covering this file's use by other programs, so the installer never keeps
+upstream's packaged copy without an explicit yes; the facts and open questions are in
+[docs/NEURAL_RENDERING_RUNTIME.md](docs/NEURAL_RENDERING_RUNTIME.md).
