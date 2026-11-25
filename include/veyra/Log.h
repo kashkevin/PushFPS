@@ -97,6 +97,8 @@ void info(const char* component, const std::string& message);
 void warn(const char* component, const std::string& message);
 void error(const char* component, const std::string& message);
 bool verboseFrameLogs();
+// Warning (errors=false) or error (true) lines written since the program started (PushFPS [log-summary]).
+uint64_t problemLines(bool errors);
 
 // Key=value helper used by call sites that need structured fields.
 inline std::string kv(const char* key, uint64_t value)

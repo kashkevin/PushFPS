@@ -1,0 +1,42 @@
+{
+ "需要 NVIDIA VFG 或 PushFlow 补帧，倍数设为 3×": {
+  "en": "Needs NVIDIA VFG or PushFlow frame generation at 3×",
+  "zh-TW": "需要 NVIDIA VFG 或 PushFlow 補幀，倍數設為 3×",
+  "ja": "NVIDIA VFG または PushFlow のフレーム生成（3×）が必要です"
+ },
+ "PushFPS 帧在这块显卡上没有通过开启时的检查：更低延迟在这里不可用（原因见日志）": {
+  "en": "The PushFPS frame did not pass its start-up check on this graphics card: Lower delay is not available here (the log says why)",
+  "zh-TW": "PushFPS 幀在這張顯示卡上沒有通過開啟時的檢查：更低延遲在這裡無法使用（原因見記錄）",
+  "ja": "PushFPS のフレームはこのグラフィックカードで起動時のチェックに合格しませんでした：ここでは低遅延を使えません（理由はログを参照）"
+ },
+ "PushFPS 帧在这块显卡上没有通过开启时的检查：使用 NVIDIA 的帧（原因见日志）": {
+  "en": "The PushFPS frame did not pass its start-up check on this graphics card: NVIDIA's frame is used (the log says why)",
+  "zh-TW": "PushFPS 幀在這張顯示卡上沒有通過開啟時的檢查：使用 NVIDIA 的幀（原因見記錄）",
+  "ja": "PushFPS のフレームはこのグラフィックカードで起動時のチェックに合格しませんでした：NVIDIA のフレームを使います（理由はログを参照）"
+ },
+ "NVIDIA VFG 不接受单独生成这一帧：现在由 PushFPS 生成": {
+  "en": "NVIDIA VFG does not accept generating this frame on its own: PushFPS makes it now",
+  "zh-TW": "NVIDIA VFG 不接受單獨產生這一幀：現在由 PushFPS 產生",
+  "ja": "NVIDIA VFG はこのフレームの単独生成を受け付けません：現在は PushFPS が生成しています"
+ },
+ "现在由 PushFPS 生成": {
+  "en": "PushFPS makes it now",
+  "zh-TW": "現在由 PushFPS 產生",
+  "ja": "現在は PushFPS が生成しています"
+ },
+ "插值帧来源": {
+  "en": "Interpolated frame source",
+  "zh-TW": "插值幀來源",
+  "ja": "補間フレームの生成元"
+ },
+ "预测帧对中的第一帧（两个真实帧之间的插值帧）由谁生成。NVIDIA：VFG 生成。PushFPS：PushFPS 自己的运动补偿帧，使用与预测帧相同的运动估计，任何显卡都能运行。PushFPS 帧的画质：在合成测试画面上平均与学习型插帧模型大致相当，但细小物体在运动背景前面时更差；没有在游戏画面上测量过，也没有在任何显卡上测量过。NVIDIA 拒绝单独生成这一帧时，自动改用 PushFPS。": {
+  "en": "Who makes the first frame of a predicted pair (the interpolated frame between two real frames). NVIDIA: VFG makes it. PushFPS: PushFPS's own motion-compensated frame, from the same motion estimate the predicted frame uses; it runs on any graphics card. Picture quality of the PushFPS frame: about level with a learned interpolator on average on synthetic test scenes, worse at thin objects in front of a moving background; not measured on game footage, and not measured on any graphics card. When NVIDIA refuses to make this frame on its own, PushFPS takes over by itself.",
+  "zh-TW": "預測幀對中的第一幀（兩個真實幀之間的插值幀）由誰產生。NVIDIA：由 VFG 產生。PushFPS：PushFPS 自己的運動補償幀，使用與預測幀相同的運動估計，任何顯示卡都能執行。PushFPS 幀的畫質：在合成測試畫面上平均與學習型插幀模型大致相當，但細小物體在運動背景前面時較差；沒有在遊戲畫面上測量過，也沒有在任何顯示卡上測量過。NVIDIA 拒絕單獨產生這一幀時，自動改用 PushFPS。",
+  "ja": "予測フレームペアの最初のフレーム（2 つの実フレーム間の補間フレーム）を誰が生成するか。NVIDIA：VFG が生成します。PushFPS：予測フレームと同じ動き推定を使う PushFPS 独自の動き補償フレームで、どのグラフィックカードでも動作します。PushFPS フレームの画質：合成テスト映像では平均して学習型補間モデルとほぼ同等ですが、動く背景の前にある細い物体では劣ります。ゲーム映像でも、どのグラフィックカードでも測定されていません。NVIDIA がこのフレームの単独生成を拒否した場合は、自動的に PushFPS に切り替わります。"
+ },
+ "当前补帧方式下只有 PushFPS 可用。": {
+  "en": "With the current frame generation, PushFPS is the only source.",
+  "zh-TW": "目前的補幀方式下只有 PushFPS 可用。",
+  "ja": "現在のフレーム生成では PushFPS のみ使用できます。"
+ }
+}

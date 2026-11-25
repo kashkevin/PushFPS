@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include "veyra/Log.h"
+#include "veyra/engine/PushFgHealth.h"
 namespace veyra::engine {
 class DeadlineWait {
 public:
@@ -10,6 +11,9 @@ public:
         timer_=CreateWaitableTimerExW(nullptr,nullptr,CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,TIMER_ALL_ACCESS);
         if(!timer_){const auto code=GetLastError();timer_=CreateWaitableTimerExW(nullptr,nullptr,0,TIMER_ALL_ACCESS);log::warn("scheduler","high resolution wait timer unavailable; error="+std::to_string(code));}
         else log::info("scheduler","high resolution waitable timer active; no global timer resolution changes");
+        // Stream "s10-display" (PushDisplayPath.h): VEYRA_EXP_RP_DEADLINE_HOLD=1 (off unless exactly "1").
+        {wchar_t v[4]{};hold_=GetEnvironmentVariableW(L"VEYRA_EXP_RP_DEADLINE_HOLD",v,4)==1&&v[0]==L'1';}
+        if(hold_)log::info("scheduler","experiment deadlineHold=1 (VEYRA_EXP_RP_DEADLINE_HOLD: a GPU-ready event within 2 ms of a frame's deadline no longer ends the precise wait)");
     }
     ~DeadlineWait(){if(timer_)CloseHandle(timer_);}
     DeadlineWait(const DeadlineWait&)=delete;
@@ -25,7 +29,20 @@ public:
         if(remaining<=0||cancelled())return false;
         if(remaining>tail100ns){
             const bool sourceWoke=slice(std::min(1.0,double(remaining-tail100ns)/10000),wakeEvent,secondEvent);
-            if(sourceWoke||eventWoke_)return sourceWoke;
+            if(sourceWoke)return true;
+            if(eventWoke_){
+                // Stream "s10-display": a GPU-ready event close to the deadline is counted; with the switch the wait goes on
+                // (the auto-reset event is consumed; the completion poll it would have started runs after this Present).
+                const auto left=deadline-now100ns();
+                const bool closeToDeadline=left>0&&left<=kPushDeadlineHold100ns;
+                if(closeToDeadline)pushFgHealth().nearDeadlineWake(hold_);
+                if(!pushDeadlineHoldsReadyWake(hold_,left))return false;
+                secondEvent=nullptr;
+                while(deadline-now100ns()>tail100ns){
+                    if(cancelled())return false;
+                    if(slice(std::min(1.0,double(deadline-now100ns()-tail100ns)/10000),wakeEvent,nullptr))return true;
+                }
+            }
             remaining=deadline-now100ns();
             if(remaining>tail100ns)return false;
         }
@@ -34,7 +51,11 @@ public:
             if((polls++&31)==0){
                 if(cancelled())return false;
                 if(wakeEvent&&WaitForSingleObject(wakeEvent,0)==WAIT_OBJECT_0)return true;
-                if(secondEvent&&WaitForSingleObject(secondEvent,0)==WAIT_OBJECT_0)return false;
+                if(secondEvent&&WaitForSingleObject(secondEvent,0)==WAIT_OBJECT_0){
+                    pushFgHealth().nearDeadlineWake(hold_);   // stream "s10-display": a ready event inside the last 1 ms
+                    if(!pushDeadlineHoldsReadyWake(hold_,deadline-now100ns()))return false;
+                    secondEvent=nullptr;
+                }
             }
             YieldProcessor();
         }
@@ -69,6 +90,6 @@ public:
         if(result!=WAIT_OBJECT_0)log::warn("scheduler","wait timer result="+std::to_string(result));
         return false;
     }
-private:HANDLE timer_=nullptr;bool eventWoke_=false;
+private:HANDLE timer_=nullptr;bool eventWoke_=false,hold_=false;
 };
 }

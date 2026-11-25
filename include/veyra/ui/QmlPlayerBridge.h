@@ -1475,6 +1475,12 @@ public:
     // --- PushFPS (src/ui/bridge/PushFps.cpp) --------------------------------
     // Live numbers for the latency readout and "Optimise for my PC".
     Q_INVOKABLE QVariantMap pushLiveStats() const;
+    // Stream "present" R1 (engine/PushVideoOverlay.h, qml/Veyra/PushInPicture.js): an interface item's picture (a QImage from
+    // grabToImage; null removes the item) at x, y (logical pixels from the picture's top left) for the window's pixel ratio,
+    // composed with the other items into the one picture the presenter draws; and, per item, whether the presenter has drawn
+    // its latest picture within the last second ({enabled, drawn: {key: bool}}). UI thread.
+    Q_INVOKABLE bool pushSetVideoOverlay(const QString& key, const QVariant& image, double x, double y, double dpr);
+    Q_INVOKABLE QVariantMap pushVideoOverlayState() const;
     // Measurement window over every Present (engine/PushBenchmarkProbe.h).
     Q_INVOKABLE void pushBenchmarkBegin();
     Q_INVOKABLE QVariantMap pushBenchmarkEnd();
@@ -1495,6 +1501,18 @@ public:
     Q_INVOKABLE QVariantMap pushAnrState() const;
     Q_INVOKABLE bool pushInstallAnr();
     Q_INVOKABLE bool pushOpenAnrFolder();
+    // PushFPS neural layer (src/ui/bridge/PushNeural.cpp, engine/PushNrRuntime.h): NVIDIA's signed original runtime
+    // only. The state of runtime\experimental\nr-original, install from a file the user has (checked before and
+    // after the copy; nothing is downloaded), remove; the layer's named looks (conservative .. strong).
+    Q_INVOKABLE QVariantMap pushNeuralRuntimeState() const;
+    Q_INVOKABLE bool pushInstallNeuralRuntime();
+    Q_INVOKABLE bool pushRemoveNeuralRuntime();
+    Q_INVOKABLE QVariantList pushNeuralLooks() const;
+    Q_INVOKABLE bool pushSetNeuralLook(const QString& name);
+    // The enhancement pipeline planner's answer for a request (engine/PushPipelinePlan.h, sprint 5): ordered
+    // stages and every stage dropped or reduced with its reason. Plans only; { available: false } in a build
+    // without the planner.
+    Q_INVOKABLE QVariantMap pushPipelinePlan(const QVariantMap& request) const;
     // Credits and links from Brand.h: "repo", "veyra", "anr", "anrReleases", "apex".
     Q_INVOKABLE bool pushOpenLink(const QString& key);
     // PushFPS going live (src/ui/bridge/PushStream.cpp, engine/LiveStream.h): the outputs are in the
@@ -1547,6 +1565,8 @@ public:
     Q_INVOKABLE bool pushQualityBegin(int seconds);
     Q_INVOKABLE void pushQualityCancel();
     Q_INVOKABLE QVariantMap pushQualityStatus();
+    // The multiplier frame generation keeps while it is off (fgMultiplier() reports 1 then); for the autorun `fg` step.
+    int pushFgKeptMultiplier() const;
     Q_INVOKABLE bool pushStartHudDetection(int samples);
     Q_INVOKABLE void pushCancelHudDetection();
     Q_INVOKABLE QVariantMap pushHudDetection();
@@ -1558,6 +1578,63 @@ public:
     // preference pushFlowHalfProbe and, when half precision matches and is faster, pushFlowHalf.
     Q_INVOKABLE bool pushTestPushFlowHalf();
     Q_INVOKABLE bool pushFlowHalfTesting() const;
+    // PushFPS performance modes and first-launch card (src/ui/bridge/PushSlipstream.cpp; the mode table
+    // itself is engine/PushPerformanceMode.h, applied by qml/Veyra/PushModes.js).
+    // pushHardwareSummary(): what this PC offers, by capability and never by model name: gpuName,
+    // gpuVendor ("nvidia" | "amd" | "intel" | ""), decodeKnown + decodeH264 / decodeHevc / decodeHevc10
+    // (the engine adapter's D3D12 video decode profiles), fgBackends (labels of the frame generation
+    // methods that can run), fgMaxMultiplier, displayHz (0 unknown), vrrState (0..4 as vrrState),
+    // lowLatencyNvidia, networkKnown + ethernet / wifi (active adapters), and for a saved PS5 address
+    // routeKnown + routeDirectLan + routeLink ("ethernet" | "wifi" | "other" | "unknown"). No addresses.
+    // With VEYRA_EXP_RP_GOVERNOR or VEYRA_EXP_RP_GPU_BUDGET set, also pushAdapterCapabilities()'s keys (vendor, vramMB, featureLevel, uma, fgMethods, opticalFlows, refreshHz,
+    // hdrDisplay, hybridGpu, power, defaults); a name already used above gets a "caps" prefix (capsVrrState ...).
+    Q_INVOKABLE QVariantMap pushHardwareSummary();
+    Q_INVOKABLE QVariantMap pushCalibration(const QString& request, const QVariantMap& args = {});   // PushFPS first-launch recommendation: "sample" | "plan" (PushSlipstream.cpp)
+    // Automatic mode, only while VEYRA_EXP_AUTO_MODE=1 (pushAutoModeAvailable). pushAutoModeStep feeds
+    // engine::PushAutomaticMode with numbers the snapshot already holds and returns
+    // { available, mode, changed, reason }; `ceiling` is the user's chosen mode, never exceeded.
+    // Call it about once a second from one place (PushModeDriver.qml). pushAutoModeState() only reads.
+    Q_INVOKABLE bool pushAutoModeAvailable() const;
+    Q_INVOKABLE QVariantMap pushAutoModeStep(const QString& ceiling);
+    Q_INVOKABLE QVariantMap pushAutoModeState() const;
+    // PushFPS Smoothness Mode (PushSlipstream.cpp, engine/PushSmoothness.h; pref pushSmoothTarget 0/60/90/120/180):
+    // { available, target, targetFromSwitch, chosen, preferred, reason, stepDowns, loadPercent } of the running stream
+    // (chosen 0 = the mode is not deciding). Reads only.
+    Q_INVOKABLE QVariantMap pushSmoothState() const;
+    // Package 15 "Lower delay" row (qml/Veyra/PushLowDelayRow.qml, PushSlipstream.cpp): the engine's state for it
+    // (state: idle / calm / active / starting / not-here / unavailable) and whether the kit's own switch was set before
+    // PushFPS started (fromSwitch).
+    Q_INVOKABLE QVariantMap pushLowDelayState() const;
+    // PushFPS SmartLink "Connection" row (PushSmartLink.cpp, qml/Veyra/PushSmartLinkRow.qml): the running PS5 stream's
+    // latest SmartLink decision, numbers only: available (Slipstream build with PS5 Remote Play), active (fresh),
+    // mode, profile, regime, risk, rttMs, rttMaxMs, targetKbps, measuredKbps, signalPercent, reorderMs,
+    // audioTargetMs, netLimited, headroom, advice (SmartLinkTypes.h Advice as an int). Cheap: once a second.
+    Q_INVOKABLE QVariantMap pushSmartLink() const;
+    // PushFPS Mouse & Keyboard page (PushKbm.cpp, qml/Veyra/PushKbmPage.qml, PushKbmBindings.qml, PushKbmWizard.qml): thin
+    // wrappers over the keyboard-and-mouse core (RemotePlayKeyboardMouse, remoteplay/KbmInputProfile.h). Interface thread
+    // only, like the capture itself; nothing here waits for the pad poll or the session. Every map carries `available`
+    // (false: this build has no such core, and nothing was changed). Unverified on Windows.
+    Q_INVOKABLE QVariantMap pushKbmState() const;                 // switch, capture, profile and context in use, fallback
+    Q_INVOKABLE bool pushKbmSetEnabled(bool on);                  // preference kbmEnabled; starts or ends the capture now
+    Q_INVOKABLE bool pushKbmRelease();                            // as Ctrl+Alt+Shift+Z
+    Q_INVOKABLE bool pushKbmAllowCapture();                       // after a release: capture again when the window is in front
+    Q_INVOKABLE bool pushKbmHold(bool on);                        // the page takes the mouse for a calibration; renewed while it runs
+    Q_INVOKABLE QVariantMap pushKbmInputSettings(const QString& profile) const;   // a profile's values ("" = the one chosen)
+    Q_INVOKABLE bool pushKbmSetInputProfile(const QString& profile);
+    Q_INVOKABLE bool pushKbmSetCustom(const QString& key, const QVariant& value);  // one kbmInputCustom key
+    Q_INVOKABLE bool pushKbmCustomFrom(const QString& profile);   // Custom starts from another profile's values
+    Q_INVOKABLE bool pushKbmSetContextOverride(const QString& context);
+    Q_INVOKABLE QVariantList pushKbmCurvePoints(const QVariantMap& curve, int count) const;
+    Q_INVOKABLE QVariantMap pushKbmBindings() const;
+    Q_INVOKABLE QVariantMap pushKbmSetBinding(const QString& context, const QString& key, const QString& action, bool replace);
+    Q_INVOKABLE bool pushKbmResetBindings();
+    Q_INVOKABLE QVariantMap pushKbmApplyPreset(const QString& id);   // "gta-pc": GTA V-style PC keys, menu keys, low-latency input
+    Q_INVOKABLE QVariantList pushKbmProfileFiles() const;
+    Q_INVOKABLE bool pushKbmLoadProfile(const QString& name);
+    Q_INVOKABLE bool pushKbmSaveProfile(const QString& name);
+    Q_INVOKABLE QVariantMap pushKbmCalibration(const QString& request);   // start | tap | skip | stop | status | keep
+    Q_INVOKABLE QVariantMap pushKbmFit(const QString& request, const QVariantMap& args = {});   // record | stop | fit | apply | cancel
+    Q_INVOKABLE QVariantMap pushKbmReadout() const;               // processing times inside the PC, never input-to-photon
     // PushFPS 窗口置顶: keeps a top-level window above others (SetWindowPos, no window recreation).
     Q_INVOKABLE bool pushSetAlwaysOnTop(QObject* window, bool onTop);
     Q_INVOKABLE void copyDiagnostics();
@@ -1677,7 +1754,18 @@ private:
     // audio endpoint). Called after load and after every accepted change.
     void applyPreference(const QString& key);
     void applyPushMix();   // PushFPS mixer preferences -> engine::setPushMix (PushStudio.cpp)
+    void applyPushLanProfile();   // preference pushLanProfile -> VEYRA_EXP_RP_LAN_PROFILE for the next PS5 connection (PushSlipstream.cpp)
+    void applyPushSmartLink();   // preference pushSmartLink -> VEYRA_EXP_RP_SMARTLINK for the next PS5 connection (PushSmartLink.cpp)
+    void applyPushKbm();   // kbm* preferences -> the running keyboard-and-mouse capture (PushKbm.cpp)
+    bool pushKbmValidPreference(const QString& key, const QVariant& value, QVariant& stored) const;   // (PushKbm.cpp)
+    bool pushKbmCaptureWanted() const;   // false on the Mouse & Keyboard page unless it holds the capture (PushKbm.cpp)
+    const char* pushSmartLinkConfigMode() const;   // [slipstream-config] smartlink= off | observe | apply (PushSmartLink.cpp)
     void pushFlowBudgetWatch();   // PushFlow too slow for the frame budget -> a faster tier (PushFps.cpp)
+    void applyPushSmoothTarget();   // pref pushSmoothTarget -> engine::pushSmoothShared() (PushSlipstream.cpp)
+    void applyPushOwnWarp();   // stream "ownfg": prefs pushLowDelaySource / pushLowDelayCausal -> the engine and EnhancementSettings::lowDelayOwnWarp (bridge/PushOwnFrame.cpp)
+    void applyPushLowDelay();   // pref pushLowDelay -> engine::pushLowDelayShared() and EnhancementSettings::lowDelay (a graph rebuild with VFG at 3X; PushSlipstream.cpp)
+    bool pushSlipstreamWatch();   // VEYRA_EXP_RP_GOVERNOR / _GPU_BUDGET, once a second; true = the budget applies (PushSlipstream.cpp)
+    void pushGpuBudgetRestore(const char* why);   // =apply: the user's frame generation choice back (PushSlipstream.cpp)
     engine::PushCanvas pushCanvas(int fit) const;   // PushFPS canvas preferences (Recording.cpp)
     void scheduleEnhancementPrewarm();
     // Hold-to-compare key (press/release), handled for the whole application.
@@ -1710,6 +1798,24 @@ private:
     std::unique_ptr<Impl> impl_;
     QObject* nvidiaVrrProfile_ = nullptr;
     QObject* updates_ = nullptr;
+
+public:
+    // PushFPS latency test v2 (PushLatencyTest.cpp, docs/LATENCY_MEASUREMENT.md): up to
+    // engine::latencystats::kTrialsMax presses; button "ps" (the original test), "options" or
+    // "dpad-right-left". pushLatencyTestBegin(trials) is this with "ps".
+    Q_INVOKABLE bool pushLatencyTestBeginWith(int trials, const QString& button);
+private:
+    // PushFPS test hook VEYRA_TEST_RP_PIPELINE (PushPipelineHook.cpp): [slipstream-pipeline], once per start.
+    void pushPipelineTestTick();
+    // PushFPS test automation (VEYRA_TEST_RP_AUTOCONNECT, VEYRA_TEST_RP_AUTORUN), the [slipstream-config] line
+    // and [log-summary] (PushAutorun.cpp); called from the bridge's poll timer.
+    void pushAutorunTick();
+    // PushFPS neural layer (PushNeural.cpp): [nr-runtime-status] once per start; the preference that says the user
+    // picked a runtime (such a choice is never changed); the untouched default applied after an installation.
+    void pushNeuralTick();
+    void pushNeuralLoadChoice();
+    void pushNeuralRuntimePicked();
+    bool pushNeuralApplyDefault();
 };
 
 } // namespace veyra::ui

@@ -22,9 +22,15 @@ std::optional<std::int64_t> rescale(std::uint64_t n,std::uint32_t den) noexcept 
     return static_cast<std::int64_t>(a+b);
 }
 }
-void RemotePlayClock::reset(HostTime origin,std::uint32_t fps) {
+void RemotePlayClock::reset(HostTime origin,std::uint32_t fps,bool followRate) {
     if(origin<0 || (fps!=30&&fps!=60))throw std::invalid_argument("Invalid local clock origin/rate");
-    *this={};origin_=origin;fps_=fps;
+    *this={};origin_=origin;fps_=fps;followRate_=followRate;
+}
+std::optional<double> RemotePlayClock::takeWireFps(std::uint64_t index,HostTime arrival) noexcept {
+    if(!wireMarked_||index<wireMarkIndex_||arrival<=wireMarkArrival_)return {};
+    const double fps=double(index-wireMarkIndex_)*1e7/double(arrival-wireMarkArrival_);
+    wireMarkIndex_=index;wireMarkArrival_=arrival;
+    return fps;
 }
 std::optional<EstimatedStamp> RemotePlayClock::video(std::uint64_t index,HostTime arrival) {
     if(!fps_ || arrival<origin_)return {};
@@ -35,6 +41,7 @@ std::optional<EstimatedStamp> RemotePlayClock::video(std::uint64_t index,HostTim
         videoAnchor_=arrival-origin_;firstIndex_=index;gap=true;
         phaseWindow_.clear();phase_=0;
     }
+    if(!wireMarked_){wireMarked_=true;wireMarkIndex_=index;wireMarkArrival_=arrival;}
     const auto delta=rescale(index-firstIndex_,fps_);
     if(!delta || videoAnchor_>std::numeric_limits<std::int64_t>::max()-*delta)return {};
     const auto nominal=videoAnchor_+*delta;
@@ -42,10 +49,10 @@ std::optional<EstimatedStamp> RemotePlayClock::video(std::uint64_t index,HostTim
     while(!phaseWindow_.empty()&&phaseWindow_.front().arrival<=arrival-10000000)phaseWindow_.pop_front();
     while(!phaseWindow_.empty()&&phaseWindow_.back().error>=error)phaseWindow_.pop_back();
     phaseWindow_.push_back({arrival,error});
-    // At most 0.5% slew; even after a jitter burst successive PTS cannot
+    // At most 0.5% slew (10 % with VEYRA_EXP_RP_CLOCK_RATE); even after a jitter burst successive PTS cannot
     // reverse or abruptly jump. A real network gap still resets above.
     const auto step=10000000/static_cast<std::int64_t>(fps_);
-    const auto maxSlew=step/200;
+    const auto maxSlew=followRate_?step/10:step/200;
     phase_+=std::clamp(phaseWindow_.front().error-phase_,-maxSlew,maxSlew);
     if(phase_>0&&nominal>std::numeric_limits<std::int64_t>::max()-phase_)return {};
     auto pts=nominal+phase_;
