@@ -66,7 +66,7 @@ DialogLayer {
 
     // Picture-quality order of the methods: a heuristic, used when the ground-truth test could not run.
     readonly property var qualityRank: ({ vfg: 6, dlss: 5, anr: 4, pushflow: 4, fsr4: 3, xess: 2, fsr3: 2, amdfrc: 1 })
-    readonly property var backendLabel: ({ vfg: "NVIDIA VFG", dlss: qsTr("DLSS 帧生成"), anr: "ANR", fsr4: "FSR 4", xess: "XeSS", fsr3: "FSR 3.1", amdfrc: "AMD FRC", pushflow: "PushFlow" })
+    readonly property var backendLabel: ({ vfg: "NVIDIA VFG", dlss: qsTr("DLSS 帧生成"), anr: "ANR", fsr4: "FSR 4", xess: "XeSS", fsr3: "FSR 3.1", amdfrc: "AMD FRC", pushflow: "PushFlow", pushwarp: "PushWarp" })
     // Goal (preference pushOptimizeGoal): balanced | latency | smooth | picture.
     property string goal: ["balanced", "latency", "smooth", "picture"].indexOf(String(veyra.preferences.pushOptimizeGoal)) >= 0
                           ? String(veyra.preferences.pushOptimizeGoal) : "balanced"
@@ -172,13 +172,13 @@ DialogLayer {
     function backends() {
         const skip = opt.crashed()
         return (veyra.fgBackendChoices || [])
-            .filter(o => !o.disabled && skip.indexOf(o.id) < 0)
+            .filter(o => !o.disabled && o.experimental !== true && skip.indexOf(o.id) < 0)   // stream "ownfg": never PushWarp (only the user's click)
             .map(o => o.id).sort((a, b) => (opt.qualityRank[b] || 0) - (opt.qualityRank[a] || 0))
     }
     // Methods the engine reports as unavailable, with its reason, and those skipped after a crash.
     function unavailable() {
         const skip = opt.crashed()
-        const list = (veyra.fgBackendChoices || []).filter(o => o.disabled)
+        const list = (veyra.fgBackendChoices || []).filter(o => o.disabled && o.experimental !== true)
             .map(o => ({ label: opt.backendLabel[o.id] || o.label || o.id, reason: String(o.note || "") || qsTr("这台电脑不能运行") }))
         for (const o of (veyra.fgBackendChoices || []))
             if (!o.disabled && skip.indexOf(o.id) >= 0)
