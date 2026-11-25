@@ -84,6 +84,11 @@ public:
     int64_t contentAnchor(int64_t contentPts,int64_t samplePts,int64_t callback,int64_t transportInterval){
         return anchor(samplePts,callback,transportInterval)+(contentPts-samplePts)+transportInterval/2;
     }
+    // PushFPS Package 16 (PushStallClock.h): the anchor on the line as it stands, without learning from this callback
+    // (a capture stall's gap and burst: one discontinuity, no snaps). Only once the line exists (hasLine).
+    bool hasLine()const{return samples_>0;}
+    int64_t held(int64_t source)const{return source+std::llround(offset_)-kLead100ns;}
+    int64_t heldContent(int64_t contentPts,int64_t samplePts,int64_t transportInterval)const{return held(samplePts)+(contentPts-samplePts)+transportInterval/2;}
     // Diagnostics: mean distance of a callback from the line, the clock difference, jumps.
     double jitterMs()const{return jitter_/10000;}
     double driftPpm(int64_t interval)const{return interval>0?drift_/double(interval)*1e6:0;}

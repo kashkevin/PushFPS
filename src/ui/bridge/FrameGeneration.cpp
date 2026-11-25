@@ -14,12 +14,14 @@ QString QmlPlayerBridge::fgBackendName() const {
     case engine::FrameGenerationBackend::Anr:return QStringLiteral("anr");
     case engine::FrameGenerationBackend::AmdFrc:return QStringLiteral("amdfrc");
     case engine::FrameGenerationBackend::PushFlow:return QStringLiteral("pushflow");
+    case engine::FrameGenerationBackend::PushWarp:return QStringLiteral("pushwarp");   // stream "ownfg" step 3
     }
     return {};
 }
 QVariantList QmlPlayerBridge::fgBackendChoices() const {
     QVariantList choices = {
         QVariantMap{{"id","pushflow"},{"label",tr("PushFlow · PushFPS 自研 · 2X～4X")}},
+        QVariantMap{{"id","pushwarp"},{"label",tr("PushWarp · PushFPS 自研运动补偿 · 2X～4X · 实验")}},   // stream "ownfg" step 3
         QVariantMap{{"id","anr"},{"label",tr("ANR FG · Apex Compute · 实验")},{"danger",true}},
         QVariantMap{{"id","dlss"},{"label",tr("DLSS 帧生成")}},
         QVariantMap{{"id","xess"},{"label",tr("Intel XeSS · 实验")}},
@@ -52,6 +54,8 @@ QString QmlPlayerBridge::fgProviderText() const {
         return tr("实际运行：FSR %1 · 2X").arg(QString::fromStdString(s.fsrProviderVersion));
     if(fgBackendName()==QLatin1String("pushflow"))
         return tr("PushFPS 自己的补帧：RIFE 神经网络经 DirectML 运行，所有 DirectX 12 显卡可用；2X～4X，快速 / 均衡 / 高质量三档");
+    if(fgBackendName()==QLatin1String("pushwarp"))   // stream "ownfg" step 3 (review 1's allowed sentences; no delay figure)
+        return tr("PushFPS 自己的运动补偿补帧：每个帧对只估计一次运动，这一对的所有生成帧都用它；不需要 NVIDIA，全部在同一个 DirectX 12 队列上运行。只在合成测试画面上比较过，没有在游戏画面上测试过，也没有在任何真实显卡上运行过，它在你的显卡上的开销未知；2X～4X，实验。");
     if(fgBackendName()==QLatin1String("amdfrc"))return tr("AMD 驱动自带的视频补帧（AMF FRC），只用前后两帧画面估算运动，固定 2X");
     if(fgBackendName()==QLatin1String("fsr4"))return tr("FSR 4 ML 需要支持的 RX 9000 和驱动，不可用时自动改用 FSR 3.1；尚未在 RX 9000 实卡上验证");
     if(fgBackendName()==QLatin1String("fsr3"))return tr("FSR 3.1 跨厂商补帧 · 最高 2X");
@@ -76,7 +80,7 @@ int xessCeiling(const engine::PlayerSnapshot& s) {
     return std::max(cap, seen);
 }
 void QmlPlayerBridge::setFgBackendName(const QString& value) {
-    if(value!=QLatin1String("anr")&&value!=QLatin1String("dlss")&&value!=QLatin1String("xess")&&value!=QLatin1String("fsr3")&&value!=QLatin1String("fsr4")&&value!=QLatin1String("vfg")&&value!=QLatin1String("amdfrc")&&value!=QLatin1String("pushflow")){emit notice(tr("未知补帧后端"),true);return;}
+    if(value!=QLatin1String("anr")&&value!=QLatin1String("dlss")&&value!=QLatin1String("xess")&&value!=QLatin1String("fsr3")&&value!=QLatin1String("fsr4")&&value!=QLatin1String("vfg")&&value!=QLatin1String("amdfrc")&&value!=QLatin1String("pushflow")&&value!=QLatin1String("pushwarp")){emit notice(tr("未知补帧后端"),true);return;}
     const auto availability = effectCapabilities().value(value).toMap();
     if (!availability.value("available").toBool()) { emit notice(availability.value("reason").toString(), true); emit settingsChanged(); return; }
     auto s = settings();
@@ -87,6 +91,7 @@ void QmlPlayerBridge::setFgBackendName(const QString& value) {
                     : value == QLatin1String("vfg") ? engine::FrameGenerationBackend::Vfg
                     : value == QLatin1String("amdfrc") ? engine::FrameGenerationBackend::AmdFrc
                     : value == QLatin1String("pushflow") ? engine::FrameGenerationBackend::PushFlow
+                    : value == QLatin1String("pushwarp") ? engine::FrameGenerationBackend::PushWarp   // stream "ownfg" step 3
                     : engine::FrameGenerationBackend::Dlss;
     if (s.frameGenerationBackend == want) return;
     if(want==engine::FrameGenerationBackend::Vfg&&(!vfgHardwarePossible()||!pipeline::VfgBackend::runtimeAvailable(runtime::localRuntimeDirectory().wstring()))){
@@ -104,7 +109,7 @@ void QmlPlayerBridge::setFgBackendName(const QString& value) {
     auto& chain = impl_->chain;
     const auto beforeMultiplier = chain.fgMultiplier;
     const int cap = want == engine::FrameGenerationBackend::XeSS ? xessCeiling(impl_->snapshot)
-                  : engine::twoXFrameGeneration(want) ? 2 : want==engine::FrameGenerationBackend::Vfg?8:want==engine::FrameGenerationBackend::PushFlow?4:6;
+                  : engine::twoXFrameGeneration(want) ? 2 : want==engine::FrameGenerationBackend::Vfg?8:want==engine::FrameGenerationBackend::PushFlow||want==engine::FrameGenerationBackend::PushWarp?4:6;
     chain.fgMultiplier=normalizeFgMultiplier(chain.fgMultiplier,want,uint32_t(cap));
     const bool clamped = chain.fgMultiplier != beforeMultiplier;
     if(!impl_->commit(s)){
@@ -127,6 +132,7 @@ int QmlPlayerBridge::fgMaxMultiplier() const {
         return s.applied.frameGenerationBackend==engine::FrameGenerationBackend::Anr&&s.fgCapabilityKnown&&s.fgMultiFrameMax>0?std::clamp(s.fgMultiFrameMax+1,2,6):6;
     if(settings().frameGenerationBackend==engine::FrameGenerationBackend::Vfg)return 8;
     if(settings().frameGenerationBackend==engine::FrameGenerationBackend::PushFlow)return 4;
+    if(settings().frameGenerationBackend==engine::FrameGenerationBackend::PushWarp)return 4;   // stream "ownfg" step 3
     if(engine::twoXFrameGeneration(settings().frameGenerationBackend))return 2;
     if (settings().frameGenerationBackend == engine::FrameGenerationBackend::XeSS)
         return xessCeiling(s);

@@ -22,6 +22,8 @@
 #include "veyra/source/ElgatoHdrControl.h"
 #include "veyra/pipeline/ColorMetadata.h"
 #include "veyra/Log.h"
+#include "veyra/engine/PushCaptureStall.h"
+#include "veyra/source/PushStallWitnessWin.h"
 #include "veyra/sink/AudioFormat.h"
 #include "veyra/sink/BitstreamAudio.h"
 #include "veyra/sink/BitstreamAudioSink.h"
@@ -356,6 +358,8 @@ struct CaptureCardSource::Impl:ISampleGrabberCB {
     HANDLE frameEvent=nullptr;
     double pendingTime=0,lastPts=0,readAgeMs=0;bool pendingDiscontinuity=false,forceDiscontinuity=false;
     int64_t nominalDuration100ns=0;pipeline::Rational pendingDuration=pipeline::Rational::unknown();
+    engine::PushCaptureStall captureStall;   // stream "s10-display": [capture-stall] (callback thread only)
+    bool witnessHeld=false;                  // stream "s10-stall": this source holds the stall witness running
     uint64_t received=0,dropped=0,lastDrop=0,sequence=0;
     uint64_t discontinuitySamples=0;
     CaptureDriverDiscontinuity driverDiscontinuity;
@@ -676,6 +680,7 @@ struct CaptureCardSource::Impl:ISampleGrabberCB {
         // lives for the thread (revert happens when the thread exits).
         static thread_local HANDLE mmcss=[]{DWORD index=0;HANDLE h=AvSetMmThreadCharacteristicsW(L"Pro Audio",&index);if(!h)log::warn("capture","MMCSS unavailable for the capture callback thread");return h;}();(void)mmcss;
         const auto arrival=Clock::now();BYTE* data=nullptr;
+        const std::uint64_t cyclesAtEntry=stall_witness::threadCycles();   // stream "s10-stall": 0 when the witness is off
         REFERENCE_TIME sampleStart=0,sampleEnd=0;
         const bool sampleTime=sample&&sample->GetTime(&sampleStart,&sampleEnd)==S_OK;
         if(sampleTime&&!compressedPath)observeDriverAge(sampleStart);
@@ -782,9 +787,17 @@ struct CaptureCardSource::Impl:ISampleGrabberCB {
                 timingSequence=received;copied100ns=std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count()/100;
             }
         }
+        const std::uint64_t cyclesAtCopied=cyclesAtEntry?stall_witness::threadCycles():0;
         if(enqueued)decodeWake.notify_one();
         if(frameEvent)SetEvent(frameEvent);
         if(timingSequence&&(timingSequence%120==0||lockWaitMs>5))log::info("capture-callback",std::format("source={} entryToLockMs={:.3f} entryToCopiedMs={:.3f} bytes={} compressed={} arrivalDeltaMs={:.3f} ptsDeltaMs={:.3f} sampleDurationMs={:.3f} (callback cost, not display latency)",timingSequence,lockWaitMs,(copied100ns-std::chrono::duration_cast<std::chrono::nanoseconds>(arrival.time_since_epoch()).count()/100)/10000.0,sample->GetActualDataLength(),compressedPath,arrivalDeltaMs,ptsDeltaMs,sampleTime?double(sampleEnd-sampleStart)/10000:-1));
+        if(timingSequence){   // stream "s10-display" hook: [capture-stall] when a callback comes more than 3 intervals late (always on, rare)
+            const double intervalMs=nominalDuration100ns>0?double(nominalDuration100ns)/10000.0:info.averageFps>1?1000.0/info.averageFps:0.0;
+            if(const auto stall=captureStall.observe(arrivalDeltaMs,ptsDeltaMs,double(copied100ns-std::chrono::duration_cast<std::chrono::nanoseconds>(arrival.time_since_epoch()).count()/100)/10000.0,intervalMs,timingSequence))log::info("capture-stall",*stall);
+            // stream "s10-stall": the stall witness (records only; lock-free, no allocation)
+            stall_witness::onCallback(arrivalDeltaMs,ptsDeltaMs,double(copied100ns-std::chrono::duration_cast<std::chrono::nanoseconds>(arrival.time_since_epoch()).count()/100)/10000.0,
+                cyclesAtCopied>cyclesAtEntry?cyclesAtCopied-cyclesAtEntry:0,intervalMs,timingSequence,static_cast<std::uint64_t>(sample->GetActualDataLength()));
+        }
         if(log::verboseFrameLogs()&&timingSequence)log::info("capture-ingress-sample",std::format("source={} arrival={} copied={} compressed={}",timingSequence,std::chrono::duration_cast<std::chrono::nanoseconds>(arrival.time_since_epoch()).count()/100,copied100ns,compressedPath));
         wake.notify_one();return S_OK;
     }
@@ -1865,6 +1878,7 @@ bool CaptureCardSource::start(){
          if(!p.referenceClock)fg->SetDefaultSyncSource();
          if(SUCCEEDED(mf->GetSyncSource(&p.ageClock))&&p.ageClock&&FAILED(p.ageClock->GetTime(&p.runReference)))p.runReference=0;}}
     p.lastFrame=Impl::Clock::now();const auto hr=p.control->Run();p.info.opened=SUCCEEDED(hr);
+    if(p.info.opened&&!p.witnessHeld){stall_witness::acquire();p.witnessHeld=true;}   // stream "s10-stall"
     if(p.vendorDelivering)p.vendorDelivering->store(p.info.opened);
     if(p.info.opened&&p.wasapi&&!p.wasapi->start())p.audioError=L"WASAPI 音频启动失败；视频继续运行";
     if(p.info.opened&&p.magewellWanted){
@@ -2018,6 +2032,7 @@ SourceReadStatus CaptureCardSource::readWithWait(pipeline::FramePacket& packet,c
         p.pending=false;time=p.pendingTime;nativeTime100ns=p.pendingNativePts100ns;p.readArrival=p.pendingArrival;
         duration=p.pendingDuration;
         p.readAgeMs=std::chrono::duration<double,std::milli>(Impl::Clock::now()-p.readArrival).count();
+        stall_witness::onEnginePickup(p.readAgeMs);   // stream "s10-stall"
         if(!p.sequence)flags|=static_cast<uint32_t>(pipeline::FrameFlagBits::Open);
         if(p.dropped!=p.lastDrop)flags|=static_cast<uint32_t>(pipeline::FrameFlagBits::Drop);
         if(p.pendingDiscontinuity)flags|=static_cast<uint32_t>(pipeline::FrameFlagBits::Discontinuity);
@@ -2072,5 +2087,6 @@ void CaptureCardSource::close()noexcept{
     p.recentArrivals.clear();
     p.signalProbeEnabled=false;p.signalProbe={};p.nextSignalProbe={};
     p.driverDiscontinuity.reset();p.suppressedDriverDiscontinuities=p.discontinuitySamples=0;
+    if(p.witnessHeld){p.witnessHeld=false;stall_witness::release();}   // stream "s10-stall": after the graph stopped
 }
 }

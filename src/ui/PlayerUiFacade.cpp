@@ -46,6 +46,7 @@ bool sameNetwork(const veyra::media::NetworkStats& a, const veyra::media::Networ
 // makes the UI repaint.
 bool sameSnapshot(const veyra::engine::PlayerSnapshot& a, const veyra::engine::PlayerSnapshot& b) {
     return sameNetwork(a.network, b.network) &&
+        a.deviceLossResumePending == b.deviceLossResumePending &&
         a.presentationStatus==b.presentationStatus&&a.presentationEffective==b.presentationEffective&&
         a.presentationRevision==b.presentationRevision&&a.presentationProviderOwned==b.presentationProviderOwned&&
         a.transport == b.transport && a.sessionId == b.sessionId && a.position == b.position &&
@@ -110,7 +111,7 @@ PlayerUiFacade::Frame PlayerUiFacade::poll() {
     const bool recoveredGraphFg=snapshot.rejectedRevision>=pendingFgRevision_&&
         snapshot.desired.revision==snapshot.rejectedRevision&&
         (requestedFgBackend_==veyra::engine::FrameGenerationBackend::Vfg||requestedFgBackend_==veyra::engine::FrameGenerationBackend::Anr||
-         requestedFgBackend_==veyra::engine::FrameGenerationBackend::AmdFrc||requestedFgBackend_==veyra::engine::FrameGenerationBackend::PushFlow)&&
+         requestedFgBackend_==veyra::engine::FrameGenerationBackend::AmdFrc||requestedFgBackend_==veyra::engine::FrameGenerationBackend::PushFlow||requestedFgBackend_==veyra::engine::FrameGenerationBackend::PushWarp)&&
         snapshot.desired.frameGenerationBackend==requestedFgBackend_&&
         snapshot.desired.vfgQuality==requestedVfgQuality_&&
         requestedFgMultiplier_>1&&snapshot.desired.multiplier==1&&
