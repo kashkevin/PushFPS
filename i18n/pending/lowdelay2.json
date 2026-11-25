@@ -1,0 +1,97 @@
+{
+ "暂停：当前实际倍数不是 3×（流畅模式、自适应倍率或输出上限），回到 3× 一秒后自动继续": {
+  "en": "Paused: the multiplier in use is not 3× (Smoothness Mode, adaptive multiplier or output cap); it resumes by itself a second after 3× is back",
+  "zh-TW": "暫停：目前實際倍數不是 3×（流暢模式、自適應倍率或輸出上限），回到 3× 一秒後自動繼續",
+  "ja": "一時停止：現在の実際の倍率が 3× ではありません（スムーズモード、自動倍率または出力上限）。3× に戻って 1 秒後に自動で再開します"
+ },
+ "GPU 跳过了较多帧对": {
+  "en": "the GPU skipped many frame pairs",
+  "zh-TW": "GPU 跳過了較多幀對",
+  "ja": "GPU が多くのフレームペアをスキップしました"
+ },
+ "画面重新开始": {
+  "en": "the picture restarted",
+  "zh-TW": "畫面重新開始",
+  "ja": "映像が最初からやり直しになりました"
+ },
+ "预测多数不可靠": {
+  "en": "most predictions were unusable",
+  "zh-TW": "預測多數不可靠",
+  "ja": "予測の大半が使えませんでした"
+ },
+ "预测帧来不及": {
+  "en": "predicted frames came too late",
+  "zh-TW": "預測幀來不及",
+  "ja": "予測フレームが間に合いませんでした"
+ },
+ "预测帧在这块显卡上太慢": {
+  "en": "the predicted frame is too slow on this graphics card",
+  "zh-TW": "預測幀在這張顯示卡上太慢",
+  "ja": "このグラフィックスカードでは予測フレームが遅すぎます"
+ },
+ "设置改变或倍数不是 3×": {
+  "en": "settings changed or the multiplier is not 3×",
+  "zh-TW": "設定改變或倍數不是 3×",
+  "ja": "設定が変わったか、倍率が 3× ではありません"
+ },
+ "正在运行：每秒 %1 个预测帧（%2% 的帧对）": {
+  "en": "Running: %1 predicted frames a second (%2% of frame pairs)",
+  "zh-TW": "正在執行：每秒 %1 個預測幀（%2% 的幀對）",
+  "ja": "実行中：毎秒 %1 枚の予測フレーム（フレームペアの %2%）"
+ },
+ "没有运行：%1。补帧照常。": {
+  "en": "Not running: %1. Frame generation continues.",
+  "zh-TW": "沒有執行：%1。補幀照常。",
+  "ja": "実行していません：%1。フレーム生成は通常どおりです。"
+ },
+ "画面一直没有稳定": {
+  "en": "the picture never became steady",
+  "zh-TW": "畫面一直沒有穩定",
+  "ja": "映像が一度も安定しませんでした"
+ },
+ "等待中：%1/%2 对帧稳定": {
+  "en": "Waiting: %1 of %2 frame pairs steady",
+  "zh-TW": "等待中：%1/%2 對幀穩定",
+  "ja": "待機中：%2 組中 %1 組のフレームペアが安定"
+ },
+ "；上次停止：%1（%2 秒前）": {
+  "en": "; last stop: %1 (%2 s ago)",
+  "zh-TW": "；上次停止：%1（%2 秒前）",
+  "ja": "；前回の停止：%1（%2 秒前）"
+ },
+ "等待画面": {
+  "en": "Waiting for the picture",
+  "zh-TW": "等待畫面",
+  "ja": "映像を待っています"
+ },
+ "没有运行：补帧管线还没有重建（原因见日志）": {
+  "en": "Not running: the frame-generation pipeline has not been rebuilt (the log says why)",
+  "zh-TW": "沒有執行：補幀管線還沒有重建（原因見日誌）",
+  "ja": "実行していません：フレーム生成のパイプラインがまだ作り直されていません（理由はログを参照）"
+ },
+ "这一行被关闭": {
+  "en": "the row was switched off",
+  "zh-TW": "這一行被關閉",
+  "ja": "この行がオフにされました"
+ },
+ "补帧暂时停止": {
+  "en": "frame generation paused",
+  "zh-TW": "補幀暫時停止",
+  "ja": "フレーム生成が一時停止しました"
+ },
+ "正在检查：这块显卡上的运动估计（只在第一次开启时，最多 3 秒）": {
+  "en": "Checking: motion estimation on this graphics card (only the first time it is switched on, at most 3 seconds)",
+  "zh-TW": "正在檢查：這張顯示卡上的運動估計（只在第一次開啟時，最多 3 秒）",
+  "ja": "確認中：このグラフィックスカードでの動き推定（最初にオンにしたときだけ、最大 3 秒）"
+ },
+ "不在这里运行：运动估计在这块显卡上太慢（开启时的检查测得，原因见日志）": {
+  "en": "Not running here: motion estimation is too slow on this graphics card (measured by the check at switch-on; see the log)",
+  "zh-TW": "不在這裡執行：運動估計在這張顯示卡上太慢（開啟時的檢查測得，原因見記錄）",
+  "ja": "ここでは動作しません：このグラフィックスカードでは動き推定が遅すぎます（オン時の確認で測定、理由はログ）"
+ },
+ "已停用到这次播放结束：%1。补帧照常（关闭再开启这一行可再试）": {
+  "en": "Stopped until this playback ends: %1. Frame generation continues as usual (switch the row off and on to try again)",
+  "zh-TW": "已停用到這次播放結束：%1。補幀照常（關閉再開啟這一行可再試）",
+  "ja": "この再生が終わるまで停止：%1。フレーム生成は通常どおり続きます（この行をオフにしてからオンにすると再試行します）"
+ }
+}
