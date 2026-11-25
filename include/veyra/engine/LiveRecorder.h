@@ -142,6 +142,7 @@ public:
 
     // PresentCapture: engine thread, inside VideoPresenter::present().
     bool record(ID3D12GraphicsCommandList* list,const Frame& frame) override;
+    bool capturing() const override { return active(); }   // recording, replay buffer, stream, comparison clip: armed
     void submitted(ID3D12Fence* fence,uint64_t value) override;
     void discarded() override;
     // PushFPS: a comparison clip is recording, so the presenter should pass the raw console picture.

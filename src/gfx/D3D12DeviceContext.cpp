@@ -5,8 +5,10 @@
 #include <winevt.h>
 #pragma comment(lib, "wevtapi.lib")
 
+#include <atomic>
 #include <format>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "veyra/Log.h"
@@ -148,12 +150,19 @@ bool D3D12DeviceContext::initialize(const DeviceContextDesc& desc, Status& statu
         dredSettings->SetPageFaultEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
     }
     veyra::log::info("dred",std::format("configured before device creation hr=0x{:X} breadcrumbs={} pageFault={}",unsigned(dredHr),SUCCEEDED(dredHr),SUCCEEDED(dredHr)));
-    // 1. Optional debug layer.
-    if (desc.enableDebugLayer) {
+    // 1. Optional debug layer. TEST ONLY: VEYRA_TEST_D3D12_DEBUG=1 (environment) turns it on and logs its errors through
+    // the info queue below; VEYRA_TEST_D3D12_GBV=1 adds GPU-based validation (CI's end-to-end engine test on WARP).
+    const bool testDebug = GetEnvironmentVariableW(L"VEYRA_TEST_D3D12_DEBUG", nullptr, 0) > 0;
+    if (desc.enableDebugLayer || testDebug) {
         ComPtr<ID3D12Debug> debug;
         HRESULT result = D3D12GetDebugInterface(IID_PPV_ARGS(&debug));
         if (SUCCEEDED(result)) {
             debug->EnableDebugLayer();
+            ComPtr<ID3D12Debug1> debug1;
+            if (testDebug && GetEnvironmentVariableW(L"VEYRA_TEST_D3D12_GBV", nullptr, 0) > 0 && SUCCEEDED(debug.As(&debug1))) {
+                debug1->SetEnableGPUBasedValidation(TRUE);
+                veyra::log::warn("gfx", "TEST-ONLY VEYRA_TEST_D3D12_GBV=1: GPU-based validation on");
+            }
             debugLayerEnabled_ = true;
             veyra::log::info("gfx", "d3d12 debug layer enabled");
         }
@@ -217,6 +226,17 @@ bool D3D12DeviceContext::initialize(const DeviceContextDesc& desc, Status& statu
         }
     }
 
+    // TEST ONLY (stream "e2e", docs/drafts/E2E_ENGINE_TEST.md): CI's Windows runner has no hardware adapter. With
+    // VEYRA_TEST_ALLOW_WARP=1 (environment only) and no adapter pinned by vendor or LUID, WARP is used instead of failing.
+    if (!chosen && !desc.requiredVendorId && !desc.requiredLuid && GetEnvironmentVariableW(L"VEYRA_TEST_ALLOW_WARP", nullptr, 0) > 0) {
+        ComPtr<IDXGIAdapter1> warp;
+        if (SUCCEEDED(factory_->EnumWarpAdapter(IID_PPV_ARGS(&warp))) && SUCCEEDED(warp->GetDesc1(&chosenDesc)) &&
+            SUCCEEDED(D3D12CreateDevice(warp.Get(), D3D_FEATURE_LEVEL_12_0, __uuidof(ID3D12Device), nullptr))) {
+            adapter_ = warp;
+            chosen = true;
+            veyra::log::warn("gfx", "TEST-ONLY VEYRA_TEST_ALLOW_WARP=1: no hardware adapter; using WARP (software renderer)");
+        }
+    }
     if (!chosen) {
         status = Status::DeviceFailure;
         veyra::log::error("gfx", "no compatible requested D3D12 hardware adapter found");
@@ -235,6 +255,25 @@ bool D3D12DeviceContext::initialize(const DeviceContextDesc& desc, Status& statu
         status = Status::DeviceFailure;
         veyra::log::error("gfx", std::format("D3D12CreateDevice failed hr={}", veyra::hresultString(result)));
         return false;
+    }
+
+    if (testDebug && debugLayerEnabled_) {
+        // TEST ONLY: the debug layer's messages into the log (errors and corruption; the first 200 warnings).
+        ComPtr<ID3D12InfoQueue1> queue;
+        DWORD cookie = 0;
+        if (SUCCEEDED(device_.As(&queue)) && SUCCEEDED(queue->RegisterMessageCallback(
+                [](D3D12_MESSAGE_CATEGORY, D3D12_MESSAGE_SEVERITY severity, D3D12_MESSAGE_ID id, LPCSTR text, void*) {
+                    static std::atomic<unsigned> warnings{0};
+                    if (severity <= D3D12_MESSAGE_SEVERITY_ERROR)
+                        veyra::log::error("d3d12-debug", std::format("id={} {}", int(id), text ? text : ""));
+                    else if (severity == D3D12_MESSAGE_SEVERITY_WARNING && warnings.fetch_add(1) < 200)
+                        veyra::log::warn("d3d12-debug", std::format("id={} {}", int(id), text ? text : ""));
+                }, D3D12_MESSAGE_CALLBACK_FLAG_NONE, nullptr, &cookie)))
+            veyra::log::warn("gfx", "TEST-ONLY VEYRA_TEST_D3D12_DEBUG=1: debug layer messages are logged as [d3d12-debug]");
+        else
+            veyra::log::warn("gfx", "TEST-ONLY VEYRA_TEST_D3D12_DEBUG=1: debug layer on, but ID3D12InfoQueue1 is unavailable (messages not logged)");
+    } else if (testDebug) {
+        veyra::log::warn("gfx", "TEST-ONLY VEYRA_TEST_D3D12_DEBUG=1: the debug layer is not installed on this machine (Graphics Tools)");
     }
 
     const D3D_FEATURE_LEVEL requested[] = { D3D_FEATURE_LEVEL_12_2, D3D_FEATURE_LEVEL_12_1, D3D_FEATURE_LEVEL_12_0 };
@@ -257,6 +296,17 @@ bool D3D12DeviceContext::initialize(const DeviceContextDesc& desc, Status& statu
     queueDesc.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
     queueDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
     queueDesc.NodeMask = 0;
+    // PushFPS stream "delay90" asked for a HIGH-priority graph queue with VEYRA_EXP_RP_GRAPH_QUEUE_PRIORITY=high. Stream
+    // "lagfix" (the owner's 24th message) made it inert: the presentation queue stays NORMAL, so a real frame's blit
+    // could wait behind graph work of the next pair, and raising both queues only moves the same contention elsewhere;
+    // nothing on Linux can show which is better. The value is still read and logged; the queue stays NORMAL.
+    {
+        wchar_t graphPriority[8]{};
+        const DWORD length = GetEnvironmentVariableW(L"VEYRA_EXP_RP_GRAPH_QUEUE_PRIORITY", graphPriority, 8);
+        if (length > 0)
+            veyra::log::info("graph-priority", std::format("requested={} selected=NORMAL disabled: can make playback worse (VEYRA_EXP_RP_GRAPH_QUEUE_PRIORITY)",
+                length < 8 && std::wstring_view(graphPriority, length) == L"high" ? "HIGH" : "unknown"));
+    }
     result = device_->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&queue_));
     if (FAILED(result)) {
         status = Status::DeviceFailure;

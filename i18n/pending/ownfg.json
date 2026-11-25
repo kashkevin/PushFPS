@@ -1,0 +1,117 @@
+{
+ "需要 NVIDIA VFG 或 PushFlow 补帧，倍数设为 3×": {
+  "en": "Needs NVIDIA VFG or PushFlow frame generation at 3×",
+  "zh-TW": "需要 NVIDIA VFG 或 PushFlow 補幀，倍數設為 3×",
+  "ja": "NVIDIA VFG または PushFlow のフレーム生成（3×）が必要です"
+ },
+ "PushFPS 帧在这块显卡上没有通过开启时的检查：更低延迟在这里不可用（原因见日志）": {
+  "en": "The PushFPS frame did not pass its start-up check on this graphics card: Lower delay is not available here (the log says why)",
+  "zh-TW": "PushFPS 幀在這張顯示卡上沒有通過開啟時的檢查：更低延遲在這裡無法使用（原因見記錄）",
+  "ja": "PushFPS のフレームはこのグラフィックカードで起動時のチェックに合格しませんでした：ここでは低遅延を使えません（理由はログを参照）"
+ },
+ "现在由 PushFPS 生成": {
+  "en": "PushFPS makes it now",
+  "zh-TW": "現在由 PushFPS 產生",
+  "ja": "現在は PushFPS が生成しています"
+ },
+ "插值帧来源": {
+  "en": "Interpolated frame source",
+  "zh-TW": "插值幀來源",
+  "ja": "補間フレームの生成元"
+ },
+ "NVIDIA 的补帧不接受这个请求；你可以改选 PushFPS 自己的帧。": {
+  "en": "NVIDIA's frame generation does not accept this request; you can choose PushFPS's own frame instead.",
+  "zh-TW": "NVIDIA 的補幀不接受這個請求；你可以改選 PushFPS 自己的幀。",
+  "ja": "NVIDIA のフレーム生成はこの要求を受け付けません。代わりに PushFPS 独自のフレームを選べます。"
+ },
+ "PushFPS 帧在这块显卡上太慢：更低延迟在这里不可用（原因见日志）": {
+  "en": "The PushFPS frame is too slow on this graphics card: Lower delay is not available here (the log says why)",
+  "zh-TW": "PushFPS 幀在這張顯示卡上太慢：更低延遲在這裡無法使用（原因見記錄）",
+  "ja": "PushFPS のフレームはこのグラフィックカードでは遅すぎます：ここでは低遅延を使えません（理由はログを参照）"
+ },
+ "PushFPS 帧在这块显卡上太慢：选择 PushFPS 时更低延迟不可用（原因见日志）。改选 NVIDIA 可以继续使用。": {
+  "en": "The PushFPS frame is too slow on this graphics card: with PushFPS chosen, Lower delay is not available (the log says why). Choose NVIDIA to keep using it.",
+  "zh-TW": "PushFPS 幀在這張顯示卡上太慢：選擇 PushFPS 時更低延遲無法使用（原因見記錄）。改選 NVIDIA 可以繼續使用。",
+  "ja": "PushFPS のフレームはこのグラフィックカードでは遅すぎます：PushFPS を選んでいる間は低遅延を使えません（理由はログを参照）。NVIDIA を選べば引き続き使えます。"
+ },
+ "PushFPS 帧在这块显卡上没有通过开启时的检查：选择 PushFPS 时更低延迟不可用（原因见日志）。改选 NVIDIA 可以继续使用。": {
+  "en": "The PushFPS frame did not pass its start-up check on this graphics card: with PushFPS chosen, Lower delay is not available (the log says why). Choose NVIDIA to keep using it.",
+  "zh-TW": "PushFPS 幀在這張顯示卡上沒有通過開啟時的檢查：選擇 PushFPS 時更低延遲無法使用（原因見記錄）。改選 NVIDIA 可以繼續使用。",
+  "ja": "PushFPS のフレームはこのグラフィックカードで起動時のチェックに合格しませんでした：PushFPS を選んでいる間は低遅延を使えません（理由はログを参照）。NVIDIA を選べば引き続き使えます。"
+ },
+ "PushFPS 帧在这里不可用：完全预测不会运行（原因见日志）": {
+  "en": "The PushFPS frame is not available here: full prediction does not run (the log says why)",
+  "zh-TW": "PushFPS 幀在這裡無法使用：完全預測不會執行（原因見記錄）",
+  "ja": "ここでは PushFPS のフレームを使えません：完全予測は動作しません（理由はログを参照）"
+ },
+ "完全预测已停用到这次播放结束（%1）：现在每个真实帧配一个预测帧（关闭再开启可再试）": {
+  "en": "Full prediction is off until this playback ends (%1): each real frame now gets one predicted frame (switch it off and on to try again)",
+  "zh-TW": "完全預測已停用到這次播放結束（%1）：現在每個真實幀配一個預測幀（關閉再開啟可再試）",
+  "ja": "完全予測はこの再生が終わるまでオフです（%1）：現在は実フレームごとに予測フレームを 1 枚使います（オフにしてからオンにすると再試行します）"
+ },
+ "完全预测（实验）": {
+  "en": "Full prediction (experimental)",
+  "zh-TW": "完全預測（實驗）",
+  "ja": "完全予測（実験）"
+ },
+ "引擎未接受该设置，仍使用 NVIDIA 的画面": {
+  "en": "The engine did not accept the setting; NVIDIA's frame stays in use",
+  "zh-TW": "引擎未接受該設定，仍使用 NVIDIA 的畫面",
+  "ja": "エンジンがこの設定を受け付けませんでした。NVIDIA のフレームを引き続き使います"
+ },
+ "当前补帧方式下只有 PushFPS 可用（实验性，没有做过端到端测试）。": {
+  "en": "With the current frame generation only PushFPS is available (experimental, not tested end to end).",
+  "zh-TW": "目前的補幀方式下只有 PushFPS 可用（實驗性，沒有做過端對端測試）。",
+  "ja": "現在のフレーム生成では PushFPS のみ使えます（実験的、エンドツーエンドのテストは未実施）。"
+ },
+ "暂时退回到每个真实帧配一个预测帧：%1（%2/%3 对稳定后再试）": {
+  "en": "Stepped back to one predicted frame per real frame for now: %1 (tries again after %2/%3 calm pairs)",
+  "zh-TW": "暫時退回到每個真實幀配一個預測幀：%1（%2/%3 對穩定後再試）",
+  "ja": "一時的に実フレームごとに予測フレーム 1 枚に戻しました：%1（安定したペアが %2/%3 になると再試行）"
+ },
+ "正在准备 PushFPS 帧：补帧管线重建并检查（连同运动估计最多 3 秒）": {
+  "en": "Preparing the PushFPS frame: the frame-generation pipeline is rebuilt and checked (at most 3 s together with the motion estimation)",
+  "zh-TW": "正在準備 PushFPS 幀：補幀管線重建並檢查（連同運動估計最多 3 秒）",
+  "ja": "PushFPS のフレームを準備中：フレーム生成のパイプラインを作り直して確認しています（動き推定と合わせて最大 3 秒）"
+ },
+ "正在运行：每秒 %1 个帧对是真实帧在前、两帧预测": {
+  "en": "Running: %1 pairs per second show the real frame first, then predicted frames",
+  "zh-TW": "正在執行：每秒 %1 個幀對是真實幀在前、兩幀預測",
+  "ja": "動作中：毎秒 %1 ペアで実フレームを先に表示し、その後に予測フレーム"
+ },
+ "等待：更低延迟运行时才会使用": {
+  "en": "Waiting: used only while Lower delay runs",
+  "zh-TW": "等待：更低延遲執行時才會使用",
+  "ja": "待機中：低遅延が動作しているときだけ使います"
+ },
+ "真实画面提前一个显示帧出现。实验功能，尚未在任何电脑上实测：延迟减少多少、画面如何，都要你自己看。每三帧中有一帧是预测的：快速转动镜头、爆炸/烟雾/雨、闪光和渐变时，那一帧会停在真实画面上，看起来会有轻微顿挫；运动物体的前缘和细线（电线、栏杆）可能轻微抖动或变形。预测不好的帧会照常显示（不可靠的部分保持真实画面），只有长时间大部分不可用、预测帧开始迟到、预测帧在这块显卡上太慢，或画面经常中断（跳过或停止的帧对）时，才自动改回普通补帧；同一原因连续三次后，这次播放中不再尝试。GPU 很吃紧时，个别帧的延迟可能反而比关闭时高。只用于采集卡和 3× 补帧：NVIDIA VFG，或 PushFlow（PushFlow 下预测帧对的第一帧由 PushFPS 生成：实验性，没有做过端到端测试）。开启和关闭都立即生效：本次运行第一次开启时补帧管线重建一次并检查运动估计（最多 3 秒），画面可能停顿片刻；之后再开关不再重建。": {
+  "en": "The real picture is shown one displayed frame earlier. Experimental and not yet measured on any PC: how much delay it saves and how the picture looks, you have to see for yourself. One frame in three is predicted: during fast camera turns, explosions / smoke / rain, flashes and fades that frame stays on the real picture and you may see a slight judder; the front edges of moving objects and thin lines (wires, railings) can jitter or bend slightly. Bad predictions are still shown (their unreliable parts keep the real picture); it switches back to normal frame generation by itself only when prediction is mostly unusable for a long time, predicted frames start arriving late, predicted frames are too slow on this graphics card, or the picture is often interrupted (skipped or stopped pairs); after three times for the same reason it does not try again during this playback. When the GPU is very busy, some frames can even have more delay than with it off. Only for a capture card with 3× frame generation: NVIDIA VFG, or PushFlow (with PushFlow the first frame of a predicted pair is made by PushFPS: experimental, not tested end to end). Turning it on or off applies at once: the first time it is turned on in a run, the frame-generation pipeline is rebuilt once and the motion estimation is checked (at most 3 s), and the picture may pause for a moment; switching it later does not rebuild again.",
+  "zh-TW": "真實畫面提前一個顯示幀出現。實驗功能，尚未在任何電腦上實測：延遲減少多少、畫面如何，都要你自己看。每三幀中有一幀是預測的：快速轉動鏡頭、爆炸/煙霧/雨、閃光和漸變時，那一幀會停在真實畫面上，看起來會有輕微頓挫；運動物體的前緣和細線（電線、欄杆）可能輕微抖動或變形。預測不好的幀會照常顯示（不可靠的部分保持真實畫面），只有長時間大部分不可用、預測幀開始遲到、預測幀在這張顯示卡上太慢，或畫面經常中斷（跳過或停止的幀對）時，才自動改回一般補幀；同一原因連續三次後，這次播放中不再嘗試。GPU 很吃緊時，個別幀的延遲可能反而比關閉時高。只用於擷取卡和 3× 補幀：NVIDIA VFG，或 PushFlow（PushFlow 下預測幀對的第一幀由 PushFPS 產生：實驗性，沒有做過端對端測試）。開啟和關閉都立即生效：本次執行第一次開啟時補幀管線重建一次並檢查運動估計（最多 3 秒），畫面可能停頓片刻；之後再開關不再重建。",
+  "ja": "実際の映像が表示 1 フレーム分早く現れます。実験的な機能で、まだどの PC でも実測していません。遅延がどれだけ減るか、映像がどう見えるかはご自身で確かめてください。3 枚に 1 枚は予測したフレームです：カメラを素早く回したとき、爆発・煙・雨、フラッシュやフェードでは、そのフレームは実際の映像のままになり、わずかなカクつきに見えることがあります。動く物体の前の縁や細い線（電線、手すり）がわずかに揺れたり歪んだりすることがあります。予測が良くないフレームもそのまま表示されます（信頼できない部分は実際の映像のままです）。予測がほとんど使えない状態が長く続く、予測フレームが遅れ始める、予測フレームがこのグラフィックカードでは遅すぎる、または映像が頻繁に途切れる（スキップや停止したフレームペア）ときだけ、通常のフレーム生成に自動で戻ります。同じ理由で 3 回続くと、この再生中はもう試しません。GPU に余裕がないときは、一部のフレームの遅延がオフのときより大きくなることもあります。キャプチャーカードと 3× のフレーム生成でのみ使えます：NVIDIA VFG、または PushFlow（PushFlow では予測ペアの最初のフレームを PushFPS が作ります：実験的、エンドツーエンドのテストは未実施）。オンとオフはどちらもすぐに反映されます。この実行で初めてオンにしたときだけ、フレーム生成のパイプラインが 1 回作り直され、動き推定が確認され（最大 3 秒）、映像が一瞬止まることがあります。その後の切り替えでは作り直しません。"
+ },
+ "预测帧对中的第一帧（两个真实帧之间的插值帧）由谁生成。NVIDIA（默认）：由 VFG 生成。PushFPS：PushFPS 自己的运动补偿帧，使用与预测帧相同的运动估计，不需要 NVIDIA。PushFPS 帧只在合成测试画面上比较过（离线测量）：在那里它平均比学习型插帧模型略差（约 0.6 dB），细小物体前后有运动时（栏杆后面的车辆）差约 4 dB，闪光和渐变时差约 3 dB。没有在游戏画面上测试过，也没有在任何真实显卡上运行过，它在你的显卡上的开销未知。只在想测试它时使用；看到细小物体撕裂或画面变晚，就改回 NVIDIA。第一次选择 PushFPS 时补帧管线重建一次并检查它（连同运动估计最多 3 秒）。NVIDIA 拒绝单独生成这一帧时，不会自动改用 PushFPS。": {
+  "en": "Who makes the first frame of a predicted pair (the interpolated frame between two real frames). NVIDIA (default): made by VFG. PushFPS: PushFPS's own motion-compensated frame, from the same motion estimate the predicted frame uses; it does not need NVIDIA. The PushFPS frame was compared only on synthetic test scenes (offline measurement): there it was slightly worse than a learned interpolator on average (about 0.6 dB), about 4 dB worse with motion in front of and behind thin objects (cars behind a railing), and about 3 dB worse in flashes and fades. It has not been tested on game footage or run on any real graphics card, and its cost on yours is unknown. Use it only if you want to test it; if you see tearing of thin objects or a later picture, switch back to NVIDIA. The first time PushFPS is chosen, the frame-generation pipeline is rebuilt once and checks it (at most 3 s together with the motion estimation). When NVIDIA refuses to make this frame on its own, PushFPS is not used automatically.",
+  "zh-TW": "預測幀對中的第一幀（兩個真實幀之間的插值幀）由誰產生。NVIDIA（預設）：由 VFG 產生。PushFPS：PushFPS 自己的運動補償幀，使用與預測幀相同的運動估計，不需要 NVIDIA。PushFPS 幀只在合成測試畫面上比較過（離線測量）：在那裡它平均比學習型插幀模型略差（約 0.6 dB），細小物體前後有運動時（欄杆後面的車輛）差約 4 dB，閃光和漸變時差約 3 dB。沒有在遊戲畫面上測試過，也沒有在任何真實顯示卡上執行過，它在你的顯示卡上的開銷未知。只在想測試它時使用；看到細小物體撕裂或畫面變晚，就改回 NVIDIA。第一次選擇 PushFPS 時補幀管線重建一次並檢查它（連同運動估計最多 3 秒）。NVIDIA 拒絕單獨產生這一幀時，不會自動改用 PushFPS。",
+  "ja": "予測ペアの最初のフレーム（2 枚の実フレームの間の補間フレーム）を誰が作るか。NVIDIA（既定）：VFG が作ります。PushFPS：PushFPS 独自の動き補償フレームで、予測フレームと同じ動き推定を使い、NVIDIA を必要としません。PushFPS のフレームは合成テスト映像でのみ比較しました（オフライン測定）：そこでは平均で学習型補間モデルよりわずかに劣り（約 0.6 dB）、細い物体の前後に動きがあるとき（手すりの後ろの車）は約 4 dB、フラッシュやフェードでは約 3 dB 劣りました。ゲーム映像でのテストも、実際のグラフィックカードでの実行もしておらず、お使いのカードでの負荷は不明です。試したい場合だけ使い、細い物体の裂けや映像の遅れが見えたら NVIDIA に戻してください。初めて PushFPS を選んだとき、フレーム生成のパイプラインを 1 回作り直して確認します（動き推定と合わせて最大 3 秒）。NVIDIA がこのフレームだけの生成を拒否しても、自動で PushFPS に切り替わることはありません。"
+ },
+ "真实画面最先显示，同一帧对里另外的帧都从它预测出来，不再等任何生成的帧（3× 时两个预测帧，流畅模式 2× 时一个）。画面代价是实际存在的：3× 时每三帧中有两帧是预测的。在合成测试画面上（离线测量，不是游戏画面），按真实帧之后的位置，第一个预测帧比学习型插帧模型的插值帧差约 %1 dB，第二个差约 %2 dB，物体位置偏差更大；从遮挡后面出现的东西无法预测，会停在真实画面上。没有在任何显卡上测量过，延迟能减少多少也没有测量。预测多数不可靠、预测帧来不及或在这块显卡上太慢时，先退回到每个真实帧配一个预测帧并在这里说明，不会直接跳回普通补帧；同一原因三次后，这次播放中不再尝试。使用 PushFPS 帧：第一次开启时补帧管线重建一次。": {
+  "en": "The real picture is shown first and the other frames of the pair are predicted from it, without waiting for any generated frame (two predicted frames at 3×, one at Smoothness Mode's 2×). The picture cost is real: at 3× two frames in three are predicted. On synthetic test scenes (offline measurement, not game footage), by their place after the real frame, the first predicted frame was about %1 dB and the second about %2 dB worse than a learned interpolator's in-between frame, with objects placed further off; what appears from behind something cannot be predicted and stays at the real picture. Nothing has been measured on any graphics card, and how much delay it saves has not been measured either. When predictions are mostly unreliable, arrive too late or are too slow on this graphics card, it first steps back to one predicted frame per real frame and says so here; it does not jump straight back to normal frame generation. After three times for the same reason it does not try again during this playback. Uses the PushFPS frame: the frame-generation pipeline is rebuilt once the first time it is turned on.",
+  "zh-TW": "真實畫面最先顯示，同一幀對裡另外的幀都從它預測出來，不再等任何產生的幀（3× 時兩個預測幀，流暢模式 2× 時一個）。畫面代價是實際存在的：3× 時每三幀中有兩幀是預測的。在合成測試畫面上（離線測量，不是遊戲畫面），按真實幀之後的位置，第一個預測幀比學習型插幀模型的插值幀差約 %1 dB，第二個差約 %2 dB，物體位置偏差更大；從遮擋後面出現的東西無法預測，會停在真實畫面上。沒有在任何顯示卡上測量過，延遲能減少多少也沒有測量。預測多數不可靠、預測幀來不及或在這張顯示卡上太慢時，先退回到每個真實幀配一個預測幀並在這裡說明，不會直接跳回一般補幀；同一原因三次後，這次播放中不再嘗試。使用 PushFPS 幀：第一次開啟時補幀管線重建一次。",
+  "ja": "実際の映像を最初に表示し、同じペアの残りのフレームはそこから予測します。生成されたフレームを待ちません（3× では予測フレーム 2 枚、なめらかモードの 2× では 1 枚）。映像の代償は実在します：3× では 3 枚に 2 枚が予測フレームです。合成テスト映像（オフライン測定、ゲーム映像ではありません）では、実フレームの後の位置で、1 枚目の予測フレームは学習型補間モデルの補間フレームより約 %1 dB、2 枚目は約 %2 dB 劣り、物体の位置のずれも大きくなりました。何かの後ろから現れるものは予測できず、実際の映像のままになります。どのグラフィックカードでも測定しておらず、遅延がどれだけ減るかも測定していません。予測がほとんど信頼できない、予測フレームが間に合わない、またはこのグラフィックカードでは遅すぎるときは、まず実フレームごとに予測フレーム 1 枚に戻し、ここでそう表示します。通常のフレーム生成に直接戻ることはありません。同じ理由で 3 回続くと、この再生中はもう試しません。PushFPS のフレームを使います：初めてオンにしたとき、フレーム生成のパイプラインを 1 回作り直します。"
+ },
+ "PushFPS 自己的运动补偿补帧：每个帧对只估计一次运动，这一对的所有生成帧都用它；不需要 NVIDIA，全部在同一个 DirectX 12 队列上运行。只在合成测试画面上比较过，没有在游戏画面上测试过，也没有在任何真实显卡上运行过，它在你的显卡上的开销未知；2X～4X，实验。": {
+  "en": "PushFPS's own motion-compensated frame generation: motion is estimated once per pair and every generated frame of the pair uses it; it does not need NVIDIA and runs entirely on one DirectX 12 queue. It was compared only on synthetic test scenes; it has not been tested on game footage or run on any real graphics card, and its cost on yours is unknown; 2X-4X, experimental.",
+  "zh-TW": "PushFPS 自己的運動補償補幀：每個幀對只估計一次運動，這一對的所有產生幀都用它；不需要 NVIDIA，全部在同一個 DirectX 12 佇列上執行。只在合成測試畫面上比較過，沒有在遊戲畫面上測試過，也沒有在任何真實顯示卡上執行過，它在你的顯示卡上的開銷未知；2X～4X，實驗。",
+  "ja": "PushFPS 独自の動き補償フレーム生成：動きはペアごとに 1 回だけ推定し、そのペアのすべての生成フレームで使います。NVIDIA を必要とせず、すべて 1 つの DirectX 12 キューで動作します。合成テスト映像でのみ比較しており、ゲーム映像でのテストも実際のグラフィックカードでの実行もしておらず、お使いのカードでの負荷は不明です。2X～4X、実験的。"
+ },
+ "PushWarp · PushFPS 自研运动补偿 · 2X～4X · 实验": {
+  "en": "PushWarp · PushFPS motion compensation · 2X-4X · experimental",
+  "zh-TW": "PushWarp · PushFPS 自研運動補償 · 2X～4X · 實驗",
+  "ja": "PushWarp · PushFPS 独自の動き補償 · 2X～4X · 実験"
+ },
+ "PushWarp 未能启用（开启时的检查没有通过，或超过 3 秒），已关闭补帧；原因见日志": {
+  "en": "PushWarp could not start (its start-up check did not pass, or took more than 3 s); frame generation is off; the log says why",
+  "zh-TW": "PushWarp 未能啟用（開啟時的檢查沒有通過，或超過 3 秒），已關閉補幀；原因見記錄",
+  "ja": "PushWarp を開始できませんでした（起動時のチェックに合格しなかったか、3 秒を超えました）。フレーム生成はオフです。理由はログを参照"
+ }
+}

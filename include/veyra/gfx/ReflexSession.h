@@ -16,6 +16,32 @@ public:
     struct SleepParams {uint32_t version;uint8_t low,boost;uint32_t interval;uint8_t markers,minQueue,reserved[30];};
     struct MarkerParams {uint32_t version;uint64_t frame;uint32_t type;uint64_t reserved0;uint8_t reserved[56];};
     static_assert(sizeof(SleepParams)==44&&sizeof(MarkerParams)==88);
+    // NV_GET_SLEEP_STATUS_PARAMS_V1 (nvapi.h, NVIDIA/nvapi main, MIT): what the driver reports about low latency
+    // (stream "present" R2, [present-path]; read on a change check, never per frame).
+    struct SleepStatusParams {uint32_t version;uint8_t lowLatency,fsVrr,cplVsyncOn;uint32_t sleepIntervalUs;uint8_t useGameSleep,fullscreenIFlip,fgMultiplier,dfgControl;uint32_t dfgTargetUs;uint8_t reserved[114];};
+    static_assert(sizeof(SleepStatusParams)==136);
+    using GetStatus=int(__cdecl*)(IUnknown*,SleepStatusParams*);
+    struct DriverStatus {bool known=false;int result=-1;bool lowLatency=false,fsVrr=false,cplVsyncOn=false,useGameSleep=false,fullscreenIFlip=false;uint32_t sleepIntervalUs=0;};
+    DriverStatus driverStatus()const{
+        DriverStatus s;
+        if(!status_||!device_)return s;
+        SleepStatusParams p{};p.version=sizeof(p)|(1u<<16);
+        s.result=status_(device_,&p);s.known=s.result==0;
+        if(s.known){s.lowLatency=p.lowLatency!=0;s.fsVrr=p.fsVrr!=0;s.cplVsyncOn=p.cplVsyncOn!=0;s.useGameSleep=p.useGameSleep!=0;s.fullscreenIFlip=p.fullscreenIFlip!=0;s.sleepIntervalUs=p.sleepIntervalUs;}
+        return s;
+    }
+    // Host times (steady clock, 100 ns) of the last Sleep that returned (0 before the first).
+    int64_t lastSleepStart100ns()const{return lastSleepStart100ns_;}
+    int64_t lastSleepEnd100ns()const{return lastSleepEnd100ns_;}
+    // Stream "present" R11 (engine/PushFgHealth.h PushReflexOverrunGuard): on a capture card with frame generation the
+    // Sleep kept running past the arrival of the sample read after it. Low latency ends (SetSleepMode off, as the stall
+    // guard does); not counted as a stall: the interface shows its own text (VideoPresenter::reflexOverrunEnded).
+    void endForOverrun(unsigned window,double lastOverrunMs){
+        if(!active_)return;
+        log::warn("reflex",std::format("sleep overrun: in two consecutive blocks of the last {} measured sleeps at least 4 per block ended more than 0.5 ms after the capture sample had arrived (last {:.3f} ms; up to that much is added to that real frame); low latency off for this source session (VEYRA_TEST_RP_LEGACY_REFLEX_SLEEP=1 keeps it)",
+            window,lastOverrunMs));
+        fail("sleep-overrun",0);
+    }
     using Set=int(__cdecl*)(IUnknown*,SleepParams*);
     using Sleep=int(__cdecl*)(IUnknown*);
     using Marker=int(__cdecl*)(IUnknown*,MarkerParams*);
@@ -87,7 +113,10 @@ public:
         // How long the driver really holds the source read, for the disable log.
         const auto start=std::chrono::steady_clock::now();
         const int r=api_.sleep(device_);if(r){fail("sleep",r);return 0;}
-        const auto us=uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now()-start).count());
+        const auto end=std::chrono::steady_clock::now();
+        const auto us=uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(end-start).count());
+        lastSleepStart100ns_=std::chrono::duration_cast<std::chrono::nanoseconds>(start.time_since_epoch()).count()/100;
+        lastSleepEnd100ns_=std::chrono::duration_cast<std::chrono::nanoseconds>(end.time_since_epoch()).count()/100;
         ++sleeps_;sleepUs_+=us;maxSleepUs_=std::max(maxSleepUs_,us);
         if(stallUs){
             stallHistory_=((stallHistory_<<1)|uint32_t(us>stallUs))&((1u<<kStallWindow)-1);
@@ -137,9 +166,10 @@ private:
         auto query=module_?reinterpret_cast<Query>(GetProcAddress(module_,"nvapi_QueryInterface")):nullptr;if(!query)return false;
         auto init=reinterpret_cast<Init>(query(0x0150E828));
         api_={reinterpret_cast<Set>(query(0xac1ca9e0)),reinterpret_cast<Sleep>(query(0x852cd1d2)),reinterpret_cast<Marker>(query(0xd9984c05)),reinterpret_cast<Notify>(query(0x03d6e8cb))};
+        status_=reinterpret_cast<GetStatus>(query(0xaef96ca1));   // NvAPI_D3D_GetSleepStatus (nvapi_interface.h); null on an old driver
         if(!init)return false;const int r=init();initialized_=r==0;if(r)log::warn("reflex",std::format("initialize status={}",r));return initialized_;
     }
-    DriverApi api_{};HMODULE module_=nullptr;ID3D12Device* device_=nullptr;ID3D12CommandQueue* queue_=nullptr;
+    DriverApi api_{};GetStatus status_=nullptr;int64_t lastSleepStart100ns_=0,lastSleepEnd100ns_=0;HMODULE module_=nullptr;ID3D12Device* device_=nullptr;ID3D12CommandQueue* queue_=nullptr;
     bool initialized_=false,active_=false,driverEnabled_=false,generated_=false,queueMarkers_=false,failed_=false,stalled_=false;
     uint32_t stallHistory_=0;
     uint64_t next_=0,firstFrame_=1,presentId_=0,sleeps_=0,sleepUs_=0,maxSleepUs_=0,markers_=0,oobMarkers_=0,realPresents_=0,generatedPresents_=0;

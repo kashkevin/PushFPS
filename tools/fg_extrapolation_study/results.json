@@ -1,0 +1,498 @@
+{
+ "2X (60 -> 120)": {
+  "steady pan": {
+   "hold|on time": {
+    "psnr": 15.78,
+    "ssim": 0.0124,
+    "psnr_p5": 15.76
+   },
+   "extrapolate|fidelity": {
+    "psnr": 36.19,
+    "ssim": 0.9953,
+    "psnr_p5": 35.31
+   },
+   "extrapolate|on time": {
+    "psnr": 36.19,
+    "ssim": 0.9953,
+    "psnr_p5": 35.31
+   },
+   "extrapolate, half gain|on time": {
+    "psnr": 16.38,
+    "ssim": -0.0312,
+    "psnr_p5": 16.37
+   },
+   "interpolate|fidelity": {
+    "psnr": 38.87,
+    "ssim": 0.9974,
+    "psnr_p5": 38.33
+   },
+   "interpolate, 0.5 interval late|on time": {
+    "psnr": 15.8,
+    "ssim": 0.0125,
+    "psnr_p5": 15.78
+   },
+   "interpolate, 1.0 interval late|on time": {
+    "psnr": 15.86,
+    "ssim": 0.0443,
+    "psnr_p5": 15.81
+   },
+   "interpolate, 0.5 interval late|real frames on time": {
+    "psnr": 15.78,
+    "ssim": 0.0124,
+    "psnr_p5": 15.76
+   },
+   "interpolate, 1.0 interval late|real frames on time": {
+    "psnr": 15.29,
+    "ssim": 0.0372,
+    "psnr_p5": 15.23
+   },
+   "self error vs next error (Pearson r)": -0.407,
+   "mean self error": 0.0059
+  },
+  "turn start/stop": {
+   "hold|on time": {
+    "psnr": 21.63,
+    "ssim": 0.2964,
+    "psnr_p5": 15.57
+   },
+   "extrapolate|fidelity": {
+    "psnr": 27.22,
+    "ssim": 0.8554,
+    "psnr_p5": 21.93
+   },
+   "extrapolate|on time": {
+    "psnr": 27.22,
+    "ssim": 0.8554,
+    "psnr_p5": 21.93
+   },
+   "extrapolate, half gain|on time": {
+    "psnr": 24.21,
+    "ssim": 0.4523,
+    "psnr_p5": 16.09
+   },
+   "interpolate|fidelity": {
+    "psnr": 34.53,
+    "ssim": 0.9781,
+    "psnr_p5": 30.14
+   },
+   "interpolate, 0.5 interval late|on time": {
+    "psnr": 21.36,
+    "ssim": 0.3062,
+    "psnr_p5": 15.75
+   },
+   "interpolate, 1.0 interval late|on time": {
+    "psnr": 19.01,
+    "ssim": 0.2237,
+    "psnr_p5": 15.64
+   },
+   "interpolate, 0.5 interval late|real frames on time": {
+    "psnr": 21.63,
+    "ssim": 0.2964,
+    "psnr_p5": 15.57
+   },
+   "interpolate, 1.0 interval late|real frames on time": {
+    "psnr": 19.16,
+    "ssim": 0.2227,
+    "psnr_p5": 15.44
+   },
+   "self error vs next error (Pearson r)": 0.686,
+   "mean self error": 0.0809
+  },
+  "object over static": {
+   "hold|on time": {
+    "psnr": 26.33,
+    "ssim": 0.9516,
+    "psnr_p5": 26.1
+   },
+   "extrapolate|fidelity": {
+    "psnr": 34.06,
+    "ssim": 0.987,
+    "psnr_p5": 33.21
+   },
+   "extrapolate|on time": {
+    "psnr": 34.06,
+    "ssim": 0.987,
+    "psnr_p5": 33.21
+   },
+   "extrapolate, half gain|on time": {
+    "psnr": 28.06,
+    "ssim": 0.9591,
+    "psnr_p5": 27.18
+   },
+   "interpolate|fidelity": {
+    "psnr": 35.35,
+    "ssim": 0.9902,
+    "psnr_p5": 35.13
+   },
+   "interpolate, 0.5 interval late|on time": {
+    "psnr": 26.77,
+    "ssim": 0.951,
+    "psnr_p5": 26.74
+   },
+   "interpolate, 1.0 interval late|on time": {
+    "psnr": 25.5,
+    "ssim": 0.9444,
+    "psnr_p5": 25.34
+   },
+   "interpolate, 0.5 interval late|real frames on time": {
+    "psnr": 26.33,
+    "ssim": 0.9516,
+    "psnr_p5": 26.1
+   },
+   "interpolate, 1.0 interval late|real frames on time": {
+    "psnr": 25.18,
+    "ssim": 0.9456,
+    "psnr_p5": 25.08
+   },
+   "self error vs next error (Pearson r)": -0.029,
+   "mean self error": 0.0027
+  },
+  "bounce": {
+   "hold|on time": {
+    "psnr": 19.09,
+    "ssim": 0.6483,
+    "psnr_p5": 19.01
+   },
+   "extrapolate|fidelity": {
+    "psnr": 21.75,
+    "ssim": 0.8883,
+    "psnr_p5": 20.94
+   },
+   "extrapolate|on time": {
+    "psnr": 21.75,
+    "ssim": 0.8883,
+    "psnr_p5": 20.94
+   },
+   "extrapolate, half gain|on time": {
+    "psnr": 20.91,
+    "ssim": 0.8212,
+    "psnr_p5": 20.5
+   },
+   "interpolate|fidelity": {
+    "psnr": 23.33,
+    "ssim": 0.9088,
+    "psnr_p5": 22.62
+   },
+   "interpolate, 0.5 interval late|on time": {
+    "psnr": 20.07,
+    "ssim": 0.6443,
+    "psnr_p5": 19.71
+   },
+   "interpolate, 1.0 interval late|on time": {
+    "psnr": 16.53,
+    "ssim": 0.174,
+    "psnr_p5": 16.38
+   },
+   "interpolate, 0.5 interval late|real frames on time": {
+    "psnr": 19.09,
+    "ssim": 0.6483,
+    "psnr_p5": 19.01
+   },
+   "interpolate, 1.0 interval late|real frames on time": {
+    "psnr": 16.04,
+    "ssim": 0.1716,
+    "psnr_p5": 15.97
+   },
+   "self error vs next error (Pearson r)": -0.097,
+   "mean self error": 0.0275
+  },
+  "pan with HUD": {
+   "hold|on time": {
+    "psnr": 15.78,
+    "ssim": 0.0554,
+    "psnr_p5": 15.77
+   },
+   "extrapolate|fidelity": {
+    "psnr": 27.54,
+    "ssim": 0.977,
+    "psnr_p5": 25.39
+   },
+   "extrapolate|on time": {
+    "psnr": 27.54,
+    "ssim": 0.977,
+    "psnr_p5": 25.39
+   },
+   "extrapolate, half gain|on time": {
+    "psnr": 16.67,
+    "ssim": 0.1042,
+    "psnr_p5": 16.51
+   },
+   "interpolate|fidelity": {
+    "psnr": 29.28,
+    "ssim": 0.9804,
+    "psnr_p5": 26.51
+   },
+   "interpolate, 0.5 interval late|on time": {
+    "psnr": 15.7,
+    "ssim": 0.0501,
+    "psnr_p5": 15.5
+   },
+   "interpolate, 1.0 interval late|on time": {
+    "psnr": 15.41,
+    "ssim": 0.0778,
+    "psnr_p5": 15.24
+   },
+   "interpolate, 0.5 interval late|real frames on time": {
+    "psnr": 15.78,
+    "ssim": 0.0554,
+    "psnr_p5": 15.77
+   },
+   "interpolate, 1.0 interval late|real frames on time": {
+    "psnr": 15.51,
+    "ssim": 0.0869,
+    "psnr_p5": 15.49
+   },
+   "self error vs next error (Pearson r)": -0.447,
+   "mean self error": 0.0072
+  },
+  "_pooled self error vs next error (Pearson r)": 0.903
+ },
+ "3X (60 -> 180)": {
+  "steady pan": {
+   "hold|on time": {
+    "psnr": 15.54,
+    "ssim": 0.0057,
+    "psnr_p5": 15.36
+   },
+   "extrapolate|fidelity": {
+    "psnr": 36.02,
+    "ssim": 0.9949,
+    "psnr_p5": 33.54
+   },
+   "extrapolate|on time": {
+    "psnr": 36.02,
+    "ssim": 0.9949,
+    "psnr_p5": 33.54
+   },
+   "extrapolate, half gain|on time": {
+    "psnr": 16.53,
+    "ssim": 0.0828,
+    "psnr_p5": 15.7
+   },
+   "interpolate|fidelity": {
+    "psnr": 38.97,
+    "ssim": 0.9979,
+    "psnr_p5": 38.38
+   },
+   "interpolate, 0.5 interval late|on time": {
+    "psnr": 15.82,
+    "ssim": 0.0127,
+    "psnr_p5": 15.8
+   },
+   "interpolate, 1.0 interval late|on time": {
+    "psnr": 15.33,
+    "ssim": 0.0376,
+    "psnr_p5": 15.27
+   },
+   "interpolate, 0.5 interval late|real frames on time": {
+    "psnr": 15.78,
+    "ssim": 0.0124,
+    "psnr_p5": 15.76
+   },
+   "interpolate, 1.0 interval late|real frames on time": {
+    "psnr": 15.29,
+    "ssim": 0.0372,
+    "psnr_p5": 15.23
+   },
+   "self error vs next error (Pearson r)": -0.391,
+   "mean self error": 0.0059
+  },
+  "turn start/stop": {
+   "hold|on time": {
+    "psnr": 22.08,
+    "ssim": 0.3147,
+    "psnr_p5": 15.8
+   },
+   "extrapolate|fidelity": {
+    "psnr": 27.89,
+    "ssim": 0.8381,
+    "psnr_p5": 20.04
+   },
+   "extrapolate|on time": {
+    "psnr": 27.89,
+    "ssim": 0.8381,
+    "psnr_p5": 20.04
+   },
+   "extrapolate, half gain|on time": {
+    "psnr": 24.79,
+    "ssim": 0.5027,
+    "psnr_p5": 16.28
+   },
+   "interpolate|fidelity": {
+    "psnr": 35.55,
+    "ssim": 0.983,
+    "psnr_p5": 31.36
+   },
+   "interpolate, 0.5 interval late|on time": {
+    "psnr": 21.23,
+    "ssim": 0.299,
+    "psnr_p5": 16.0
+   },
+   "interpolate, 1.0 interval late|on time": {
+    "psnr": 19.07,
+    "ssim": 0.2214,
+    "psnr_p5": 15.79
+   },
+   "interpolate, 0.5 interval late|real frames on time": {
+    "psnr": 21.63,
+    "ssim": 0.2964,
+    "psnr_p5": 15.57
+   },
+   "interpolate, 1.0 interval late|real frames on time": {
+    "psnr": 19.16,
+    "ssim": 0.2227,
+    "psnr_p5": 15.44
+   },
+   "self error vs next error (Pearson r)": 0.631,
+   "mean self error": 0.0809
+  },
+  "object over static": {
+   "hold|on time": {
+    "psnr": 26.32,
+    "ssim": 0.9509,
+    "psnr_p5": 25.72
+   },
+   "extrapolate|fidelity": {
+    "psnr": 36.42,
+    "ssim": 0.9913,
+    "psnr_p5": 34.28
+   },
+   "extrapolate|on time": {
+    "psnr": 36.42,
+    "ssim": 0.9913,
+    "psnr_p5": 34.28
+   },
+   "extrapolate, half gain|on time": {
+    "psnr": 28.35,
+    "ssim": 0.9609,
+    "psnr_p5": 26.65
+   },
+   "interpolate|fidelity": {
+    "psnr": 39.12,
+    "ssim": 0.9951,
+    "psnr_p5": 38.51
+   },
+   "interpolate, 0.5 interval late|on time": {
+    "psnr": 26.48,
+    "ssim": 0.9505,
+    "psnr_p5": 26.21
+   },
+   "interpolate, 1.0 interval late|on time": {
+    "psnr": 25.31,
+    "ssim": 0.9444,
+    "psnr_p5": 25.2
+   },
+   "interpolate, 0.5 interval late|real frames on time": {
+    "psnr": 26.33,
+    "ssim": 0.9516,
+    "psnr_p5": 26.1
+   },
+   "interpolate, 1.0 interval late|real frames on time": {
+    "psnr": 25.18,
+    "ssim": 0.9456,
+    "psnr_p5": 25.08
+   },
+   "self error vs next error (Pearson r)": -0.145,
+   "mean self error": 0.0027
+  },
+  "bounce": {
+   "hold|on time": {
+    "psnr": 19.6,
+    "ssim": 0.6573,
+    "psnr_p5": 17.96
+   },
+   "extrapolate|fidelity": {
+    "psnr": 22.04,
+    "ssim": 0.89,
+    "psnr_p5": 20.8
+   },
+   "extrapolate|on time": {
+    "psnr": 22.04,
+    "ssim": 0.89,
+    "psnr_p5": 20.8
+   },
+   "extrapolate, half gain|on time": {
+    "psnr": 21.29,
+    "ssim": 0.8307,
+    "psnr_p5": 20.05
+   },
+   "interpolate|fidelity": {
+    "psnr": 23.8,
+    "ssim": 0.9118,
+    "psnr_p5": 23.13
+   },
+   "interpolate, 0.5 interval late|on time": {
+    "psnr": 20.6,
+    "ssim": 0.6799,
+    "psnr_p5": 20.06
+   },
+   "interpolate, 1.0 interval late|on time": {
+    "psnr": 17.28,
+    "ssim": 0.2514,
+    "psnr_p5": 17.08
+   },
+   "interpolate, 0.5 interval late|real frames on time": {
+    "psnr": 19.09,
+    "ssim": 0.6483,
+    "psnr_p5": 19.01
+   },
+   "interpolate, 1.0 interval late|real frames on time": {
+    "psnr": 16.04,
+    "ssim": 0.1716,
+    "psnr_p5": 15.97
+   },
+   "self error vs next error (Pearson r)": -0.118,
+   "mean self error": 0.0275
+  },
+  "pan with HUD": {
+   "hold|on time": {
+    "psnr": 16.0,
+    "ssim": 0.0305,
+    "psnr_p5": 15.83
+   },
+   "extrapolate|fidelity": {
+    "psnr": 27.88,
+    "ssim": 0.9768,
+    "psnr_p5": 25.29
+   },
+   "extrapolate|on time": {
+    "psnr": 27.88,
+    "ssim": 0.9768,
+    "psnr_p5": 25.29
+   },
+   "extrapolate, half gain|on time": {
+    "psnr": 17.76,
+    "ssim": 0.237,
+    "psnr_p5": 16.13
+   },
+   "interpolate|fidelity": {
+    "psnr": 29.72,
+    "ssim": 0.9813,
+    "psnr_p5": 26.75
+   },
+   "interpolate, 0.5 interval late|on time": {
+    "psnr": 16.15,
+    "ssim": 0.0406,
+    "psnr_p5": 15.96
+   },
+   "interpolate, 1.0 interval late|on time": {
+    "psnr": 15.87,
+    "ssim": 0.0826,
+    "psnr_p5": 15.69
+   },
+   "interpolate, 0.5 interval late|real frames on time": {
+    "psnr": 15.78,
+    "ssim": 0.0554,
+    "psnr_p5": 15.77
+   },
+   "interpolate, 1.0 interval late|real frames on time": {
+    "psnr": 15.51,
+    "ssim": 0.0869,
+    "psnr_p5": 15.49
+   },
+   "self error vs next error (Pearson r)": -0.443,
+   "mean self error": 0.0072
+  },
+  "_pooled self error vs next error (Pearson r)": 0.907
+ }
+}

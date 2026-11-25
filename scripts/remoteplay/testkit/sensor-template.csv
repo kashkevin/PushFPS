@@ -1,0 +1,11 @@
+# Light sensor measurements (input to photon), when a photodiode or latency tester was used instead of a camera.
+# One row per press. Fill in, keep the name sensor.csv in the evidence folder, then run:  run-tests.ps1 -PackOnly <folder>
+#
+# arm        a kit arm (original, mod-all ...) or a sensor-only arm: official-app or direct-ps5
+# press      1, 2, 3 ... within the arm
+# ms         milliseconds from the button contact to the light change, as the device reports it
+# device     what measured it, in a few words (no serial number)
+# note       optional (nothing personal)
+#
+# Software latency (the built-in test) and these physical values are never put in one table or one verdict.
+arm,press,ms,device,note

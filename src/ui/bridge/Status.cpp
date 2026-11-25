@@ -443,6 +443,7 @@ void QmlPlayerBridge::updateRunStatus() {
             case engine::FrameGenerationBackend::Anr: backend = QStringLiteral("ANR FG"); break;
             case engine::FrameGenerationBackend::AmdFrc: backend = QStringLiteral("AMD FRC"); break;
             case engine::FrameGenerationBackend::PushFlow: backend = QStringLiteral("PushFlow"); break;
+            case engine::FrameGenerationBackend::PushWarp: backend = QStringLiteral("PushWarp"); break;   // stream "ownfg" step 3
             case engine::FrameGenerationBackend::Vfg: backend = QStringLiteral("NVIDIA VFG"); break;
             }
             detail << tr("补帧 %1X · %2").arg(s.applied.multiplier)

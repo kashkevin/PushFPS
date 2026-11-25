@@ -11,6 +11,7 @@
 #include "veyra/engine/ColorSettings.h"
 #include "veyra/engine/AntiAliasSettings.h"
 #include "veyra/engine/BeautySettings.h"
+#include "veyra/engine/PushLowDelay.h"
 namespace veyra::engine {
 inline constexpr uint32_t kMaxColorInstances = 6;
 inline constexpr uint32_t kMaxNrInstances = 4;
@@ -46,7 +47,9 @@ inline bool validNrReuseMode(NrReuseMode v) {
 // AmdFrc: AMD AMF FRC, the video frame interpolation of the AMD driver (gfx::AmfFrcBackend).
 // PushFlow: PushFPS's own RIFE frame generation on DirectML, any DX12 GPU (pushflow::PushFlowBackend);
 // its tier is vfgQuality (0 Fast, 1 Balanced, 2 Quality).
-enum class FrameGenerationBackend { Dlss = 0, XeSS = 1, Fsr = 2, Fsr4 = 3, Vfg = 4, Anr = 5, AmdFrc = 6, PushFlow = 7 };
+// PushWarp = 8: stream "ownfg" step 3, PushFPS's own motion-compensated generator (pipeline/PushWarpPass.h), 2X-4X, every
+// generated frame of a pair from ONE motion field; experimental, only when chosen.
+enum class FrameGenerationBackend { Dlss = 0, XeSS = 1, Fsr = 2, Fsr4 = 3, Vfg = 4, Anr = 5, AmdFrc = 6, PushFlow = 7, PushWarp = 8 };
 constexpr bool fsrFrameGeneration(FrameGenerationBackend backend) {
     return backend == FrameGenerationBackend::Fsr || backend == FrameGenerationBackend::Fsr4;
 }
@@ -57,7 +60,7 @@ constexpr bool twoXFrameGeneration(FrameGenerationBackend backend) {
 // Not NVIDIA-only (AMD FRC runs on AMD GPUs; its own runtime refuses others).
 constexpr bool crossVendorFrameGeneration(FrameGenerationBackend backend) {
     return backend == FrameGenerationBackend::Anr || backend == FrameGenerationBackend::XeSS || fsrFrameGeneration(backend) ||
-        backend == FrameGenerationBackend::AmdFrc || backend == FrameGenerationBackend::PushFlow;
+        backend == FrameGenerationBackend::AmdFrc || backend == FrameGenerationBackend::PushFlow || backend == FrameGenerationBackend::PushWarp;
 }
 // Frame generation that runs inside the present sink (external frame
 // interpolation swapchain) instead of the in-graph DLSSG backend.
@@ -195,6 +198,7 @@ constexpr std::string_view frameGenerationBackendName(FrameGenerationBackend bac
     case FrameGenerationBackend::Anr: return "ANR-FG";
     case FrameGenerationBackend::AmdFrc: return "AMD-FRC";
     case FrameGenerationBackend::PushFlow: return "PushFlow";
+    case FrameGenerationBackend::PushWarp: return "PushWarp";   // stream "ownfg" step 3
     }
     return "unknown";
 }
@@ -488,6 +492,22 @@ struct EnhancementSettings {
     // PushFPS "实时 HUD 锁定": a per-pixel HUD mask found every frame, kept out of
     // frame generation (pipeline/PushHudLock.h).
     bool hudLock=false;
+    // Package 15 "Lower delay" (engine/PushLowDelay.h, pref pushLowDelay): the predicted-frame pass exists in the graph
+    // while it is on with VFG at 3X (lowDelayShapesGraph), so switching it there rebuilds the graph; the engine reads the
+    // row itself once a pair (pushLowDelayShared). A global control kept in shell preferences. Package 16: the bridge
+    // keeps it true once the row was on in this run (pushLowDelayKeepPass), so only the first switch-on rebuilds.
+    bool lowDelay=false;
+    // Stream "ownfg": PushFlow too (PushWarp makes the predicted pair's I there: pipeline/PushOwnFrame.h).
+    bool lowDelayShapesGraph()const{return pushLowDelayShapesGraph(lowDelay,frameGenerationBackend==FrameGenerationBackend::Vfg||frameGenerationBackend==FrameGenerationBackend::PushFlow||frameGenerationBackend==FrameGenerationBackend::PushWarp,multiplier);}
+    // Stream "ownfg" (review 1, SHOULD 9): with VFG, PushWarp exists in the graph only when the user chose the PushFPS frame
+    // source or the causal schedule (prefs pushLowDelaySource, pushLowDelayCausal; kept true for the rest of the run once
+    // chosen, like the pass itself). A change rebuilds the graph only where it changes the shape (VFG with the row's pass).
+    bool lowDelayOwnWarp=false;
+    bool lowDelayOwnWarpShapesGraph()const{return lowDelayShapesGraph()&&frameGenerationBackend==FrameGenerationBackend::Vfg&&lowDelayOwnWarp;}
+    // PushFPS restoration (engine/PushClean.h, pipeline/PushCleanPass.h): strength 0..100 of the compression
+    // clean-up before every upscaler and neural layer; 0 = the stage does not exist. A global control kept
+    // in shell preferences (pushClean). Only on/off changes the graph: the strength itself is read live.
+    uint8_t clean=0;
     ContentRate content=ContentRate::Transport;
     AudioSyncMode audioSync=AudioSyncMode::Automatic;
     int32_t audioOffsetMs=0;
@@ -572,6 +592,9 @@ struct EnhancementSettings {
         active.revision=target.revision;active.audioSync=target.audioSync;active.audioOffsetMs=target.audioOffsetMs;
         active.captureFlipVertical=target.captureFlipVertical;active.exportBitrateMbps=target.exportBitrateMbps;
         active.fgAdaptive=target.fgAdaptive;active.pacingRepair=target.pacingRepair;
+        active.clean=target.clean;
+        active.lowDelay=target.lowDelay;   // never a live parameter: a graph-shape change or nothing (sameVideoConfiguration)
+        active.lowDelayOwnWarp=target.lowDelayOwnWarp;   // stream "ownfg": the same
         return active==target;
     }
     bool sameVideoConfiguration(const EnhancementSettings& other) const {
@@ -588,6 +611,11 @@ struct EnhancementSettings {
         // PushFPS adaptive multiplier: chosen per pair inside the running graph.
         video.fgAdaptive=target.fgAdaptive;
         video.pacingRepair=target.pacingRepair;
+        // PushFPS restoration: the strength is read live; only on/off needs another graph.
+        if((video.clean>0)==(target.clean>0))video.clean=target.clean;
+        // Package 15 "Lower delay": another graph only where the predicted-frame pass would exist (VFG at 3X).
+        if(video.lowDelayShapesGraph()==target.lowDelayShapesGraph())video.lowDelay=target.lowDelay;
+        if(video.lowDelayOwnWarpShapesGraph()==target.lowDelayOwnWarpShapesGraph())video.lowDelayOwnWarp=target.lowDelayOwnWarp;   // stream "ownfg"
         // Colour grade: parameters are uniform-only (never a rebuild), but the
         // master switch changes the graph shape, so it stays in the comparison.
         const auto oldColor=video.color;const auto oldAdditional=video.additionalColors;
