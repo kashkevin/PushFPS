@@ -1,0 +1,320 @@
+chiaki-ng backport: don't use the Takion send buffer after the receive loop
+has ended.
+
+Origin: https://github.com/streetpea/chiaki-ng commit
+e5f1dd84d15a81bd12ee399610c030a8e2839c9b ("Don't use the Takion send buffer
+after the receive loop has ended", Luke Maj, 22 October 2026; pull request
+#852, merge fd41fa07874ac181e1e4f20fe190c1963d11805e), with its regression
+test. The code is upstream's, unchanged; only the position of the two new
+struct members in takion.h differs, because patch 0004 added members before
+them.
+Licence of the patched files: LicenseRef-AGPL-3.0-only-OpenSSL (AGPL-3.0-only
+with the OpenSSL exception), as in chiaki-ng.
+
+When the receive loop ended (for example on a network error), the Takion
+thread finalized the send buffer while another thread (a heartbeat, an IDR
+request) could still push a reliable message into it: a lock on a destroyed
+mutex, a leaked packet, or a write into the freed packet array. The send
+buffer's lifetime is now tracked under its own mutex; once it is gone a push
+frees the packet and returns CHIAKI_ERR_DISCONNECTED. The mutex is taken on
+reliable (message data) sends only, never for video, audio or feedback
+packets. No timing or wire change.
+
+Applies after 0001-0005 to the pin 0e16950165f06e5c3291537c2eeba6e852be7120.
+
+diff --git a/lib/include/chiaki/takion.h b/lib/include/chiaki/takion.h
+index 00c3aada..d81c3408 100644
+--- a/lib/include/chiaki/takion.h
++++ b/lib/include/chiaki/takion.h
+@@ -198,6 +198,12 @@ typedef struct chiaki_takion_t
+ 	uint32_t veyra_released_seen; // packets of that frame handed on or arrived late (once each)
+ 	int64_t veyra_out_of_order_us; // when a packet last arrived out of order; 0 = never
+ 	ChiakiTakionSendBuffer send_buffer;
++	/**
++	 * send_buffer only exists from the end of the handshake until the receive loop ends.
++	 * Senders may only push into it while send_buffer_active is true.
++	 */
++	bool send_buffer_active;
++	ChiakiMutex send_buffer_active_mutex;
+ 
+ 	ChiakiTakionCallback cb;
+ 	void *cb_user;
+diff --git a/lib/src/takion.c b/lib/src/takion.c
+index 4cb562fc..308c98b2 100644
+--- a/lib/src/takion.c
++++ b/lib/src/takion.c
+@@ -445,6 +445,11 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_connect(ChiakiTakion *takion, Chiaki
+ 		goto error_gkcrypt_local_mutex;
+ 	takion->tag_remote = 0;
+ 
++	takion->send_buffer_active = false;
++	ret = chiaki_mutex_init(&takion->send_buffer_active_mutex, false);
++	if(ret != CHIAKI_ERR_SUCCESS)
++		goto error_seq_num_local_mutex;
++
+ 	takion->enable_crypt = info->enable_crypt;
+ 	takion->postponed_packets = NULL;
+ 	takion->postponed_packets_size = 0;
+@@ -458,7 +463,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_connect(ChiakiTakion *takion, Chiaki
+ 	if(err != CHIAKI_ERR_SUCCESS)
+ 	{
+ 		CHIAKI_LOGE(takion->log, "Takion failed to create stop pipe");
+-		goto error_seq_num_local_mutex;
++		goto error_send_buffer_active_mutex;
+ 	}
+ 
+ 	if(sock)
+@@ -670,6 +675,8 @@ error_sock:
+ 	}
+ error_pipe:
+ 	chiaki_stop_pipe_fini(&takion->stop_pipe);
++error_send_buffer_active_mutex:
++	chiaki_mutex_fini(&takion->send_buffer_active_mutex);
+ error_seq_num_local_mutex:
+ 	chiaki_mutex_fini(&takion->seq_num_local_mutex);
+ error_gkcrypt_local_mutex:
+@@ -682,6 +689,7 @@ CHIAKI_EXPORT void chiaki_takion_close(ChiakiTakion *takion)
+ 	chiaki_stop_pipe_stop(&takion->stop_pipe);
+ 	chiaki_thread_join(&takion->thread, NULL);
+ 	chiaki_stop_pipe_fini(&takion->stop_pipe);
++	chiaki_mutex_fini(&takion->send_buffer_active_mutex);
+ 	chiaki_mutex_fini(&takion->seq_num_local_mutex);
+ 	chiaki_mutex_fini(&takion->gkcrypt_local_mutex);
+ }
+@@ -799,6 +807,29 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_send(ChiakiTakion *takion, uint8_t *
+ 	return chiaki_takion_send_raw(takion, buf, buf_size);
+ }
+ 
++/**
++ * Push into the send buffer unless the Takion thread has already finalized it.
++ * Takes ownership of buf.
++ */
++static ChiakiErrorCode takion_send_buffer_push(ChiakiTakion *takion, ChiakiSeqNum32 seq_num, uint8_t *buf, size_t buf_size)
++{
++	ChiakiErrorCode err = chiaki_mutex_lock(&takion->send_buffer_active_mutex);
++	if(err != CHIAKI_ERR_SUCCESS)
++	{
++		free(buf);
++		return err;
++	}
++	if(takion->send_buffer_active)
++		chiaki_takion_send_buffer_push(&takion->send_buffer, seq_num, buf, buf_size);
++	else
++	{
++		free(buf);
++		err = CHIAKI_ERR_DISCONNECTED;
++	}
++	chiaki_mutex_unlock(&takion->send_buffer_active_mutex);
++	return err;
++}
++
+ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_send_message_data(ChiakiTakion *takion, uint8_t chunk_flags, uint16_t channel, uint8_t *buf, size_t buf_size, ChiakiSeqNum32 *seq_num)
+ {
+ 	// TODO: can we make this more memory-efficient?
+@@ -839,7 +870,9 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_send_message_data(ChiakiTakion *taki
+ 		return err;
+ 	}
+ 
+-	chiaki_takion_send_buffer_push(&takion->send_buffer, seq_num_val, packet_buf, packet_size);
++	err = takion_send_buffer_push(takion, seq_num_val, packet_buf, packet_size);
++	if(err != CHIAKI_ERR_SUCCESS)
++		return err;
+ 
+ 	if(seq_num)
+ 		*seq_num = seq_num_val;
+@@ -886,7 +919,9 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_send_message_data_cont(ChiakiTakion
+ 		return err;
+ 	}
+ 
+-	chiaki_takion_send_buffer_push(&takion->send_buffer, seq_num_val, packet_buf, packet_size);
++	err = takion_send_buffer_push(takion, seq_num_val, packet_buf, packet_size);
++	if(err != CHIAKI_ERR_SUCCESS)
++		return err;
+ 
+ 	if(seq_num)
+ 		*seq_num = seq_num_val;
+@@ -1360,6 +1395,9 @@ static void *takion_thread_func(void *user)
+ 	// The send buffer size MUST be consistent with the acked seqnums array size in takion_handle_packet_message_data_ack()
+ 	if(chiaki_takion_send_buffer_init(&takion->send_buffer, takion, TAKION_SEND_BUFFER_SIZE) != CHIAKI_ERR_SUCCESS)
+ 		goto error_reoder_queue;
++	chiaki_mutex_lock(&takion->send_buffer_active_mutex);
++	takion->send_buffer_active = true;
++	chiaki_mutex_unlock(&takion->send_buffer_active_mutex);
+ 
+ 
+ 	if(takion->cb)
+@@ -1443,6 +1481,10 @@ static void *takion_thread_func(void *user)
+ 		takion_handle_packet(takion, resized_buf, received_size);
+ 	}
+ 
++	// Other threads (e.g. the heartbeat or an IDR request) may still send data, so stop them from using the send buffer first
++	chiaki_mutex_lock(&takion->send_buffer_active_mutex);
++	takion->send_buffer_active = false;
++	chiaki_mutex_unlock(&takion->send_buffer_active_mutex);
+ 	chiaki_takion_send_buffer_fini(&takion->send_buffer);
+ 
+ 	if(takion->video_queue_initialized)
+diff --git a/test/takion.c b/test/takion.c
+index fd2bc863..78e5590f 100644
+--- a/test/takion.c
++++ b/test/takion.c
+@@ -11,6 +11,13 @@
+ 
+ #include "test_log.h"
+ 
++#ifndef _WIN32
++#include <arpa/inet.h>
++#include <netinet/in.h>
++#include <sys/socket.h>
++#include <sys/time.h>
++#endif
++
+ 
+ static MunitResult test_av_packet_parse(const MunitParameter params[], void *user)
+ {
+@@ -195,6 +202,130 @@ static MunitResult test_takion_format_congestion(const MunitParameter params[],
+ 	return MUNIT_OK;
+ }
+ 
++#ifndef _WIN32
++typedef struct takion_teardown_test_t
++{
++	ChiakiTakion takion;
++	ChiakiMutex mutex;
++	ChiakiCond cond;
++	bool connected;
++	bool disconnected;
++} TakionTeardownTest;
++
++static void takion_teardown_test_cb(ChiakiTakionEvent *event, void *user)
++{
++	TakionTeardownTest *test = user;
++	chiaki_mutex_lock(&test->mutex);
++	if(event->type == CHIAKI_TAKION_EVENT_TYPE_CONNECTED)
++		test->connected = true;
++	else if(event->type == CHIAKI_TAKION_EVENT_TYPE_DISCONNECT)
++		test->disconnected = true;
++	chiaki_cond_broadcast(&test->cond);
++	chiaki_mutex_unlock(&test->mutex);
++}
++
++static bool takion_teardown_test_connected(void *user)
++{
++	return ((TakionTeardownTest *)user)->connected;
++}
++
++static bool takion_teardown_test_disconnected(void *user)
++{
++	return ((TakionTeardownTest *)user)->disconnected;
++}
++
++static void takion_test_write_header(uint8_t *buf, uint32_t tag, uint8_t chunk_type, size_t payload_size)
++{
++	memset(buf, 0, 1 + 0x10);
++	buf[0] = 0; // control packet
++	*((chiaki_unaligned_uint32_t *)(buf + 1)) = htonl(tag);
++	buf[1 + 0xc] = chunk_type;
++	*((chiaki_unaligned_uint16_t *)(buf + 1 + 0xe)) = htons((uint16_t)(payload_size + 4));
++}
++#endif
++
++static MunitResult test_takion_send_after_receive_error(const MunitParameter params[], void *user)
++{
++#ifdef _WIN32
++	return MUNIT_SKIP;
++#else
++	// Fake console: a UDP socket on localhost that completes the Takion handshake
++	int peer = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
++	munit_assert_int(peer, >=, 0);
++	struct timeval tv = { .tv_sec = 5, .tv_usec = 0 };
++	setsockopt(peer, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
++	struct sockaddr_in peer_addr = { 0 };
++	peer_addr.sin_family = AF_INET;
++	peer_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
++	munit_assert_int(bind(peer, (struct sockaddr *)&peer_addr, sizeof(peer_addr)), ==, 0);
++	socklen_t peer_addr_len = sizeof(peer_addr);
++	munit_assert_int(getsockname(peer, (struct sockaddr *)&peer_addr, &peer_addr_len), ==, 0);
++
++	TakionTeardownTest test = { 0 };
++	munit_assert_int(chiaki_mutex_init(&test.mutex, false), ==, CHIAKI_ERR_SUCCESS);
++	munit_assert_int(chiaki_cond_init(&test.cond), ==, CHIAKI_ERR_SUCCESS);
++
++	ChiakiTakionConnectInfo info = { 0 };
++	info.log = get_test_log();
++	info.sa = (struct sockaddr *)&peer_addr;
++	info.sa_len = sizeof(peer_addr);
++	info.cb = takion_teardown_test_cb;
++	info.cb_user = &test;
++	info.enable_crypt = false;
++	info.protocol_version = 12;
++	info.close_socket = false; // the caller owns the socket (like Senkusha on a PSN connection), so later sends reach the send buffer
++	munit_assert_int(chiaki_takion_connect(&test.takion, &info, NULL), ==, CHIAKI_ERR_SUCCESS);
++
++	uint8_t buf[0x100];
++	struct sockaddr_in client_addr;
++	socklen_t client_addr_len = sizeof(client_addr);
++	ssize_t r = recvfrom(peer, buf, sizeof(buf), 0, (struct sockaddr *)&client_addr, &client_addr_len);
++	munit_assert_int(r, ==, 1 + 0x10 + 0x10); // INIT
++	uint32_t tag_local = ntohl(*((chiaki_unaligned_uint32_t *)(buf + 1 + 0x10)));
++
++	uint8_t init_ack[1 + 0x10 + 0x10 + 0x20] = { 0 };
++	takion_test_write_header(init_ack, tag_local, 2, 0x10 + 0x20);
++	uint8_t *pl = init_ack + 1 + 0x10;
++	*((chiaki_unaligned_uint32_t *)(pl + 0)) = htonl(0x1337);
++	*((chiaki_unaligned_uint32_t *)(pl + 4)) = htonl(0x19000);
++	*((chiaki_unaligned_uint16_t *)(pl + 8)) = htons(0x64);
++	*((chiaki_unaligned_uint16_t *)(pl + 0xa)) = htons(0x64);
++	*((chiaki_unaligned_uint32_t *)(pl + 0xc)) = htonl(0x1337);
++	munit_assert_int(sendto(peer, init_ack, sizeof(init_ack), 0, (struct sockaddr *)&client_addr, client_addr_len), ==, sizeof(init_ack));
++
++	r = recvfrom(peer, buf, sizeof(buf), 0, NULL, NULL);
++	munit_assert_int(r, ==, 1 + 0x10 + 0x20); // COOKIE
++
++	uint8_t cookie_ack[1 + 0x10];
++	takion_test_write_header(cookie_ack, tag_local, 0xb, 0);
++	munit_assert_int(sendto(peer, cookie_ack, sizeof(cookie_ack), 0, (struct sockaddr *)&client_addr, client_addr_len), ==, sizeof(cookie_ack));
++
++	chiaki_mutex_lock(&test.mutex);
++	munit_assert_int(chiaki_cond_timedwait_pred(&test.cond, &test.mutex, 5000, takion_teardown_test_connected, &test), ==, CHIAKI_ERR_SUCCESS);
++	chiaki_mutex_unlock(&test.mutex);
++
++	// An empty datagram makes recv() return 0, so the Takion receive loop ends with an error
++	munit_assert_int(sendto(peer, buf, 0, 0, (struct sockaddr *)&client_addr, client_addr_len), ==, 0);
++
++	chiaki_mutex_lock(&test.mutex);
++	munit_assert_int(chiaki_cond_timedwait_pred(&test.cond, &test.mutex, 5000, takion_teardown_test_disconnected, &test), ==, CHIAKI_ERR_SUCCESS);
++	chiaki_mutex_unlock(&test.mutex);
++
++	// The send buffer has been finalized now, but the socket is still open
++	uint8_t msg[8] = { 0 };
++	ChiakiErrorCode err = chiaki_takion_send_message_data(&test.takion, 1, 1, msg, sizeof(msg), NULL);
++
++	chiaki_takion_close(&test.takion);
++	CHIAKI_SOCKET_CLOSE(test.takion.sock);
++	CHIAKI_SOCKET_CLOSE(peer);
++	chiaki_cond_fini(&test.cond);
++	chiaki_mutex_fini(&test.mutex);
++
++	munit_assert_int(err, ==, CHIAKI_ERR_DISCONNECTED);
++	return MUNIT_OK;
++#endif
++}
++
+ MunitTest tests_takion[] = {
+ 	{
+ 		"/av_packet_parse",
+@@ -220,6 +351,14 @@ MunitTest tests_takion[] = {
+ 		MUNIT_TEST_OPTION_NONE,
+ 		NULL
+ 	},
++	{
++		"/send_after_receive_error",
++		test_takion_send_after_receive_error,
++		NULL,
++		NULL,
++		MUNIT_TEST_OPTION_NONE,
++		NULL
++	},
+ 	{
+ 		"/format_congestion",
+ 		test_takion_format_congestion,
