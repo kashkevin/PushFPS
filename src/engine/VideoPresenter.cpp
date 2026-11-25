@@ -13,7 +13,9 @@
 #include "veyra/diagnostics/FrameMetrics.h"
 // [fg-health] names GPU stages by their index in diagnostics::GpuStage (PushFgHealth.h kPushHealthStages).
 static_assert(unsigned(veyra::diagnostics::GpuStage::Color)==0&&unsigned(veyra::diagnostics::GpuStage::Fg1)==5&&unsigned(veyra::diagnostics::GpuStage::Fg2)==6&&
-              unsigned(veyra::diagnostics::GpuStage::FgBatch)==12&&unsigned(veyra::diagnostics::GpuStage::Blit)==13,"PushFgHealth.h kPushHealthStages");
+              unsigned(veyra::diagnostics::GpuStage::FgBatch)==12&&unsigned(veyra::diagnostics::GpuStage::Blit)==13&&
+              unsigned(veyra::diagnostics::GpuStage::BaseTail)==35&&unsigned(veyra::diagnostics::GpuStage::VfgCapture)==36&&
+              unsigned(veyra::diagnostics::GpuStage::RealCompose)==37,"PushFgHealth.h kPushHealthStages");
 namespace veyra::engine {
 bool VideoPresenter::beginSourceInput(uint64_t stallUs){
     if(!reflexInputFrame_&&reflex_.active())reflexInputFrame_=reflex_.begin(stallUs);
@@ -665,7 +667,13 @@ bool VideoPresenter::dxgiPresent(PendingPresent& p,gfx::CommandSlotRing& ring){
         const auto stats=displayStats?sink_.sampleFrameStatistics():gfx::PresentSink::FrameStatisticsDelta{};
         if(stats.supported)veyra::log::info("display-stats",std::format("refreshHz={:.3f} presentCalls={} dxgiPresentCount={} refreshes={} presentRefreshDelta={} presentsAhead={} backend={} (DXGI GetFrameStatistics delta over ~1s. These counters CANNOT tell how many frames the panel actually showed: with vsync off and tearing allowed, dxgiPresentCount tracks completed Present calls, and both refresh counters just advance with the monitor. presentsAhead = submitted presents after the last shown one at the sample: the display queue under VSync; with Automatic Present(0,0) it includes frames a newer one replaces; -1 unavailable. Measuring scanout needs PresentMon. XeSS generated presents are provider-internal.)",sink_.displayRefreshHz(),stats.presents,stats.displayed,stats.refreshes,stats.displayedRefresh,stats.ahead,sink_.xess()?"XeSS":"DXGI"));
         else if(FAILED(stats.result))veyra::log::info("display-stats",std::format("unavailable hr=0x{:X} backend={}",unsigned(stats.result),sink_.xess()?"XeSS":"DXGI"));
+        if(displayStats){   // stream "s10-display" (PushDisplayPath.h): every dated Present -> vblank into [fg-health], before the summary clears them
+            const auto grid=sink_.refreshGrid();
+            const double periodMs=grid.period100ns>0?grid.period100ns/10000:refreshHz_>=1.0?1000.0/refreshHz_:0.0;
+            for(const double v:sink_.pendingDisplayLatencyMs())pushFgHealth().toScreen(v,periodMs);
+        }
         const auto scanout=displayStats?sink_.takeDisplayLatency():gfx::PresentSink::DisplayLatencySummary{};
+        if(displayStats)pushToScreenBoard().publish(scanout.p50Ms,scanout.p95Ms,scanout.samples,double(std::chrono::duration_cast<std::chrono::milliseconds>(presentEnd.time_since_epoch()).count()));
         if(scanout.samples||scanout.compositionMode>=0)veyra::log::info("display-latency",std::format("presentToScanoutP50Ms={:.3f} presentToScanoutP95Ms={:.3f} presentToScanoutMaxMs={:.3f} samples={} replacedAtLeast={} compositionMode={} refreshHz={:.3f} (DXGI frame statistics: Present call to the vblank that showed it, VSync and Automatic DXGI presents; Automatic dates only frames named as shown; compositionMode 0 composed 1 overlay 2 none 3 failure -1 unknown; not a photon measurement)",scanout.p50Ms,scanout.p95Ms,scanout.maxMs,scanout.samples,scanout.replacedAtLeast,scanout.compositionMode,sink_.displayRefreshHz()));
         const auto& timing=sink_.lastPresentTiming();
         veyra::log::info("present-cost",std::format("blitAhead={} generated={} totalMs={:.3f} recordSubmitMs={:.3f} slotWaitMs={:.3f} dxgiMs={:.3f} slow={} source={} epoch={} backend={} resized={} resizeMs={:.3f} beginMs={:.3f} commandsMs={:.3f} beforeMs={:.3f} presentCallMs={:.3f} bufferMs={:.3f} afterMs={:.3f} hr=0x{:X}",p.ahead?1:0,p.generated,
@@ -722,6 +730,8 @@ void VideoPresenter::watchPresentPath(int64_t now100ns,unsigned windowW,unsigned
     MONITORINFO mi{};mi.cbSize=sizeof(mi);
     RECT wr{};
     const bool coversMonitor=GetMonitorInfoW(monitor,&mi)&&GetWindowRect(window_,&wr)&&wr.left<=mi.rcMonitor.left&&wr.top<=mi.rcMonitor.top&&wr.right>=mi.rcMonitor.right&&wr.bottom>=mi.rcMonitor.bottom;
+    // Stream "s10-display" (review SHOULD 5): the measured window facts for the interface's display-path line.
+    pushToScreenBoard().publishWindow(coversMonitor?1:0,compositionFlags_<0?-1:(compositionFlags_&DXGI_HARDWARE_COMPOSITION_SUPPORT_FLAG_WINDOWED)?1:0);
     const HWND root=GetAncestor(window_,GA_ROOT);
     const auto region=pushRegionBoard().get();
     // Review S5: Windows' own answer beside the interface's decision (0 none/error, 1 empty, 2 one rectangle, 3 complex).
@@ -742,9 +752,11 @@ void VideoPresenter::watchPresentPath(int64_t now100ns,unsigned windowW,unsigned
     const bool changed=presentPathChanges_>0;
     if(!(changed&&now100ns-presentPathLogged100ns_>=50000000)&&now100ns-presentPathLogged100ns_<100000000)return;
     const unsigned changes=presentPathChanges_;presentPathChanges_=0;presentPathLogged100ns_=now100ns;
-    veyra::log::info("present-path",line+std::format(" changes={}",changes)+" (at most one line per 5 s, the latest state; changes = states seen since the last line; the video window's clipping region as the interface set it (full = none, rect = one rectangle), windowRgn = GetWindowRgn (0 none, 2 rectangle, 3 complex), items = the interface items cut out of it; "
+    // Stream "s10-display": the last second's Present -> vblank figure beside the facts (kept out of `line`, so it does not count as a change).
+    const auto toScreen=pushToScreenBoard().read(double(now100ns)/10000);
+    veyra::log::info("present-path",line+std::format(" changes={} toScreenP50Ms={:.2f} toScreenP95Ms={:.2f}",changes,toScreen.known?toScreen.p50Ms:-1.0,toScreen.known?toScreen.p95Ms:-1.0)+" (at most one line per 5 s, the latest state; changes = states seen since the last line; the video window's clipping region as the interface set it (full = none, rect = one rectangle), windowRgn = GetWindowRgn (0 none, 2 rectangle, 3 complex), items = the interface items cut out of it; "
         "hwCompositionFlags = IDXGIOutput6::CheckHardwareCompositionSupport, -1 unknown; driver* = NvAPI_D3D_GetSleepStatus, -1 not read (low latency never enabled on this chain); "
-        "facts the program can see, not PresentMon's present mode)");
+        "facts the program can see, not PresentMon's present mode; toScreen* = the last second's Present -> vblank from DXGI frame statistics, -1 unknown)");
 }
 bool VideoPresenter::readPresentedFrameForTest(gfx::D3D12DeviceContext& ctx,gfx::CommandSlotRing& ring,sink::RgbaImage& image){
     if(presentationQueue_&&!presentationRing_.drainQueue())return false;

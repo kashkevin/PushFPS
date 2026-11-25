@@ -18,8 +18,10 @@
 // Cost: O(1) per sample (fixed rings, no allocation after construction); the sorting happens once per 10 s on at most a few
 // thousand values. Everything runs on the engine's owner thread (the presenter runs there too); one object per process.
 // Nothing private: numbers only.
+#include "veyra/engine/PushDisplayPath.h"
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -28,6 +30,14 @@
 #include <vector>
 
 namespace veyra::engine {
+
+// Review 1 MUST 2 (Package 16): the GPU/CPU clock calibration behind submitToGpuStart (ID3D12CommandQueue::
+// GetClockCalibration) is taken AFTER the base list's submission and at most once a second; each base list keeps only
+// its CPU submit time (QueryPerformanceCounter) before the submission. A record measured against a calibration up to 1 s
+// old carries the clocks' drift over that second (crystal drift is in the tens of ppm: microseconds). Pure, tested.
+inline bool pushClockCalibrationDue(std::int64_t nowQpc, std::int64_t lastCalibrationQpc, std::int64_t qpcFrequency) {
+    return lastCalibrationQpc == 0 || qpcFrequency <= 0 || nowQpc - lastCalibrationQpc >= qpcFrequency;
+}
 
 // A fixed ring of the last N samples of one window; summary() sorts a copy.
 template <std::size_t N>
@@ -80,7 +90,9 @@ struct PushHealthStage {
     unsigned index;
     const char* name;
 };
-inline constexpr std::array<PushHealthStage, 5> kPushHealthStages{{{0, "color"}, {5, "fg1"}, {6, "fg2"}, {12, "fgBatch"}, {13, "blit"}}};
+// Package 16: BaseTail 35, VfgCapture 36, RealCompose 37 (the parts of the "picture" that had no timer of their own).
+inline constexpr std::array<PushHealthStage, 8> kPushHealthStages{{{0, "color"}, {5, "fg1"}, {6, "fg2"}, {12, "fgBatch"}, {13, "blit"},
+                                                                  {35, "baseTail"}, {36, "vfgCapture"}, {37, "realCompose"}}};
 
 // Session totals the engine keeps (cumulative); the window reports their growth. A total that falls (a new session) counts
 // from zero again.
@@ -106,6 +118,8 @@ public:
             interval_.add(double(call100ns - lastPresent100ns_) / 10000.0);
         lastPresent100ns_ = call100ns;
     }
+    // Package 16: CPU submit of the real frame's base list -> the GPU starting it (GetClockCalibration), ms.
+    void submitToGpuStart(double ms) { submitStart_.add(ms); }
     void gpu(unsigned stageIndex, double ms) {
         for (std::size_t i = 0; i < kPushHealthStages.size(); ++i)
             if (kPushHealthStages[i].index == stageIndex) { gpu_[i].add(ms); return; }
@@ -124,6 +138,42 @@ public:
     // Low-latency state for the line: 0 off, 1 on (Sleep called), 2 ended by a guard this session.
     // reflexSleep's overrunMs: -1 when nothing could be compared (counted as reflexUnknown).
     void reflexState(int state) { reflexState_ = state; }
+    // Stream "s10-display" (PushDisplayPath.h): one dated present's Present call -> the vblank that showed it (DXGI frame
+    // statistics, ms) and the refresh period (ms) it was dated with; the refresh-phase test uses both.
+    void toScreen(double ms, double periodMs) {
+        toScreen_.add(ms);
+        phase_.add(ms, periodMs);
+    }
+    // How late a paced live frame's Present call began after its deadline (ms; at or below 0: on time).
+    void presentLate(double ms, bool generated) {
+        if (!std::isfinite(ms)) return;
+        if (generated) lateGenerated_.add(std::max(0.0, ms));
+        else lateReal_.add(std::max(0.0, ms));
+        if (ms > 1.0) ++lateOver1ms_;
+        // Split by what came just before this Present (review SHOULD 3): a GPU-ready wake that ended the precise wait.
+        if (wakeBeforePresent_) {
+            ++presentsAfterWake_;
+            if (ms > 1.0) ++lateAfterWake_;
+        } else if (ms > 1.0) ++lateWithoutWake_;
+        wakeBeforePresent_ = false;
+    }
+    // The owner thread's precise wait was ended by a GPU-ready event within kPushDeadlineHold100ns of a deadline (counted
+    // with and without VEYRA_EXP_RP_DEADLINE_HOLD; held = the switch kept the wait).
+    void nearDeadlineWake(bool held) {
+        ++(held ? wakesHeld_ : wakesNear_);
+        if (!held) wakeBeforePresent_ = true;   // the next Present follows a wake that ended the wait (review SHOULD 3)
+    }
+    // One completion poll of the owner thread (review SHOULD 3): its duration, and whether it began before a precise
+    // deadline that was due and ended after it (the poll then delayed that frame's Present by the overrun).
+    void poll(std::int64_t start100ns, std::int64_t end100ns, std::int64_t due100ns) {
+        if (end100ns < start100ns) return;
+        poll_.add(double(end100ns - start100ns) / 10000.0);
+        pushPresentBeforePoll().observePoll(double(end100ns - start100ns) / 10000.0);   // sizes VEYRA_EXP_RP_PRESENT_BEFORE_POLL's hold
+        if (due100ns > 0 && start100ns < due100ns && end100ns > due100ns) {
+            ++pollsPastDeadline_;
+            pollOverrun_.add(double(end100ns - due100ns) / 10000.0);
+        }
+    }
 
     // Once a second (the [capture-timing] block). Returns the line when 10 s have passed since the window began, else "".
     std::string second(std::int64_t now100ns, const PushHealthGrid& grid, const PushHealthTotals& totals) {
@@ -177,19 +227,48 @@ private:
             const std::string n = kPushHealthStages[i].name;
             t += std::format(" gpu_{}P50Ms={} gpu_{}P95Ms={} gpu_{}P99Ms={}", n, num(g.p50, 3), n, num(g.p95, 3), n, num(g.p99, 3));
         }
+        const auto st = submitStart_.summary(scratch_);
+        t += std::format(" submitToGpuStartP50Ms={} submitToGpuStartP95Ms={} submitToGpuStartP99Ms={}", num(st.p50, 3), num(st.p95, 3), num(st.p99, 3));
         const auto o = overrun_.summary(scratch_);
         t += std::format(" reflex={} reflexSleeps={} reflexSleepMeanMs={} reflexSleepMaxMs={} reflexOverrunMeanMs={} reflexOverrunP95Ms={} reflexOverrunP99Ms={} "
                          "reflexOverrunMaxMs={} reflexOverruns={} reflexUnknown={}",
                          reflexState_, sleeps_, num(sleeps_ ? sleepSum_ / double(sleeps_) : -1.0, 3), num(sleeps_ ? sleepMax_ : -1.0, 3), num(o.mean, 3),
                          num(o.p95, 3), num(o.p99, 3), num(o.max, 3), overruns_, unknown_);
+        const auto ts = toScreen_.summary(scratch_);
+        t += std::format(" toScreenSamples={} toScreenP50Ms={} toScreenP95Ms={} toScreenP99Ms={} toScreenMaxMs={} toScreenRefreshesByMsToVblank={}",
+                         toScreen_.total(), num(ts.p50), num(ts.p95), num(ts.p99), num(ts.max), phase_.describe());
+        const auto lg = lateGenerated_.summary(scratch_);
+        const auto lr = lateReal_.summary(scratch_);
+        t += std::format(" presentLateGenP50Ms={} presentLateGenP99Ms={} presentLateGenMaxMs={} presentLateRealP50Ms={} presentLateRealP99Ms={} "
+                         "presentLateRealMaxMs={} presentsLateOver1ms={} readyWakesNearDeadline={} readyWakesHeld={}",
+                         num(lg.p50, 3), num(lg.p99, 3), num(lg.max, 3), num(lr.p50, 3), num(lr.p99, 3), num(lr.max, 3), lateOver1ms_, wakesNear_, wakesHeld_);
+        const auto pl = poll_.summary(scratch_);
+        const auto po = pollOverrun_.summary(scratch_);
+        t += std::format(" presentsAfterReadyWake={} lateOver1msAfterReadyWake={} lateOver1msOtherwise={} polls={} pollP50Ms={} pollP99Ms={} pollMaxMs={} "
+                         "pollsPastDeadline={} pollOverrunP99Ms={} pollOverrunMaxMs={}",
+                         presentsAfterWake_, lateAfterWake_, lateWithoutWake_, poll_.total(), num(pl.p50, 3), num(pl.p99, 3), num(pl.max, 3), pollsPastDeadline_,
+                         num(po.p99, 3), num(po.max, 3));
         t += " (software timing, not photons: the real frame's delay is capture callback -> return of its Present; interval = spacing of Present calls; "
-             "reflexOverrun = how far NVIDIA low latency's Sleep ran past the arrival of the sample read after it: up to that much is added to that frame)";
+             "reflexOverrun = how far NVIDIA low latency's Sleep ran past the arrival of the sample read after it: up to that much is added to that frame; "
+             "toScreen = Present call -> the vblank that showed it (DXGI frame statistics), NOT part of the real frame's delay above; "
+             "toScreenRefreshesByMsToVblank = per 0.5 ms bin of the time from the Present call to the next vblank: mean whole refreshes waited / presents; "
+             "presentLate = Present call begin - the frame's deadline; readyWakes = GPU-ready events that ended the precise wait within 2 ms of a deadline; "
+             "poll = the owner thread's completion poll; pollsPastDeadline = polls that began before a due precise deadline and ended after it)";
         return t;
     }
     void reset(std::int64_t now100ns, const PushHealthTotals& totals) {
         real_.clear();
         interval_.clear();
         overrun_.clear();
+        toScreen_.clear();
+        lateGenerated_.clear();
+        lateReal_.clear();
+        phase_.clear();
+        lateOver1ms_ = wakesNear_ = wakesHeld_ = 0;
+        presentsAfterWake_ = lateAfterWake_ = lateWithoutWake_ = pollsPastDeadline_ = 0;
+        poll_.clear();
+        pollOverrun_.clear();
+        submitStart_.clear();
         for (auto& g : gpu_) g.clear();
         grid_ = {};
         generated_ = realPresents_ = sleeps_ = overruns_ = unknown_ = 0;
@@ -202,6 +281,16 @@ private:
     PushSampleRing<1024> real_;
     PushSampleRing<4096> interval_;
     PushSampleRing<1024> overrun_;
+    PushSampleRing<2048> toScreen_;
+    PushSampleRing<2048> lateGenerated_;
+    PushSampleRing<1024> lateReal_;
+    PushRefreshPhase phase_{};
+    std::uint64_t lateOver1ms_ = 0, wakesNear_ = 0, wakesHeld_ = 0;
+    std::uint64_t presentsAfterWake_ = 0, lateAfterWake_ = 0, lateWithoutWake_ = 0, pollsPastDeadline_ = 0;
+    bool wakeBeforePresent_ = false;
+    PushSampleRing<4096> poll_;
+    PushSampleRing<512> pollOverrun_;
+    PushSampleRing<1024> submitStart_;
     std::array<PushSampleRing<1024>, kPushHealthStages.size()> gpu_{};
     std::vector<double> scratch_ = std::vector<double>(4096);
     PushHealthGrid grid_{};
@@ -217,6 +306,23 @@ inline PushFgHealth& pushFgHealth() {
     static PushFgHealth health;
     return health;
 }
+
+// Stream "s10-display" (review SHOULD 3): times one completion poll (RAII, owner thread). due100ns: the precise deadline the
+// scheduler waits for (0 when none), on the same steady clock as the engine's host100ns.
+class PushPollWatch {
+public:
+    PushPollWatch(PushFgHealth& health, std::int64_t due100ns) : health_(health), due_(due100ns), start_(now100ns()) {}
+    ~PushPollWatch() { health_.poll(start_, now100ns(), due_); }
+    PushPollWatch(const PushPollWatch&) = delete;
+    PushPollWatch& operator=(const PushPollWatch&) = delete;
+    static std::int64_t now100ns() {
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count() / 100;
+    }
+
+private:
+    PushFgHealth& health_;
+    std::int64_t due_, start_;
+};
 
 // ---- R11: NVIDIA low latency's per-frame Sleep on a source-paced capture card --------------------------------------------
 // How far one Sleep ran past the arrival of the sample read after it: the part of the Sleep that ended after the sample was

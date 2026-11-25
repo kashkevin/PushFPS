@@ -60,6 +60,7 @@
 #include "veyra/engine/PresentationGeometry.h"
 #include "veyra/engine/PushCoverRegion.h"
 #include "veyra/engine/PushVideoOverlay.h"
+#include "veyra/engine/PushDisplayPath.h"
 #include "veyra/gfx/PresentationHooks.h"
 #include "veyra/pipeline/AmdHipPreflight.h"
 #include "veyra/ui/InterfaceRenderer.h"
@@ -309,6 +310,11 @@ bool g_testUncoveredNow = false;
 // the picture the video window keeps ONE rectangle (the largest part no item touches) instead of a region
 // with rounded holes. The question it answers: is the complex region what keeps presentation out of the
 // short-delay regime (BENCH2: slow exactly while regionKind=3). The strip beside an item is hidden meanwhile.
+// Stream "s10-display" (engine/PushDisplayPath.h, rule 4): VEYRA_EXP_RP_FULLSCREEN_NO_REGION=1 (off unless exactly "1").
+bool fullscreenNoRegionSwitch() {
+    static const bool on = [] { wchar_t v[4]{}; return GetEnvironmentVariableW(L"VEYRA_EXP_RP_FULLSCREEN_NO_REGION", v, 4) == 1 && v[0] == L'1'; }();
+    return on;
+}
 bool rectRegionSwitch() {
     static const bool on = [] { wchar_t v[4]{}; return GetEnvironmentVariableW(L"VEYRA_EXP_PRESENT_RECT_REGION", v, 4) == 1 && v[0] == L'1'; }();
     return on;
@@ -396,6 +402,26 @@ void syncVideoCovers(QQuickWindow* window, QQuickItem* host, qreal inset) {
         holes << QRect(int(std::floor(local.left() * dpr)), int(std::floor(local.top() * dpr)),
                        int(std::ceil(local.width() * dpr)) + 1, int(std::ceil(local.height() * dpr)) + 1);
         holes << QRect(0, 0, int(std::round(c.radius * dpr * 2)), 0);
+    }
+    // Stream "s10-display" (opt-in, review SHOULD 1): in the app's fullscreen a cover that cuts nothing out of the video
+    // window is not a cover, so the window keeps no region at all; windowed play and the default keep today's region.
+    if (veyra::engine::pushFullscreenDropsOutsideCovers(window->visibility() == QWindow::FullScreen, fullscreenNoRegionSwitch())) {
+        QList<Cover> kept;
+        QList<QRect> keptHoles;
+        for (qsizetype i = 0; i < covers.size(); ++i) {
+            const QRect& hole = holes[i * 2];
+            if (!veyra::engine::pushCoverCutsWindow(hole.left(), hole.top(), hole.width(), hole.height(), w, h)) continue;
+            kept << covers[i];
+            keptHoles << holes[i * 2] << holes[i * 2 + 1];
+        }
+        static int fullscreenLogged = -1;
+        const int dropped = int(covers.size() - kept.size());
+        if (dropped != fullscreenLogged) {
+            fullscreenLogged = dropped;
+            veyra::log::info("qml-window", std::format("fullscreen region: {} cover(s) outside the video window left out (experiment VEYRA_EXP_RP_FULLSCREEN_NO_REGION=1)", dropped));
+        }
+        covers = kept;
+        holes = keptHoles;
     }
     // cineIn rides along as a marker entry so one cache covers both, and the last
     // entry keeps its steadiness on a scene that renders without moving either.

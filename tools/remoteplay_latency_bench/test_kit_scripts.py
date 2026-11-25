@@ -22,7 +22,8 @@ Get-CimInstance Get-Command Get-Content Get-Date Get-FileHash Get-Item Get-ItemP
 New-Object Out-Null Read-Host Remove-Item Resolve-Path Select-Object Select-String Set-Content Set-Item Sort-Object Split-Path Start-Process
 Start-Sleep Stop-Process Test-Path Where-Object Write-Host Get-NetAdapter Get-NetRoute Test-Connection Measure-Object Out-File Out-String
 Get-Counter Write-Output Get-Variable Add-Type Test-NetConnection Get-NetIPConfiguration Get-NetAdapterAdvancedProperty Get-NetIPAddress
-Get-AuthenticodeSignature Rename-Item Add-Member""".split())
+Get-AuthenticodeSignature Rename-Item Add-Member
+Get-ScheduledTask Get-ScheduledTaskInfo Get-WinEvent Get-Service Get-PnpDevice Get-PnpDeviceProperty""".split())   # last line: Collect-Stall-Evidence.ps1 (read-only cmdlets)
 AUTOMATIC = set("_ true false null args matches lastexitcode psversiontable myinvocation erroractionpreference input this psscriptroot host pid error "
                 "pscmdlet psboundparameters pwd home".split())
 
@@ -160,7 +161,7 @@ class KitScripts(unittest.TestCase):
         shared = {"install-slipstream.ps1", "run-first-test.ps1", "uninstall-slipstream.ps1", "slipstream-common.ps1"}
         scripts = sorted(p for p in glob.glob(os.path.join(KIT, "*.ps1")) + glob.glob(os.path.join(KIT, "ci", "*.ps1"))
                          if os.path.basename(p) not in shared)
-        self.assertEqual(sorted(os.path.basename(p) for p in scripts), ["check-dry-run.ps1", "collect-diagnostics.ps1", "run-tests.ps1"])
+        self.assertEqual(sorted(os.path.basename(p) for p in scripts), ["Collect-Stall-Evidence.ps1", "check-dry-run.ps1", "collect-diagnostics.ps1", "run-tests.ps1"])
         for path in scripts:
             with self.subTest(script=os.path.basename(path)):
                 self.assertEqual(check_script(path), [], os.path.basename(path))

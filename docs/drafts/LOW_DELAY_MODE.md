@@ -1,5 +1,10 @@
 # "Lower delay": one predicted frame per real frame (Package 15, stream lowdelay, 24 Nov 2026)
 
+Sections 1-8 describe Package 15 as built. Where Package 16 differs (Smoothness Mode, HUD Lock and boxes, interruptions,
+VFG's refusal ladder, the kept pass, the grid exit, the motion source), the section "Package 16" at the end is current.
+A real frame does not wait for its own pair's predicted frame; that frame's GPU work does come before the next real
+frame's (which is why a slow one ends the mode: exit `dear`).
+
 Labels used throughout: **SIMULATED** (the scheduling simulator, modelled costs, no GPU), **TESTED** (unit or QML tests on
 Linux, or the remote checks), **BUILT** (compiled into PushFPS.exe on CI's Windows machine, software renderer),
 **HARDWARE-VERIFIED** (run on the owner's PC). Nothing here is HARDWARE-VERIFIED. No claim is made about the picture.
@@ -207,3 +212,63 @@ What the simulation says (SIMULATED only):
 (requiresGraphRebuild); `tests/remoteplay/FgScheduleSim.h`; `qml/Veyra/PushLowDelayRow.qml`;
 `src/ui/bridge/PushSlipstream.cpp`; `src/ui/QmlPlayerBridge.cpp`; `i18n/pending/lowdelay.json`;
 `tools/remoteplay_latency_bench/lowdelay_three_way.cpp`.
+
+## Package 16 (stream s10-lowdelay2, 24-25 Nov 2026): why Package 15 never ran on the owner's PC, and what changed
+
+Evidence (MEASURED on his PC, his own log of 24 Nov, Package 15): `[fg-sched] lowDelay state=not-here
+refusal=smoothness-mode ... predictedPairs=0`; every `[capture-timing]` line `lowDelay=not-here predictedPairs=0`. He gets
+his 90 FPS from Smoothness Mode (target 90) and has Live HUD Lock on; Package 15 refused the mode for both. Nothing below
+has run on his PC; labels as in section 0.
+
+1. **Smoothness Mode** is no longer a refusal (`pushLowDelayStaticRefusal`). It only decides the multiplier: at 3X a pair
+   may run predicted; below 3X the graph refuses `not-3x` and the schedule pauses without back-off, resuming after 30 calm
+   pairs at 3X (`kMultiplierResumePairs`, longer than Smoothness Mode's and the adaptive multiplier's 0.5 s gates: one
+   gated change back and forth is one pause). Smoothness Mode's cost model keeps predicted pairs (one VFG run + P) at their
+   own level, used while the predicted schedule runs. The latency split now takes the real frame's index in the batch
+   (I, B, P) instead of assuming it is last. TESTED (unit, the real `PushSmoothnessMode` driving the schedule) and
+   SIMULATED (target 90, every card set and a set whose inputs are the parts his log measured: at least 95 % of pairs
+   predicted wherever Smoothness Mode keeps 3X; never a predicted pair at 2X).
+2. **Live HUD Lock and exclusion boxes** are no longer refusals. I(2/3) is composed like every interpolated frame (held A,
+   raw A; the lock's state already updated with B in B's base list). P follows B: locked pixels from a copy of B taken from
+   VFG's input buffer (`PushHudLock::kPredictedHeld`, one more working-size texture, about 33 MB at 3840x2160 in a 32-bit
+   format, only with HUD Lock), boxes from raw B. The state is updated by real frames only. P's lists never touch the
+   texture B is presented from, so B does not wait for its own pair's P (`pushRealPresentFence`, `predictedPair`); P's
+   GPU work does come before the next real frame's. WARP tests (`predict-hud-lock`, `predict-hud-lock-hdr10`: locked
+   pixels of P bit-identical to B; without the compose they differ) ran in build 45586071571. Exclusion boxes in P: by construction the same compose as B's from the same raw B;
+   where the content under a box moves, P's enhanced input differs from B's, and the weight-1 lerp can round to a
+   different code in rare pixels (`exclusionMismatch` of the test-only check would show it); not WARP-tested.
+3. **Interruptions** (forensics F1): `PushLowDelayInterrupts::Tolerant`. A skipped, held or refused pair (a history reset
+   included) runs today's way and neither ends the mode nor doubles the calm run; leave when more than 6 of the last 30
+   pairs were interrupted, enter when 8 of the last 10 were calm and at most 3 of the last 30 interrupted. Decision code
+   with i.i.d. skips (TESTED): at least 95 % of pairs predicted at 2 % skips (Package 15's rule: under 20 %, about 1 % in
+   the forensics run). SIMULATED with Smoothness target 90 and 2 % forced skips: 97.5 % of pairs predicted in the owner-parts
+   set (Package 15's rule 16.8 % on the same draws). Noted: with a Smoothness target, i.i.d. admission skips of 3 % or more
+   make Smoothness Mode step down to 2X by its own rule (more than 10 % of a 250 ms tick rejected on 4 ticks in a row); the
+   mode then pauses. His log: 4 rejected of 16585 admissions, 0 skipped pairs.
+
+What only his PC can show: whether the mode now runs (`[capture-timing] lowDelay=active predictedPairs=` close to the
+pairs per window), VFG's answer to FrameIndex 2 alone, P's GPU cost at 4K, the picture, and the readout itself.
+
+### Package 16, items 4-7 and the "picture" itemised
+
+4. **P's GPU cost** is measured by five timestamps in its own list (downsample, flow, warp, verdict, total; P50/P95/P99
+   over 10 s in every `[capture-timing]` line of a session with the row on: `predictGpuMs=`) and kept out of the
+   interpolated FG estimate that admits every pair; an asked pair is admitted with Fg1 + P's measured P95 once 8 P were
+   timed. The real frame does not wait for its own pair's predicted frame (B's presentation fence is its own lists; P's
+   list follows B's and I's on the queue); that frame's GPU work does come before the next real frame's. A P whose P95
+   over the last 30 is above one output slot leaves the mode (exit `dear`, sustained back-off): a rule from the queue
+   order, not measured. P's motion comes from AMD FidelityFX optical flow behind its start-up self-check; the GPU DIS
+   builds exist only for tests (VEYRA_TEST_PREDICT_FLOW).
+5. **VFG refusing FrameIndex 2 alone**: tried in order direct, explicit Timestep 2/3, FrameIndex 1 then 2 (1 discarded),
+   each logged with the SDK's status; the first that works is kept. By arithmetic with his measured 2.0-2.3 ms per VFG
+   frame at 4K, the last fallback makes I ready about one Run later than direct. Frame generation goes on in every case.
+6. **The row** shows only what the last second measured: "Running: N predicted frames a second (X % of frame pairs)",
+   "Waiting: a/b frame pairs steady; last stop: reason (n s ago)", "Not running: reason" after 20 s without a predicted
+   pair. `[fg-sched] lowDelay` every 10 s while the row is on. Skipped pairs are no longer logged as `refused=not-3x`.
+7. **Toggles**: the pass is kept once the row was on in a run; only the first switch-on rebuilds the graph (it creates
+   the pass, its flow and the HUD Lock copy). Memory while kept is logged (`[push-predict] kept: about N MB`).
+
+The "picture" part of the readout (his 4.7 ms): new GPU stages BaseTail (after Color up to the hand-over to frame
+generation), VfgCapture (the copy into VFG's input and the cut test; Fg1 is unchanged and still contains it) and
+RealCompose (exclusion boxes + HUD Lock update), and the base list's CPU submit -> GPU start (GetClockCalibration):
+`[fg-health]` P50/P95/P99, `[capture-timing] picture*Ms` mean/P95 of the last second.

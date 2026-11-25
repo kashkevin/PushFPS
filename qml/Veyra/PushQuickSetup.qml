@@ -5,6 +5,7 @@ import QtQuick.Layouts
 import "EffectSupport.js" as Support
 import "PushCaptureCards.js" as Cards
 import "PushGamePresets.js" as Presets
+import "PushGsyncRun.js" as GsyncRun
 
 // PushFPS quick setup: the choices most console players make, above the detailed
 // controls. Every control here only sets existing settings (frame generation on/off,
@@ -991,13 +992,40 @@ VGroup {
         objectName: "pushfps-auto-fullscreen-row"
         visible: !quick.compact
         label: qsTr("连接后自动全屏")
-        hint: qsTr("采集卡或串流画面出现时进入全屏；按 F11 或 Esc 退出")
+        hint: qsTr("采集卡或串流画面出现时进入全屏；按 F11 或 Esc 退出") + (quick.toScreenText.length > 0 ? "\n" + quick.toScreenText : "")
         VSwitch {
             objectName: "pushfps-auto-fullscreen"
             checked: veyra.preferences.pushAutoFullscreen === true
             onToggled: v => veyra.setPreference("pushAutoFullscreen", v)
         }
     }
+
+    // Stream "s10-display": this PC's own measured display path in the current window mode (pushLiveStats toScreen*, DXGI frame
+    // statistics of the last second). Only what was measured now: no figure is promised for another mode.
+    property var displayPath: ({})
+    Timer {
+        objectName: "pushfps-display-path-timer"
+        interval: 1000; repeat: true
+        running: quick.visible && veyra.hasSource === true && !quick.compact
+        triggeredOnStart: true
+        onTriggered: quick.displayPath = veyra.pushLiveStats() || ({})
+        onRunningChanged: if (!running) quick.displayPath = ({})
+    }
+    readonly property bool windowFullscreen: quick.Window.window !== null && quick.Window.window.visibility === Window.FullScreen
+    // Review SHOULD 5: only measured facts (the presenter's [present-path] coversMonitor and the WINDOWED bit of
+    // CheckHardwareCompositionSupport), no general claim about how Windows shows a window.
+    readonly property string windowFacts: {
+        const covers = Number(quick.displayPath.toScreenCoversMonitor)
+        const hw = Number(quick.displayPath.toScreenWindowedHwComposition)
+        if (covers === 1) return qsTr("窗口占满屏幕")
+        if (covers !== 0) return quick.windowFullscreen ? qsTr("全屏") : ""
+        return hw === 0 ? qsTr("窗口没有占满屏幕；这台电脑报告窗口不支持硬件合成") : qsTr("窗口没有占满屏幕")
+    }
+    readonly property string toScreenText: quick.displayPath.toScreenKnown === true
+        ? (quick.windowFacts.length > 0
+           ? qsTr("现在 Present 之后到屏幕刷新：%1 ms（中位数，DXGI 帧统计，软件计时）· %2").arg(Number(quick.displayPath.toScreenP50Ms).toFixed(1)).arg(quick.windowFacts)
+           : qsTr("现在 Present 之后到屏幕刷新：%1 ms（中位数，DXGI 帧统计，软件计时）").arg(Number(quick.displayPath.toScreenP50Ms).toFixed(1)))
+        : ""
 
     // Smooth frame pacing: every frame waits for a refresh (V-Sync; variable refresh where the monitor
     // has it) and the output is capped at the refresh rate, so each generated frame is shown once.
@@ -1039,12 +1067,71 @@ VGroup {
             if (quick.gsyncWanted) {
                 quick.gsyncWanted = false
                 quick.gsyncChecked = true
-                if (quick.gsyncTools.canRepair) { quick.gsyncTools.repair(); return }
+                if (quick.gsyncTools.canRepair) { quick.gsyncRepairing = true; quick.gsyncTools.repair(); return }
             }
             // Checked and nothing (left) to set: remembered, so the row does not come back at every
             // start on screens whose driver never reports variable refresh as active (G-SYNC Compatible).
-            if (quick.gsyncChecked && !quick.gsyncTools.canRepair) veyra.setPreference("pushGsyncChecked", true)
+            if (quick.gsyncChecked && !quick.gsyncTools.canRepair) {
+                veyra.setPreference("pushGsyncChecked", true)
+                // Stream "s10-display": a repair saved in this process takes effect only after PushFPS is restarted.
+                if (quick.gsyncRepairing && quick.gsyncRestartAllowed) {
+                    quick.gsyncRepairing = false
+                    GsyncRun.repairedThisRun = true
+                    veyra.setPreference("pushGsyncRestartPending", true)
+                    quick.gsyncRun = 1
+                }
+            }
         }
+    }
+    // Stream "s10-display" (the owner's log, 24 Nov 2026: repaired at 22:57:40, never restarted): after a repair the row says
+    // "restart PushFPS to finish" until a new process plays a picture; that process then logs and shows the driver's answer
+    // once ([vrr-profile] after-restart ...) and clears the pending flag. gsyncRun: 0 nothing, 1 restart needed, 2 confirmed,
+    // 3 still not confirmed after the restart.
+    property bool gsyncRepairing: false
+    // VEYRA_TEST_RP_LEGACY_PACKAGE15 / _GSYNC_RESTART (PushLegacy.h): the bridge reports the part restored as
+    // pushLiveStats().gsyncRestartRow === false; then neither the pending flag nor the row exists (Package 15).
+    readonly property bool gsyncRestartAllowed: veyra.pushLiveStats().gsyncRestartRow !== false
+    property int gsyncRun: quick.gsyncRestartAllowed && veyra.preferences.pushGsyncRestartPending === true && GsyncRun.repairedThisRun ? 1 : 0
+    // Review MUST 1: the driver's answer is stated only where PushFPS asked for variable refresh (smooth pacing with VRR
+    // requested); level 3 alone is no evidence of a wrong setting (PushFPS may not ask, and G-SYNC Compatible screens may
+    // never report "active"), so no instruction is given. gsyncRun 2 = reported active, 3 = requested, not reported active.
+    function gsyncVerdict(requested, state) { return !requested ? 0 : state >= 4 ? 2 : 3 }
+    function gsyncStartFacts() {
+        const state = Number(veyra.vrrState || 0)
+        const requested = quick.smoothPacing
+        return { state: state, requested: requested }
+    }
+    Timer {
+        id: gsyncAfterRestart
+        objectName: "pushfps-gsync-after-restart-timer"
+        // Once per process, 20 s into playing (the driver's VRR state is read again a few seconds after the first present):
+        // one [vrr-profile] start-state line at every start, whatever the rows show; after a repair of an earlier run also
+        // the verdict for the row.
+        interval: 20000
+        running: !GsyncRun.reportedThisRun && veyra.hasSource === true
+        onTriggered: {
+            const f = quick.gsyncStartFacts()
+            const pending = veyra.preferences.pushGsyncRestartPending === true && !GsyncRun.repairedThisRun
+            const confirmed = !f.requested ? "unknown" : f.state >= 4 ? "true" : "false"
+            if (!GsyncRun.reportedThisRun) {
+                GsyncRun.reportedThisRun = true
+                veyra.logUi("vrr-profile", "start-state vrrState=" + f.state + " requestedByPushFPS=" + f.requested + " confirmed=" + confirmed
+                            + (f.requested ? "" : " reason=not-requested") + " afterRepairRestart=" + pending
+                            + " gsyncChecked=" + (veyra.preferences.pushGsyncChecked === true)
+                            + " (driver level as last read: 4 active, 3 possible but not reported active; logged once per start)")
+                if (pending) veyra.setPreference("pushGsyncRestartPending", false)
+            }
+            if (pending && quick.gsyncRestartAllowed) quick.gsyncRun = quick.gsyncVerdict(f.requested, f.state)
+        }
+    }
+    VRow {
+        objectName: "pushfps-gsync-restart-row"
+        visible: !quick.compact && quick.gsyncRun > 0
+        label: "G-SYNC"
+        hint: quick.gsyncRun === 1 ? qsTr("驱动配置已保存：请重启 PushFPS 来完成 G-SYNC 设置")
+            : quick.gsyncRun === 2 ? qsTr("重启后驱动已确认 G-SYNC 对 PushFPS 生效")
+            : qsTr("重启后驱动还没有报告 G-SYNC 对 PushFPS 生效")
+        hintBelow: true
     }
     VRow {
         objectName: "pushfps-gsync-row"

@@ -80,7 +80,7 @@ Item {
             row.refresh()
             verify(status().visible)
             const calm = status().text
-            engineState = ({available: true, state: "active"})
+            engineState = ({available: true, state: "active", predictedPerSecond: 29, pairsPerSecond: 30})
             row.refresh()
             const active = status().text
             verify(active !== calm && active.length > 0, "running and waiting read differently")
@@ -112,7 +112,7 @@ Item {
         }
         function test_cannot_run_here_says_why() {
             sw().toggled(true)
-            engineState = ({available: true, state: "not-here", reason: "hud-lock-or-exclusion"})
+            engineState = ({available: true, state: "not-here", reason: "present-sink-fg"})
             row.refresh()
             const hud = status().text
             engineState = ({available: true, state: "not-here", reason: "format"})
@@ -120,21 +120,81 @@ Item {
             const format = status().text
             verify(hud.length > 0 && format.length > 0 && hud !== format, "each static reason has its own words")
         }
-        // Review 2, SHOULD 4 and 6: Smoothness Mode deciding, and a pair whose multiplier in use is not 3X (adaptive,
-        // output cap) while the setting says 3X, each have their own words (not "needs VFG at 3X").
-        function test_not_3x_in_use_and_smoothness_mode_say_why() {
+        // Review 2, SHOULD 6, and Package 16: a pair whose multiplier in use is not 3X (Smoothness Mode, adaptive, output
+        // cap) pauses the mode and says it resumes by itself. Smoothness Mode and HUD Lock are no longer reasons.
+        function test_not_3x_in_use_pauses_and_says_it_resumes() {
             sw().toggled(true)
             engineState = ({available: true, state: "not-here", reason: "not-3x"})
             row.refresh()
             const not3x = status().text
-            engineState = ({available: true, state: "not-here", reason: "smoothness-mode"})
-            row.refresh()
-            const smooth = status().text
             const needs = qsTr("需要 NVIDIA VFG 补帧，倍数设为 3×")
-            verify(not3x.length > 0 && smooth.length > 0, "both say something")
-            verify(not3x !== needs && smooth !== needs && not3x !== smooth, "each has its own words")
+            verify(not3x.length > 0 && not3x !== needs, "its own words")
+            verify(not3x.indexOf("流畅模式") >= 0 && not3x.indexOf("自动继续") >= 0, "names Smoothness Mode and says it resumes by itself")
+            verify(row.notHereText("hud-lock-or-exclusion") === needs && row.notHereText("smoothness-mode") === needs, "the reasons Package 16 removed have no words of their own left")
+        }
+        // Package 16, item 6 (forensics F5): the line is made from the live counters of the last second only.
+        function test_running_only_when_predicted_pairs_ran() {
+            sw().toggled(true)
+            engineState = ({available: true, state: "active", predictedPerSecond: 27, pairsPerSecond: 30})
+            row.refresh()
+            const running = status().text
+            verify(running.indexOf("27") >= 0 && running.indexOf("90") >= 0, "says how many predicted frames a second and the share of pairs")
+            engineState = ({available: true, state: "active", predictedPerSecond: 27, shownPerSecond: 25, pairsPerSecond: 30})
+            row.refresh()
+            verify(status().text.indexOf("25") >= 0 && status().text.indexOf("90") >= 0, "counts the predicted frames shown (review 1 SHOULD 11)")
+            engineState = ({available: true, state: "active", predictedPerSecond: 0, pairsPerSecond: 30, calmHave: 0, calmNeed: 0})
+            row.refresh()
+            verify(status().text !== running && status().text.indexOf("0/0") < 0, "'active' without predicted pairs in the last second: no '0/0'")
+            engineState = ({available: true, state: "calm", predictedPerSecond: 0, pairsPerSecond: 30, calmHave: 5, calmNeed: 8})
+            row.refresh()
+            verify(status().text.indexOf("5/8") >= 0, "waiting shows the entry progress")
+            engineState = ({available: true, state: "calm", predictedPerSecond: 0, pairsPerSecond: 30, calmHave: 2, calmNeed: 8, lastStop: "skipped", lastStopAgeS: 4})
+            row.refresh()
+            verify(status().text.indexOf("4") >= 0 && status().text.indexOf(row.stopText("skipped")) >= 0, "the last stop and how long ago")
+            engineState = ({available: true, state: "calm", predictedPerSecond: 0, pairsPerSecond: 30, zeroSeconds: 20, lastStop: "dear", lastStopAgeS: 25})
+            row.refresh()
+            const notRunning = status().text
+            verify(notRunning.indexOf(row.stopText("dear")) >= 0 && notRunning !== running, "20 s without predicted pairs: not running, with the reason")
+            for (const r of ["skipped", "held", "refused", "unusable", "late", "dear", "ineligible", "off"])
+                verify(row.stopText(r).length > 0, "every stop reason has words: " + r)
+            verify(!/毫秒|ms\b/.test(running + notRunning), "never a delay figure")
+        }
+        function test_switch_on_never_looks_fine_without_running() {
+            sw().toggled(true)
+            engineState = ({})
+            row.refresh()
+            verify(status().visible && status().text.length > 0, "on with no engine state: it says it waits for the picture")
+            engineState = ({available: true, state: "starting"})
+            row.refresh()
+            const starting = status().text
+            row.startingSeconds = 5
+            verify(status().text !== starting && status().text.length > 0, "'starting' for 5 s says it is not running")
+            row.startingSeconds = 0
         }
         // Review 2, SHOULD 9: VFG refused the request: unavailable for this run, and the row says how to try once more.
+        function test_checking_while_the_self_check_runs() {
+            sw().toggled(true)
+            engineState = ({available: true, state: "starting", checking: true})
+            row.refresh()
+            const checking = status().text
+            verify(checking.indexOf("3") >= 0, "the check names its budget")
+            engineState = ({available: true, state: "starting", checking: false})
+            row.refresh()
+            verify(status().text !== checking, "after the check the row reads the engine's state again")
+        }
+        function test_stopped_for_the_playback_says_why() {
+            sw().toggled(true)
+            engineState = ({available: true, state: "calm", stoppedFor: "dear"})
+            row.refresh()
+            const stopped = status().text
+            verify(stopped.indexOf("太慢") >= 0, "the reason in words")
+            engineState = ({available: true, state: "calm", stoppedFor: "none", calmHave: 3, calmNeed: 8})
+            row.refresh()
+            verify(status().text !== stopped, "running again reads differently")
+            engineState = ({available: true, state: "not-here", reason: "flow-too-slow"})
+            row.refresh()
+            verify(status().text.indexOf("太慢") >= 0, "the entry guard says the motion estimation is too slow")
+        }
         function test_vfg_refused_says_so() {
             sw().toggled(true)
             engineState = ({available: true, state: "unavailable", reason: "vfg-refused"})
@@ -170,6 +230,8 @@ Item {
             verify(help.indexOf("尚未在任何电脑上实测") >= 0, "says it has not been measured on any PC")
             verify(help.indexOf("预测不好的帧会照常显示") >= 0, "says bad predictions are still shown (review 2, MUST 2)")
             verify(help.indexOf("个别帧的延迟可能反而比关闭时高") >= 0, "says some frames can be later")
+            verify(help.indexOf("三分之一") < 0, "no projected saving (review 1 SHOULD 11)")
+            verify(help.indexOf("太慢") >= 0 && help.indexOf("中断") >= 0, "names the dear and the interruption exits")
             verify(findChild(row, "pushfps-lowdelay-row").hint.indexOf("关掉这一行") >= 0, "the hint says to switch it off if it looks wrong")
         }
         // Review 2, MUST 3: when the engine refuses the change, the bridge puts the preference back (and shows a notice);

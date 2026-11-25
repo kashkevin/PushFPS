@@ -34,3 +34,14 @@ Veyra modifications, 2026-09-13:
 Future binary packages must include this file, LICENSE, NOTICE, PROVENANCE.md,
 licenses/* and all compiled `shaders/dis/*.dxil` alongside Veyra's adapter shaders.
 The source subset and build recipes remain in the matching Veyra source revision.
+
+PushFPS modifications, 2026-11-25 (Package 16, "Lower delay" item 4 d):
+
+- `native_strict_dis_provider.{h,cpp}`: `make_float_dis_provider`, the same provider without the FP64 feature check,
+  meant for the same shaders compiled with `-D double=float` (`cmake/VeyraGpuDis.cmake`, output `shaders/dis_float`).
+  Shader sources are unchanged.
+- `native_strict_dis_provider.{h,cpp}` (2026-11-25, crash triage of the predicted frame's flow self-check):
+  `strict_dis_set_test` / `strict_dis_test_names`, tests only: record at most N dispatches of one `record()` (the
+  skipped ones keep their barriers) and keep each dispatch's shader name and group count, so a separate process per
+  limit can find the first dispatch whose execution fails (`tests/integration/dis_triage.py`). `Pipeline` keeps its file
+  name for that list. Nothing changes when the limit is not set.

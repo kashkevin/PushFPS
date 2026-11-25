@@ -15,9 +15,11 @@
 // rule as the graph's own per-parity resources). Every resource is left in COMMON.
 #include "veyra/pipeline/GpuPassUtils.h"
 #include "veyra/pipeline/PushPredict.h"
+#include <filesystem>
 #include <memory>
+#include <string>
 
-namespace veyra::guidance { class GpuDisOpticalFlow; }
+namespace veyra::guidance { class GpuDisOpticalFlow; class AmdOpticalFlow; }
 
 namespace veyra::pipeline {
 
@@ -34,8 +36,35 @@ public:
     bool initialize(ID3D12Device* device, uint32_t width, uint32_t height, DXGI_FORMAT format);
     // The flow (only the graph needs it; the tests give their own flow to recordPredict).
     bool initializeFlow(ID3D12Device* device, uint32_t flowWidth, uint32_t flowHeight);
+    // The self-check's marker file and the program identity it names (PushFlowCheckBlock; tests write the marker).
+    static std::string flowCheckIdentity();
+    static std::filesystem::path flowCheckMarker();
+    // REL16 SHOULD 2 / delta SHOULD 1: the end of a session with this pass (pushPlayFaultAction): writes "suspect" or
+    // "failed" (then also blocks every later check of this process), or clears a "suspect". priorSuspect(): the marker
+    // names this program file as "suspect".
+    static bool priorSuspect();
+    static void noteSessionEnd(int action, const char* why);
     bool ready() const { return ready_; }
-    bool flowReady() const { return flow_ != nullptr; }
+    // REL16 delta MUST 2: a self-check frame may still be on the GPU and uses this pass's own objects: the owner must not
+    // destroy the pass (release the pointer instead).
+    bool gpuMayStillUse() const { return gpuMayStillUse_; }
+    bool flowReady() const { return flow_ != nullptr || fidelity_ != nullptr || zeroFlow_; }
+    bool floatFlow() const { return floatFlow_; }   // Package 16: the float-only flow passed its start-up self-check
+    // Review 1 SHOULD 4: the GPU time the motion source's start-up self-check measured for one real frame and P (FidelityFX:
+    // the scored frame's list; GPU DIS: its one run); -1 unknown (test sources, no timestamps).
+    double checkCostMs() const { return checkCostMs_; }
+    // P's motion source (25 Nov 2026): AMD FidelityFX optical flow by default, fed every real frame while the mode is on
+    // (it keeps its own history: recordFlowFrame); GPU DIS (strict or float) only when VEYRA_TEST_PREDICT_FLOW chose it.
+    bool fidelityFlow() const { return fidelity_ != nullptr; }
+    const char* flowName() const { return fidelity_ ? "fidelityfx" : flow_ ? (floatFlow_ ? "gpu-dis-float" : "gpu-dis-strict-fp64") : zeroFlow_ ? "test-zero" : "none"; }
+    // FidelityFX only: one real frame (as VFG holds it: a buffer of `rowPitch`-byte rows, in COMMON) into the flow, in
+    // its own list. Its B -> A motion and trust land in motion(slot) / trust(slot). `reset` (or the first frame) restarts
+    // FidelityFX's history (7 frames before its vectors count); a frame that does not follow the last one (frameIndex not
+    // last + 1) keeps it but is itself not usable (its vectors span more than one frame interval).
+    bool recordFlowFrame(ID3D12GraphicsCommandList* list, UINT slot, ID3D12Resource* current, uint32_t rowPitch, uint64_t frameIndex, bool reset);
+    // Whether motion(slot) holds usable B -> A motion for real frame `frameIndex` (FidelityFX: recorded for that frame
+    // and past its warm-up; GPU DIS: computed per pair by recordMotion, so always).
+    bool motionReady(UINT slot, uint64_t frameIndex) const;
 
     // A (previous) and B (current) as VFG keeps them: buffers of `rowPitch`-byte rows of 32-bit words, in COMMON.
     // The completion value is the graph-fence value the caller signals right after submitting `list` (GpuDis's rule).
@@ -58,6 +87,10 @@ public:
     // was rewritten since (PushPredictReadbackRing) or the list has not been recorded. Call after its fence completed.
     uint64_t lastSequence() const { return readback_.next; }
     bool countersOf(uint64_t sequence, PushPredictCounters& out) const;
+    // Package 16, item 4: the GPU time of P number `sequence` by stage (PushPredictStage; -1 unknown). Written only when
+    // recordMotion and recordPredict of that P ran in the graph (a pass fed its flow directly, as the WARP tests do, has
+    // none). Call after its fence completed; false when the readback was reused since or nothing was timed.
+    bool stageTimesOf(uint64_t sequence, PushPredictStageMs& out) const;
 
     uint32_t width() const { return width_; }
     uint32_t height() const { return height_; }
@@ -86,6 +119,35 @@ private:
     uint64_t lastOfSlot_[kSlots] = {};
     ComPtr<ID3D12Resource> flowPicture_[kSlots][2], motion_[kSlots], trust_[kSlots];
     std::unique_ptr<guidance::GpuDisOpticalFlow> flow_;
+    // FidelityFX source: the context, NvofDensify.hlsl in its FidelityFX mode (vectors -> v x trust, trust), 7
+    // descriptors per use (raw, cost, previous, current, scene changes; motion, trust): slots 0, 1 and the self-check.
+    std::unique_ptr<guidance::AmdOpticalFlow> fidelity_;
+    ComputePass densify_;
+    uint64_t lastFlowFrame_ = 0, flowFrameOf_[kSlots] = {};
+    bool zeroFlow_ = false;
+    bool gpuMayStillUse_ = false;   // REL16 delta MUST 2: set when a self-check frame hung, removed the device or was still in flight
+    double checkCostMs_ = -1.0;   // VEYRA_TEST_PREDICT_FLOW=zero (tests only): motion_ zero and trust_ 1, written once
+    bool initializeZeroFlow(ID3D12Device* device);
+    bool warmOf_[kSlots] = {};
+    // FidelityFX's start-up self-check, end to end through recordFlowFrame / recordMotion / recordPredict on synthetic
+    // work-size frames (pushFlowCheckWindows), on a queue of its own; fidelity_ must be set. Containment as for GPU DIS.
+    struct FidelityCheck {
+        bool ok = false, executed = false, hung = false, removed = false, faulted = false, found = false;
+        bool inFlight = false;   // REL16 MUST 3: stopped by the budget with a frame still on the GPU (objects kept)
+        double flowGpuMs = -1.0, pairGpuMs = -1.0, wallMs = 0.0;
+        std::string text;
+    };
+    FidelityCheck runFidelityCheck(ID3D12Device* device);
+    bool recordDensify(guidance::AmdOpticalFlow& of, ID3D12GraphicsCommandList* list, UINT block, ID3D12Resource* previous,
+                       ID3D12Resource* current, ID3D12Resource* motion, ID3D12Resource* trust, bool warm);
+    // Package 16, item 4: kPushPredictStamps timestamps per readback slot (PushPredictReadbackRing's), resolved at the end
+    // of recordPredict. No heap (creation failed): nothing is timed, nothing fails.
+    ComPtr<ID3D12QueryHeap> stamps_;
+    ComPtr<ID3D12Resource> stampsReadback_;
+    uint64_t stampFrequency_ = 0;
+    bool floatFlow_ = false;
+    uint64_t stampedMotion_ = 0;                                       // the P number recordMotion stamped for
+    uint64_t timedOf_[PushPredictReadbackRing::kSlots] = {};           // the P number each slot's stamps belong to
 };
 
 }  // namespace veyra::pipeline

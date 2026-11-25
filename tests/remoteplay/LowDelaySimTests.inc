@@ -233,3 +233,91 @@ TEST(lowdelay_sim_watch_stops_a_runaway_with_a_dear_prediction) {
         CHECK(with.presents == without.presents);
     }
 }
+
+// Package 16, item 1: Smoothness Mode with the owner's target of 90 at 30 FPS content AND "Lower delay" (Package 15 never
+// asked a pair with a target set). SIMULATED: decision code only, modelled costs; the owner set takes its inputs from the
+// parts his log measured (fgsim::ownerCosts). Where Smoothness Mode keeps 3X, at least 95 % of pairs run predicted; where it
+// steps down, no pair runs predicted at 2X and the schedule pauses at most once per step down.
+TEST(lowdelay_sim_with_smoothness_target_90) {
+    std::vector<fgsim::Costs> sets = fgsim::costSets();
+    sets.insert(sets.begin(), fgsim::ownerCosts());
+    for (const auto& c : sets)
+        for (const std::uint32_t seed : {1u, 7u}) {
+            fgsim::Fixes f = fgsim_tests::cardDefault();
+            f.lowDelay = true; f.ldPolicy = 1; f.smoothTarget = 90;
+            const auto r = fgsim::simulate(c, fgsim::Source::Card, fgsim::Config{"ld-smooth90", fgsim::parts(false, false, false, false), false, false, f}, seed, 120);
+            CHECK(r.predictedPairShare <= 1.0 - r.twoXShare + 1e-9);    // never a predicted pair at 2X
+            CHECK(r.multiplierPauses <= r.smoothStepDowns + 1);
+            if (r.twoXShare == 0.0 && r.skippedPerS == 0.0) CHECK(r.predictedPairShare >= 0.95);
+            CHECK(r.switchesPerMin <= 3.0);
+        }
+    fgsim::Fixes f = fgsim_tests::cardDefault();
+    f.lowDelay = true; f.ldPolicy = 1; f.smoothTarget = 90;
+    for (const std::uint32_t seed : {1u, 2u, 3u, 7u, 11u, 99u}) {
+        const auto r = fgsim::simulate(fgsim::ownerCosts(), fgsim::Source::Card, fgsim::Config{"owner", fgsim::parts(false, false, false, false), false, false, f}, seed, 120);
+        CHECK(r.twoXShare == 0.0 && r.predictedPairShare >= 0.95);
+    }
+}
+
+// Package 16, item 3: 2 % i.i.d. skipped pairs forced on top of the cost model with Smoothness target 90 (5 % without), the
+// owner set and three 4K-like sets. SIMULATED (decision code + modelled costs). The engine's Tolerant rule runs at least
+// 90 % of pairs predicted at 2 % (Package 15's Strict rule, same draws, far fewer: printed, asserted lower).
+TEST(lowdelay_sim_two_percent_skips_keep_the_mode) {
+    std::vector<fgsim::Costs> sets{fgsim::ownerCosts()};
+    for (const auto& c : fgsim::costSets()) if (std::string(c.name) == "vfg-4k" || std::string(c.name) == "comfortable" || std::string(c.name) == "thermal") sets.push_back(c);
+    for (const auto& c : sets) {
+        fgsim::Fixes f = fgsim_tests::cardDefault();
+        f.lowDelay = true; f.ldPolicy = 1; f.smoothTarget = 90; f.forcedSkipShare = 0.02;
+        const auto tolerant = fgsim::simulate(c, fgsim::Source::Card, fgsim::Config{"skip2", fgsim::parts(false, false, false, false), false, false, f}, 7, 120);
+        f.ldStrict = true;
+        const auto strict = fgsim::simulate(c, fgsim::Source::Card, fgsim::Config{"skip2-strict", fgsim::parts(false, false, false, false), false, false, f}, 7, 120);
+        // 5 % without a Smoothness target: with one, Smoothness Mode's own rule (more than 10 % of a 250 ms tick's pairs
+        // rejected on 4 ticks in a row) steps down to 2X under i.i.d. skips of 3 % and more, and the mode pauses (correct).
+        f.ldStrict = false; f.forcedSkipShare = 0.05; f.smoothTarget = 0;
+        const auto five = fgsim::simulate(c, fgsim::Source::Card, fgsim::Config{"skip5", fgsim::parts(false, false, false, false), false, false, f}, 7, 120);
+        std::printf("  SIMULATED %-16s 2 %% skips: predicted pairs %.3f (Package 15's rule %.3f); 5 %% skips: %.3f; switches/min %.2f\n", c.name,
+                    tolerant.predictedPairShare, strict.predictedPairShare, five.predictedPairShare, tolerant.switchesPerMin);
+        CHECK(tolerant.predictedPairShare >= 0.90);
+        CHECK(five.predictedPairShare >= 0.85);
+        CHECK(strict.predictedPairShare < tolerant.predictedPairShare);
+        CHECK(tolerant.switchesPerMin <= 2.0);
+    }
+}
+
+// Package 16, the owner's "eliminating latency fluctuations" (no added buffering): his late-type capture stalls (a 120 ms
+// callback gap every 6 s here, then the held frames 7 ms apart). SIMULATED (FgScheduleSim.h), not his PC.
+// (a) the stall clock (PushStallClock.h, opt-in VEYRA_EXP_RP_STALL_CLOCK): no anchor snaps, lower mean and P99 real-frame
+//     delay; NOT never-later for every real frame (printed): hence opt-in.
+// (b) of a burst, only the newest real frame (model only): on top of (a), no real frame that is shown is later.
+TEST(lowdelay_sim_stall_clock_and_burst_newest) {
+    double gain = 0, p99Gain = 0, worst = 0, worstNewest = 0;
+    std::uint64_t snapsToday = 0, snapsClock = 0, skipped = 0;
+    int runs = 0;
+    for (const auto& c : fgsim::costSets())
+        for (const bool ld : {false, true}) {
+            fgsim::Config today{"today", fgsim::parts(false, false, false, false), false, false, {}};
+            today.fixes.stallEveryS = 6; today.fixes.lowDelay = ld; today.fixes.ldPolicy = 1;
+            fgsim::Config clock = today; clock.fixes.stallClock = true;
+            fgsim::Config newest = clock; newest.fixes.stallNewest = true;
+            const auto a = fgsim::simulate(c, fgsim::Source::Card, today, 11, 60);
+            const auto b = fgsim::simulate(c, fgsim::Source::Card, clock, 11, 60);
+            const auto n = fgsim::simulate(c, fgsim::Source::Card, newest, 11, 60);
+            snapsToday += a.anchorSnaps; snapsClock += b.anchorSnaps; skipped += n.burstSkipped;
+            gain += a.realMeanMs - b.realMeanMs; p99Gain += a.realP99Ms - b.realP99Ms; ++runs;
+            CHECK(a.realPairs == b.realPairs);
+            for (std::size_t i = 0; i < a.realPresentAt.size() && i < b.realPresentAt.size(); ++i)
+                worst = std::max(worst, double(b.realPresentAt[i] - a.realPresentAt[i]) / 1e4);
+            std::size_t j = 0;   // (b): pairs shown in both, against (a) alone
+            for (std::size_t i = 0; i < n.realPairs.size(); ++i) {
+                while (j < b.realPairs.size() && b.realPairs[j] < n.realPairs[i]) ++j;
+                if (j < b.realPairs.size() && b.realPairs[j] == n.realPairs[i]) worstNewest = std::max(worstNewest, double(n.realPresentAt[i] - b.realPresentAt[j]) / 1e4);
+            }
+        }
+    std::printf("  SIMULATED stall clock: snaps %llu -> %llu, real frame delay mean -%.2f ms, P99 -%.2f ms (averages over %d runs); worst single real frame later %.3f ms\n",
+                (unsigned long long)snapsToday, (unsigned long long)snapsClock, gain / runs, p99Gain / runs, runs, worst);
+    std::printf("  SIMULATED burst newest on top: %llu burst real frames not shown; worst shown real frame later %.3f ms\n", (unsigned long long)skipped, worstNewest);
+    CHECK(snapsToday >= 20u * unsigned(runs) && snapsClock == 0);
+    CHECK(gain / runs >= 1.0 && p99Gain / runs >= 1.0);
+    CHECK(worstNewest <= 1e-6);   // (b) on top of (a): never later in the model
+    CHECK(skipped > 0);
+}

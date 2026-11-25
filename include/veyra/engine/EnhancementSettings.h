@@ -491,7 +491,8 @@ struct EnhancementSettings {
     bool hudLock=false;
     // Package 15 "Lower delay" (engine/PushLowDelay.h, pref pushLowDelay): the predicted-frame pass exists in the graph
     // while it is on with VFG at 3X (lowDelayShapesGraph), so switching it there rebuilds the graph; the engine reads the
-    // row itself once a pair (pushLowDelayShared). A global control kept in shell preferences.
+    // row itself once a pair (pushLowDelayShared). A global control kept in shell preferences. Package 16: the bridge
+    // keeps it true once the row was on in this run (pushLowDelayKeepPass), so only the first switch-on rebuilds.
     bool lowDelay=false;
     bool lowDelayShapesGraph()const{return pushLowDelayShapesGraph(lowDelay,frameGenerationBackend==FrameGenerationBackend::Vfg,multiplier);}
     // PushFPS restoration (engine/PushClean.h, pipeline/PushCleanPass.h): strength 0..100 of the compression

@@ -711,6 +711,41 @@ jobs:
             dist/*.sha256
           if-no-files-found: error
 
+      # "Lower delay" end to end (docs/drafts/E2E_ENGINE_TEST.md): the real engine, graph, presenter and scheduler with a
+      # lossless clip replayed AS a capture card (59.94 Hz, every picture twice) and frame generation through VFG's own code
+      # paths, where VFG is the TEST-ONLY stand-in (VEYRA_TEST_FAKE_VFG=1: blends, no NVIDIA model, no CUDA) on WARP.
+      # Primary: the owner's settings from his log (30.00 Hz card, VFG 3X q5, Smoothness Mode 90, Live HUD Lock, HDR10 when
+      # ffmpeg can make a PQ clip), asserted as fixed (Package 16; the restructured gate in docs/drafts/E2E_ENGINE_TEST.md),
+      # with the same environment as the e2e-quick gate (the TEST-ONLY zero motion source on WARP). Secondary: 59.94 Hz with
+      # repeats and their twins, refusals, Package 14's logic. It runs LAST in this job, after the install test and the
+      # package uploads, so a harness-only failure still lets those steps run and report; it still fails the build.
+      - name: Lower delay end-to-end engine test (replay as a capture card, fake VFG, WARP)
+        timeout-minutes: 55
+        env:
+          VEYRA_TEST_PREDICT_FLOW: zero
+        run: |
+          cmake --build $env:BUILD --target veyra_lowdelay_e2e_tests --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $exe = Get-ChildItem $env:BUILD -Recurse -Filter 'veyra_lowdelay_e2e_tests.exe' | Select-Object -First 1
+          if (-not $exe) { Write-Host "::error::veyra_lowdelay_e2e_tests.exe not built"; exit 1 }
+          $env:PATH = "$($exe.DirectoryName);$env:DEPS\vcpkg\installed\x64-windows\bin;$env:QT_ROOT_DIR\bin;$env:PATH"
+          $out = Join-Path $env:RUNNER_TEMP 'lowdelay-e2e'
+          python "$env:GITHUB_WORKSPACE\tests\integration\lowdelay_e2e.py" --exe $exe.FullName --out $out --expect fixed --seconds 20 --uhd-seconds 12
+          $code = $LASTEXITCODE
+          Get-ChildItem $out -Include *.y4m, *.mp4 -Recurse | Remove-Item -ErrorAction SilentlyContinue
+          if (Test-Path "$out\summary.json") { Get-Content "$out\summary.json" | Select-Object -First 400 | Out-Host }
+          Write-Host "lowdelay e2e exit $code"
+          if ($code -ne 0) { Write-Host "::error::Lower delay end-to-end engine test failed (see the PASS/FAIL lines and the lowdelay-e2e artifact)"; exit 1 }
+
+      - name: Upload the Lower delay end-to-end logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lowdelay-e2e-${{ github.run_id }}
+          path: ${{ runner.temp }}/lowdelay-e2e
+          if-no-files-found: ignore
+          retention-days: 14
+
   # PushFPS for OBS Studio (obs-plugin/): built against OBS's public headers, then loaded into a
   # real OBS Studio (latest release) with a scene that holds a PushFPS source, and the OBS log is
   # checked for the plugin loading, the source being created and its capture child starting.

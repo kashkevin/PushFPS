@@ -7,6 +7,7 @@
 #include "veyra/engine/PushStreamOverlay.h"
 #include "veyra/engine/PushClean.h"
 #include "veyra/engine/PushLowDelay.h"
+#include "veyra/engine/PushLegacyEnv.h"
 #include "veyra/engine/PushDeviceLossResume.h"
 #include "veyra/engine/MicrophoneCapture.h"
 #include "veyra/ui/NvidiaVrrProfileController.h"
@@ -336,8 +337,19 @@ QmlPlayerBridge::QmlPlayerBridge(engine::EngineController& engine, std::filesyst
         {
             // Package 15 "Lower delay" (PushLowDelay.h, pref pushLowDelay; unset = off): the engine's per-pair flag and the
             // graph-shape setting that makes the predicted-frame pass exist (applyPushLowDelay keeps both in step later).
-            const bool on = p.value(QStringLiteral("pushLowDelay")).toBool();
+            // Review 1 MUST 3: a saved "on" is switched off once at the first start of this version (pushLowDelayMigrate).
+            const auto migration = engine::pushLowDelayMigrate(p.contains(QLatin1String(engine::kPushLowDelayResetFlag)),
+                                                               p.value(QStringLiteral("pushLowDelay")).toBool(),
+                                                               engine::pushLegacyRestored(engine::PushLegacyPart::LowDelayMigrate16, engine::pushEnvironment()));
+            if (migration.writeFlag) {
+                if (migration.logReset) impl_->prefs[QStringLiteral("pushLowDelay")] = false;
+                impl_->prefs[QLatin1String(engine::kPushLowDelayResetFlag)] = true;
+                if (!impl_->savePrefs()) veyra::log::warn("ui-prefs", "pushLowDelay one-time reset not saved");
+                if (migration.logReset) veyra::log::info("ui-prefs", "pushLowDelay reset once for this version");
+            }
+            const bool on = migration.rowOn;
             engine::pushLowDelayShared().wanted.store(on, std::memory_order_relaxed);
+            if (on) engine::pushLowDelayShared().passKept.store(true, std::memory_order_relaxed);   // Package 16, item 7
             if (s.lowDelay != on) { s.lowDelay = on; changed = true; }
         }
         if (p.contains(QStringLiteral("fgAdaptive"))) {

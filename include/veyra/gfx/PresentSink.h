@@ -131,6 +131,8 @@ public:
         int compositionMode=-1;
     };
     DisplayLatencySummary takeDisplayLatency();
+    // Stream "s10-display": the dated Present -> vblank values (ms) gathered since the last takeDisplayLatency().
+    const std::vector<double>& pendingDisplayLatencyMs()const{return displayLatencyMs_;}
     // Host 100 ns (steady_clock). The last vblank in the frame statistics and the
     // measured period; latch is how long before a vblank a Present still makes it:
     // the shortest Present to scanout seen lately. Empty before any statistics.

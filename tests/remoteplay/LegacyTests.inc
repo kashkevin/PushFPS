@@ -49,8 +49,8 @@ TEST(legacy_each_switch_alone_the_master_and_the_aliases) {
     CHECK(restoredMask(env({{"VEYRA_TEST_RP_FG_SCHED_LEGACY", "gridEarly"}})) == (1u << static_cast<unsigned>(PushLegacyPart::GridEarly)));
     CHECK(restoredMask(env({{"VEYRA_TEST_RP_FG_SCHED_LEGACY", "all"}})) == 3u);
     CHECK(veyra::engine::pushLegacyDescribe(env({{"VEYRA_TEST_RP_LEGACY_PACKAGE13", "1"}})) ==
-          "package13=1 package14=0 restored=[robustAdmit gridEarly dedupCadence gpuRealWaits uploadRelease nrHold videoOverlay reflexSleep]");
-    CHECK(veyra::engine::pushLegacyDescribe(env({})) == "package13=0 package14=0 restored=[]");
+          "package13=1 package14=0 package15=0 restored=[robustAdmit gridEarly dedupCadence gpuRealWaits uploadRelease nrHold videoOverlay reflexSleep displayUi gsyncRestart stallWitness lowDelaySchedule lowDelayMigrate]");
+    CHECK(veyra::engine::pushLegacyDescribe(env({})) == "package13=0 package14=0 package15=0 restored=[]");
 }
 
 TEST(legacy_package14_master_restores_only_what_came_after_package14) {
@@ -58,14 +58,39 @@ TEST(legacy_package14_master_restores_only_what_came_after_package14) {
     const unsigned first = static_cast<unsigned>(veyra::engine::kPushLegacyFirstAfter14);
     const unsigned count = static_cast<unsigned>(PushLegacyPart::Count);
     const unsigned after14 = ((1u << count) - 1) & ~((1u << first) - 1);
-    CHECK(after14 == ((1u << static_cast<unsigned>(PushLegacyPart::VideoOverlay)) | (1u << static_cast<unsigned>(PushLegacyPart::ReflexSleep))));
+    // Package 14's own parts, and every part of a later package (PACKAGE14 = 1 means "as Package 14").
+    CHECK((after14 & (1u << static_cast<unsigned>(PushLegacyPart::VideoOverlay))) && (after14 & (1u << static_cast<unsigned>(PushLegacyPart::ReflexSleep))));
+    CHECK(!(after14 & (1u << static_cast<unsigned>(PushLegacyPart::NrHold))));
     CHECK(restoredMask(env({{"VEYRA_TEST_RP_LEGACY_PACKAGE14", "1"}})) == after14);
     CHECK(restoredMask(env({{"VEYRA_TEST_RP_LEGACY_PACKAGE14", "0"}})) == 0);
     CHECK(restoredMask(fromFile("VEYRA_TEST_RP_LEGACY_PACKAGE14 = 1\n")) == after14);
     CHECK(veyra::engine::pushLegacyDescribe(env({{"VEYRA_TEST_RP_LEGACY_PACKAGE14", "1"}})) ==
-          "package13=0 package14=1 restored=[videoOverlay reflexSleep]");
+          "package13=0 package14=1 package15=0 restored=[videoOverlay reflexSleep displayUi gsyncRestart stallWitness lowDelaySchedule lowDelayMigrate]");
     // Package 13's master still restores everything, the parts after Package 14 included.
     CHECK(restoredMask(env({{"VEYRA_TEST_RP_LEGACY_PACKAGE13", "1"}})) == (1u << count) - 1);
+}
+
+TEST(legacy_package15_master_restores_only_what_came_after_package15) {
+    using namespace legacy_tests;
+    const unsigned first = static_cast<unsigned>(veyra::engine::kPushLegacyFirstAfter15);
+    const unsigned count = static_cast<unsigned>(PushLegacyPart::Count);
+    const unsigned after15 = ((1u << count) - 1) & ~((1u << first) - 1);
+    CHECK(after15 & (1u << static_cast<unsigned>(PushLegacyPart::DisplayUi)));
+    CHECK(after15 & (1u << static_cast<unsigned>(PushLegacyPart::GsyncRestart)));
+    CHECK(after15 & (1u << static_cast<unsigned>(PushLegacyPart::StallWitness)));   // stream "s10-stall"
+    CHECK(restoredMask(env({{"VEYRA_TEST_RP_LEGACY_STALL_WITNESS", "1"}})) == (1u << static_cast<unsigned>(PushLegacyPart::StallWitness)));
+    CHECK(after15 & (1u << static_cast<unsigned>(PushLegacyPart::LowDelaySchedule16)));   // stream "s10-lowdelay2"
+    CHECK(after15 & (1u << static_cast<unsigned>(PushLegacyPart::LowDelayMigrate16)));
+    CHECK(restoredMask(env({{"VEYRA_TEST_RP_LEGACY_LOWDELAY_SCHEDULE", "1"}})) == (1u << static_cast<unsigned>(PushLegacyPart::LowDelaySchedule16)));
+    CHECK(restoredMask(env({{"VEYRA_TEST_RP_LEGACY_LOWDELAY_MIGRATE", "1"}})) == (1u << static_cast<unsigned>(PushLegacyPart::LowDelayMigrate16)));
+    CHECK(!(after15 & (1u << static_cast<unsigned>(PushLegacyPart::ReflexSleep))));
+    CHECK(restoredMask(env({{"VEYRA_TEST_RP_LEGACY_PACKAGE15", "1"}})) == after15);
+    CHECK(restoredMask(env({{"VEYRA_TEST_RP_LEGACY_PACKAGE15", "0"}})) == 0);
+    CHECK(restoredMask(fromFile("VEYRA_TEST_RP_LEGACY_PACKAGE15 = 1\n")) == after15);
+    // The earlier masters imply it.
+    CHECK((restoredMask(env({{"VEYRA_TEST_RP_LEGACY_PACKAGE14", "1"}})) & after15) == after15);
+    CHECK((restoredMask(env({{"VEYRA_TEST_RP_LEGACY_PACKAGE13", "1"}})) & after15) == after15);
+    CHECK(veyra::engine::pushLegacyDescribe(env({{"VEYRA_TEST_RP_LEGACY_PACKAGE15", "1"}})).rfind("package13=0 package14=0 package15=1 restored=[displayUi gsyncRestart stallWitness lowDelaySchedule lowDelayMigrate]", 0) == 0);
 }
 
 TEST(legacy_switches_work_from_slipstream_ini) {

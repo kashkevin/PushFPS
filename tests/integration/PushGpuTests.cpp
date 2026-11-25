@@ -50,6 +50,8 @@
 #include "veyra/pipeline/StreamChangePass.h"
 #include "veyra/pipeline/PushGpuPath.h"
 #include "veyra/pipeline/PushPredictPass.h"
+#include "veyra/pipeline/PushPredictCheck.h"
+#include "veyra/guidance/GpuDisOpticalFlow.h"
 #include "veyra/engine/RecordingCompare.h"
 #include "veyra/engine/PushStreamOverlay.h"
 #include "veyra/engine/PushCanvas.h"
@@ -68,7 +70,10 @@
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <type_traits>
 #include <format>
@@ -155,7 +160,15 @@ struct Gpu {
     bool create() {
         if (GetEnvironmentVariableW(L"VEYRA_PUSH_GPU_DEBUG", nullptr, 0) > 0) {
             ComPtr<ID3D12Debug> d;
-            if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&d)))) { d->EnableDebugLayer(); debug = true; }
+            if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&d)))) {
+                d->EnableDebugLayer(); debug = true;
+                // GPU-based validation (slow; for the flow triage runs): VEYRA_PUSH_GPU_GBV=1.
+                ComPtr<ID3D12Debug1> d1;
+                if (GetEnvironmentVariableW(L"VEYRA_PUSH_GPU_GBV", nullptr, 0) > 0 && SUCCEEDED(d.As(&d1))) {
+                    d1->SetEnableGPUBasedValidation(TRUE);
+                    std::printf("NOTE GPU-based validation on\n");
+                }
+            }
             else std::printf("NOTE D3D12 debug layer not installed; running without it\n");
         }
         ComPtr<IDXGIFactory6> factory;
@@ -1977,6 +1990,367 @@ void testPredict(Gpu& gpu, bool tenBit) {
     check(!gpu.debugErrors(), tag + ": no D3D12 debug-layer error");
 }
 
+// Package 16, item 2: Live HUD Lock with a predicted frame. P's HUD-locked pixels come from a copy of B
+// (PushHudLock::kPredictedHeld, filled from B's pitch-linear buffer as the graph fills it from VFG's input buffer) and
+// must be bit-identical to B's; the moving picture keeps the warp. The HUD is a period-3 stripe that flickers by one code
+// between frames: the predicted pass's still test does not hold it (A != B), the background flow moves it by one pixel,
+// so without the compose P's HUD differs from B (checked, so the test has teeth). SDR (RGBA8) and HDR10 (RGB10A2, PQ).
+void testPredictHudLock(Gpu& gpu, bool tenBit) {
+    using namespace predict_gpu;
+    constexpr uint32_t W = 96, H = 40;
+    const DXGI_FORMAT F = tenBit ? DXGI_FORMAT_R10G10B10A2_UNORM : DXGI_FORMAT_R8G8B8A8_UNORM;
+    const std::string tag = tenBit ? "predict hud lock hdr10" : "predict hud lock sdr";
+    auto* device = gpu.device.Get();
+    const uint32_t pitch = (W * 4 + 255) & ~255u;
+    auto hud = [](uint32_t x, uint32_t y) { return x >= 40 && x < 64 && y >= 8 && y < 20; };
+    auto pack = [&](uint32_t r, uint32_t g, uint32_t b) -> uint32_t {   // 8-bit values
+        if (tenBit) return (r * 4) | ((g * 4) << 10) | ((b * 4) << 20) | (3u << 30);
+        return r | (g << 8) | (b << 16) | (255u << 24);
+    };
+    // Frame i: the background moved right by 3 px per frame; the HUD still, flickering by one code on odd frames.
+    auto pixel = [&](int i, uint32_t x, uint32_t y) -> uint32_t {
+        if (hud(x, y)) { const uint32_t v = (x % 3 == 0 ? 230u : 25u) + uint32_t(i & 1); return pack(v, v, v); }
+        const int sx = int(x) - 3 * i;
+        return pack(uint32_t((sx * 37 + int(y) * 11) & 255) | 0u, uint32_t((sx * 53 + 7) & 255), uint32_t((int(y) * 29 + sx * 5 + 3) & 255));
+    };
+    auto bytesOf = [&](int i) {
+        std::vector<uint8_t> v(size_t(W) * H * 4);
+        for (uint32_t y = 0; y < H; ++y) for (uint32_t x = 0; x < W; ++x) { const uint32_t w = pixel(i, x, y); std::memcpy(v.data() + (size_t(y) * W + x) * 4, &w, 4); }
+        return v;
+    };
+    auto buffer = [&](int i) {
+        auto upload = makeBuffer(device, uint64_t(pitch) * H, D3D12_HEAP_TYPE_UPLOAD);
+        uint8_t* mapped = nullptr;
+        if (!upload || FAILED(upload->Map(0, nullptr, reinterpret_cast<void**>(&mapped))) || !mapped) return ComPtr<ID3D12Resource>{};
+        for (uint32_t y = 0; y < H; ++y) for (uint32_t x = 0; x < W; ++x) { const uint32_t w = pixel(i, x, y); std::memcpy(mapped + size_t(y) * pitch + size_t(x) * 4, &w, 4); }
+        upload->Unmap(0, nullptr);
+        return upload;
+    };
+    Plane real[2]{{pipeline::makeTexture(device, W, H, F, true), F, W, H, 4}, {pipeline::makeTexture(device, W, H, F, true), F, W, H, 4}};
+    Plane output{pipeline::makeTexture(device, W, H, F, true), F, W, H, 4};
+    Plane motion{pipeline::makeTexture(device, W, H, DXGI_FORMAT_R16G16_FLOAT, true), DXGI_FORMAT_R16G16_FLOAT, W, H, 4};
+    Plane trust{pipeline::makeTexture(device, W, H, DXGI_FORMAT_R8_UNORM, true), DXGI_FORMAT_R8_UNORM, W, H, 1};
+    check(real[0].texture && real[1].texture && output.texture && motion.texture && trust.texture, tag + ": textures created");
+    if (!real[0].texture || !real[1].texture || !output.texture || !motion.texture || !trust.texture) return;
+    pipeline::PushHudLock lock;
+    check(lock.initialize(device, W, H, F, tenBit ? 2u : 0u), tag + ": lock created");
+    check(lock.enablePredictedHeld(device) && lock.predictedHeld(), tag + ": the held copy for predicted frames is created");
+    pipeline::DescriptorStager stager;
+    check(stager.initialize(device, 64), tag + ": staging heap");
+    ID3D12Resource* reals[2] = {real[0].texture.Get(), real[1].texture.Get()};
+    ID3D12Resource* gens[1] = {output.texture.Get()};
+    lock.createViews(device, stager, reals, gens, 1);
+    pipeline::PushPredictPass pass;
+    check(pass.initialize(device, W, H, F), tag + ": predicted-frame pass created");
+    if (!pass.ready() || !lock.predictedHeld()) return;
+    pipeline::StateTracker states;
+    constexpr int kLast = 60;   // B = frame 60 (parity 0), A = frame 59
+    bool ran = true;
+    for (int i = 0; i <= kLast && ran; ++i) {
+        const unsigned parity = unsigned(i) & 1u;
+        ran = gpu.begin();
+        auto up = recordFill(gpu, real[parity], bytesOf(i), states.get(real[parity].texture.Get()), D3D12_RESOURCE_STATE_COMMON);
+        states.set(real[parity].texture.Get(), D3D12_RESOURCE_STATE_COMMON);
+        ran = ran && up && lock.update(gpu.list.Get(), states, parity, i == 0) && gpu.submitAndWait();
+    }
+    check(ran, tag + ": 61 real frames update the lock's state");
+    const auto a = buffer(kLast - 1), b = buffer(kLast);
+    check(a && b, tag + ": A and B buffers");
+    if (!ran || !a || !b) return;
+    auto runP = [&](bool compose, std::vector<uint32_t>& words) {
+        std::vector<uint8_t> m(size_t(W) * H * 4), t(size_t(W) * H, 255);
+        const uint16_t hx = halfOf(-3);
+        for (size_t i = 0; i < size_t(W) * H; ++i) std::memcpy(m.data() + i * 4, &hx, 2);
+        if (!gpu.begin()) return false;
+        auto mu = recordFill(gpu, motion, m, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON);
+        auto tu = recordFill(gpu, trust, t, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON);
+        bool ok = pass.recordPredict(gpu.list.Get(), 0, a.Get(), b.Get(), pitch, motion.texture.Get(), trust.texture.Get(), output.texture.Get(), pipeline::pushPredictStep(3));
+        states.set(output.texture.Get(), D3D12_RESOURCE_STATE_COMMON);
+        if (compose) {   // as EnhanceGraph: B's buffer -> the held copy, then compose from it
+            states.transition(gpu.list.Get(), lock.predictedHeld(), D3D12_RESOURCE_STATE_COPY_DEST);
+            D3D12_TEXTURE_COPY_LOCATION from{}, to{};
+            from.pResource = b.Get(); from.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT; from.PlacedFootprint.Footprint = {F, W, H, 1, pitch};
+            to.pResource = lock.predictedHeld(); to.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+            gpu.list->CopyTextureRegion(&to, 0, 0, 0, &from, nullptr);
+            states.transition(gpu.list.Get(), lock.predictedHeld(), D3D12_RESOURCE_STATE_COMMON);
+            ok = ok && lock.compose(gpu.list.Get(), states, 0, pipeline::PushHudLock::kPredictedHeld);
+        }
+        auto rb = recordRead(gpu, output, states.get(output.texture.Get()));
+        if (!ok || !mu || !tu || !rb || !gpu.submitAndWait()) return false;
+        const auto bytes = mapRead(output, rb.Get());
+        words.assign(size_t(W) * H, 0);
+        if (bytes.size() != words.size() * 4) return false;
+        std::memcpy(words.data(), bytes.data(), bytes.size());
+        return true;
+    };
+    const uint32_t colour = tenBit ? 0x3FFFFFFFu : 0x00FFFFFFu;
+    std::vector<uint32_t> before, after;
+    check(runP(false, before), tag + ": P without the compose ran");
+    check(runP(true, after), tag + ": P with the compose from B ran");
+    if (before.size() != size_t(W) * H || after.size() != size_t(W) * H) return;
+    int hudDiffersBefore = 0, hudDiffersAfter = 0, hudTotal = 0, movedKept = 0, movedTotal = 0;
+    for (uint32_t y = 10; y < 18; ++y)
+        for (uint32_t x = 42; x < 62; ++x) {   // the HUD's inside: fully locked
+            const uint32_t bw = pixel(kLast, x, y) & colour;
+            ++hudTotal;
+            hudDiffersBefore += (before[size_t(y) * W + x] & colour) != bw;
+            hudDiffersAfter += (after[size_t(y) * W + x] & colour) != bw;
+        }
+    for (uint32_t y = 0; y < H; ++y)
+        for (uint32_t x = 70; x < W; ++x) { ++movedTotal; movedKept += after[size_t(y) * W + x] == before[size_t(y) * W + x]; }
+    std::printf("INFO %s: HUD pixels differing from B before the compose %d/%d, after %d/%d; moving pixels kept %d/%d\n", tag.c_str(),
+                hudDiffersBefore, hudTotal, hudDiffersAfter, hudTotal, movedKept, movedTotal);
+    check(hudDiffersBefore > 0, tag + ": without the compose the background flow moves the flickering HUD (the test has teeth)");
+    checkValue(hudDiffersAfter == 0, tag + ": HUD-locked pixels of P are bit-identical to B's", hudDiffersAfter, 0);
+    checkValue(movedKept == movedTotal, tag + ": the moving picture keeps the warp", movedKept, movedTotal);
+    check(!gpu.debugErrors(), tag + ": no D3D12 debug-layer error");
+}
+
+// The device's smallest wave (D3D12_OPTIONS1.WaveLaneCountMin; 0 without wave operations). FidelityFX's motion needs 32
+// (pushPredictFidelityWaveOk); WARP has 4, so on WARP its cases test what runs (VEYRA_TEST_PREDICT_FIDELITY_MECHANICS),
+// not the motion it finds.
+unsigned waveLanesMin(Gpu& gpu) {
+    D3D12_FEATURE_DATA_D3D12_OPTIONS1 o{};
+    return SUCCEEDED(gpu.device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS1, &o, sizeof(o))) && o.WaveOps ? o.WaveLaneCountMin : 0u;
+}
+struct FidelityMechanics {   // sets the test switch for one test when the device's waves are too small
+    bool on;
+    explicit FidelityMechanics(Gpu& gpu) : on(!pipeline::pushPredictFidelityWaveOk(waveLanesMin(gpu))) {
+        if (on) { SetEnvironmentVariableW(L"VEYRA_TEST_PREDICT_FIDELITY_MECHANICS", L"1"); std::printf("NOTE waves of %u lanes: FidelityFX cases test what runs, not its motion\n", waveLanesMin(gpu)); }
+    }
+    ~FidelityMechanics() { if (on) SetEnvironmentVariableW(L"VEYRA_TEST_PREDICT_FIDELITY_MECHANICS", nullptr); }
+};
+
+// Package 16, item 4 (d): the predicted frame's flow is created after its start-up self-check (strict FP64 GPU DIS against
+// the float-only build on one synthetic pair). Here: the pass creates a flow either way and says which (the log line
+// `[push-predict] flow ... precision=`); whether the float build exists depends on DXC accepting `-D double=float`.
+void testPredictFlowSelfCheck(Gpu& gpu) {
+    const FidelityMechanics mechanics(gpu);
+    pipeline::PushPredictPass pass;
+    check(pass.initialize(gpu.device.Get(), 256, 144, DXGI_FORMAT_R8G8B8A8_UNORM), "predict flow self-check: pass created");
+    if (!pass.ready()) return;
+    // 64x64: pushPredictFlowExtent(256, 144), as the graph would ask (FidelityFX needs 64 per axis).
+    const auto extent = pipeline::pushPredictFlowExtent(256, 144);
+    check(pass.initializeFlow(gpu.device.Get(), extent.width, extent.height) && pass.flowReady(), "predict flow self-check: a flow passed its self-check");
+    std::printf("INFO predict flow self-check: source %s\n", pass.flowName());
+    // 25 Nov 2026: P's default motion source is FidelityFX (GPU DIS only when VEYRA_TEST_PREDICT_FLOW chooses it).
+    if (GetEnvironmentVariableW(L"VEYRA_TEST_PREDICT_FLOW", nullptr, 0) == 0)
+        check(pass.fidelityFlow(), "predict flow self-check: the default source is FidelityFX", pass.flowName(), "fidelityfx");
+}
+
+// The default source where the device's waves are too small for FidelityFX's search (WARP: 4 lanes): no flow at all,
+// so the predicted frame is unavailable and nothing of FidelityFX runs (never GPU DIS in its place).
+void testPredictFlowSmallWaves(Gpu& gpu) {
+    if (pipeline::pushPredictFidelityWaveOk(waveLanesMin(gpu)) || GetEnvironmentVariableW(L"VEYRA_TEST_PREDICT_FLOW", nullptr, 0) > 0) {
+        std::printf("INFO predict flow small waves: not this device (waves of %u lanes) or a flow chosen; skipped\n", waveLanesMin(gpu));
+        return;
+    }
+    pipeline::PushPredictPass pass;
+    check(pass.initialize(gpu.device.Get(), 320, 192, DXGI_FORMAT_R8G8B8A8_UNORM), "predict flow small waves: pass created");
+    const auto extent = pipeline::pushPredictFlowExtent(320, 192);
+    check(!pass.initializeFlow(gpu.device.Get(), extent.width, extent.height) && !pass.flowReady(), "predict flow small waves: no flow, no GPU DIS in its place");
+    check(!gpu.debugErrors(), "predict flow self-check: no D3D12 debug-layer error");
+}
+
+// Crash triage of the flow self-check (gate run 45526571434: access violation, then the device removed, inside the self-check
+// on WARP). GPU DIS run directly, one variant at one size per test, with a line before each step, so the last line printed
+// names the step reached. VEYRA_TEST_DIS_LIMIT=<n> records only the first n dispatches (Veyra's two luma conversions, then
+// GPU DIS's own, then the validation; the rest are skipped): run in separate processes, it finds the first dispatch whose
+// execution fails. VEYRA_TEST_DIS_TRACE=1 prints every dispatch's shader and group count. Not in the default run: each case
+// is named with --only (a crash ends the process, so the triage workflow runs one case per process).
+void testDisCase(Gpu& gpu, bool floatOnly, uint32_t w, uint32_t h) {
+    const std::string tag = std::format("dis {} {}x{}", floatOnly ? "float" : "strict-fp64", w, h);
+    auto* device = gpu.device.Get();
+    const auto need = [](bool ok, const std::string& label) { check(ok, label); return ok; };
+    const bool doubles = guidance::GpuDisOpticalFlow::deviceHasDoubles(device);
+    std::printf("INFO %s: device FP64 shader operations %s\n", tag.c_str(), doubles ? "yes" : "no");
+    if (!floatOnly && !doubles) { std::printf("INFO %s: skipped (the strict build needs FP64)\n", tag.c_str()); return; }
+    guidance::GpuDisOpticalFlow flow;
+    std::printf("STEP %s: initialize\n", tag.c_str());
+    if (!need(flow.initialize(device, w, h, floatOnly), tag + ": created")) return;
+    wchar_t text[32]{};
+    const DWORD n = GetEnvironmentVariableW(L"VEYRA_TEST_DIS_LIMIT", text, 32);
+    const long long limit = n > 0 && n < 32 ? std::wcstoll(text, nullptr, 10) : -1;
+    const bool trace = GetEnvironmentVariableW(L"VEYRA_TEST_DIS_TRACE", nullptr, 0) > 0;
+    // Names are kept only with a limit: an unlimited trace uses a limit no record reaches.
+    if (limit >= 0 || trace) flow.setTestDispatchLimit(limit >= 0 ? limit : (1LL << 40));
+    constexpr DXGI_FORMAT F = DXGI_FORMAT_B8G8R8A8_UNORM;
+    Plane a{pipeline::makeTexture(device, w, h, F, true), F, w, h, 4}, b{pipeline::makeTexture(device, w, h, F, true), F, w, h, 4};
+    Plane motion{pipeline::makeTexture(device, w, h, DXGI_FORMAT_R16G16_FLOAT, true), DXGI_FORMAT_R16G16_FLOAT, w, h, 4};
+    Plane trust{pipeline::makeTexture(device, w, h, DXGI_FORMAT_R8_UNORM, true), DXGI_FORMAT_R8_UNORM, w, h, 1};
+    if (!need(a.texture && b.texture && motion.texture && trust.texture, tag + ": textures")) return;
+    const auto pixel = [](int x, int y) {
+        const double v = 128.0 + 55.0 * std::sin(x * 0.23 + y * 0.05) + 35.0 * std::sin(y * 0.19 - x * 0.07) + 20.0 * std::sin((x + 2 * y) * 0.61);
+        return uint8_t(std::clamp(v, 0.0, 255.0));
+    };
+    std::vector<uint8_t> pa(size_t(w) * h * 4), pb(pa.size());
+    for (uint32_t y = 0; y < h; ++y)
+        for (uint32_t x = 0; x < w; ++x) {
+            const size_t i = (size_t(y) * w + x) * 4;
+            pa[i] = pa[i + 1] = pa[i + 2] = pixel(int(x), int(y)); pa[i + 3] = 255;
+            pb[i] = pb[i + 1] = pb[i + 2] = pixel(int(x) - 3, int(y) - 1); pb[i + 3] = 255;   // B = A moved by (+3, +1)
+        }
+    if (!need(gpu.begin(), tag + ": list")) return;
+    auto ua = recordFill(gpu, a, pa, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON);
+    auto ub = recordFill(gpu, b, pb, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON);
+    std::printf("STEP %s: record\n", tag.c_str());
+    const bool recorded = flow.dispatch(gpu.list.Get(), gpu.queue.Get(), gpu.fence.Get(), gpu.value + 1, 0, a.texture.Get(), b.texture.Get(),
+                                        motion.texture.Get(), trust.texture.Get(), 1, 2);
+    if (limit >= 0 || trace) {
+        const auto names = flow.testDispatchNames();
+        std::printf("INFO %s: %zu dispatches in this record (limit %lld)\n", tag.c_str(), names.size(), limit);
+        if (trace) for (size_t i = 0; i < names.size(); ++i) std::printf("TRACE %s: %zu %s\n", tag.c_str(), i, names[i].c_str());
+        else if (limit >= 1 && size_t(limit) <= names.size()) std::printf("INFO %s: last recorded dispatch %lld = %s\n", tag.c_str(), limit - 1, names[size_t(limit - 1)].c_str());
+    }
+    if (!need(recorded, tag + ": recorded")) { gpu.list->Close(); return; }
+    auto rm = recordRead(gpu, motion, D3D12_RESOURCE_STATE_COMMON);
+    auto rt = recordRead(gpu, trust, D3D12_RESOURCE_STATE_COMMON);
+    std::printf("STEP %s: submit\n", tag.c_str());
+    if (!need(gpu.submit(), tag + ": submitted")) return;
+    std::printf("STEP %s: wait\n", tag.c_str());
+    if (!need(gpu.wait(), tag + ": finished on the GPU")) return;
+    std::printf("STEP %s: read back\n", tag.c_str());
+    const auto m = mapRead(motion, rm.Get()), t = mapRead(trust, rt.Get());
+    if (!need(!m.empty() && !t.empty(), tag + ": read back")) return;
+    const pipeline::PushFlowView view{m.data(), w * 4, t.data(), w};
+    auto agreement = pipeline::pushFlowAgreement(view, view, w, h, -3.0f, -1.0f);
+    std::printf("INFO %s: trusted %.3f, mean error against the true motion (-3, -1) %.3f px%s\n", tag.c_str(), agreement.strictTrusted,
+                agreement.strictErrorPx, limit >= 0 ? " (dispatches skipped: not meaningful)" : "");
+    check(!gpu.debugErrors(), tag + ": no D3D12 debug-layer error");
+}
+
+// P's default motion source on a sequence, as the graph drives it (EnhanceGraph: recordFlowFrame on every real frame VFG
+// captured, from VFG's input buffer, then recordMotion / recordPredict for the pair): ten real frames, each the last one
+// moved by (+12, +9) work pixels (3, 4 at the 64x64 flow size), through FidelityFX and the densify; then P of the last pair.
+// Checks: no motion before FidelityFX's warm-up (7 frames), motion after it; a gap makes only its own frame unusable;
+// the warp moves most moving pixels and P is nearer the true picture at +1/3 than B is.
+void testPredictFidelity(Gpu& gpu, bool tenBit) {
+    constexpr uint32_t W = 256, H = 144, FW = 64, FH = 64;   // pushPredictFlowExtent(256, 144)
+    const DXGI_FORMAT F = tenBit ? DXGI_FORMAT_R10G10B10A2_UNORM : DXGI_FORMAT_R8G8B8A8_UNORM;
+    const std::string tag = tenBit ? "predict fidelityfx hdr10" : "predict fidelityfx sdr";
+    auto* device = gpu.device.Get();
+    const auto need = [](bool ok, const std::string& label) { check(ok, label); return ok; };
+    const FidelityMechanics mechanics(gpu);
+    pipeline::PushPredictPass pass;
+    if (!need(pass.initialize(device, W, H, F), tag + ": pass created")) return;
+    if (!need(pass.initializeFlow(device, FW, FH) && pass.fidelityFlow(), tag + ": FidelityFX flow passed its self-check")) return;
+    const uint32_t pitch = (W * 4 + 255) & ~255u;
+    // A smooth grey picture (features a few flow pixels wide), sampled at any position.
+    const auto grey = [](double x, double y) {
+        const double u = x / 4.0, v = y / 4.0;
+        const double g = 128.0 + 55.0 * std::sin(u * 0.23 + v * 0.05) + 35.0 * std::sin(v * 0.19 - u * 0.07) + 20.0 * std::sin((u + 2 * v) * 0.61);
+        return std::clamp(g, 0.0, 255.0);
+    };
+    const auto wordOf = [&](double g) -> uint32_t {
+        if (tenBit) { const uint32_t c = uint32_t(std::lround(g * 1023.0 / 255.0)); return c | (c << 10) | (c << 20) | (3u << 30); }
+        const uint32_t c = uint32_t(std::lround(g)); return c | (c << 8) | (c << 16) | (255u << 24);
+    };
+    const auto greyOf = [&](uint32_t w) { return tenBit ? double(w & 1023u) * 255.0 / 1023.0 : double(w & 255u); };
+    const auto frame = [&](double sx, double sy) {
+        auto upload = makeBuffer(device, uint64_t(pitch) * H, D3D12_HEAP_TYPE_UPLOAD);
+        uint8_t* mapped = nullptr;
+        if (!upload || FAILED(upload->Map(0, nullptr, reinterpret_cast<void**>(&mapped))) || !mapped) return ComPtr<ID3D12Resource>{};
+        for (uint32_t y = 0; y < H; ++y)
+            for (uint32_t x = 0; x < W; ++x) { const uint32_t v = wordOf(grey(double(x) - sx, double(y) - sy)); std::memcpy(mapped + size_t(y) * pitch + size_t(x) * 4, &v, 4); }
+        upload->Unmap(0, nullptr);
+        return upload;
+    };
+    constexpr int kFrames = 10;
+    std::vector<ComPtr<ID3D12Resource>> frames;
+    for (int k = 0; k < kFrames; ++k) frames.push_back(frame(12.0 * k, 9.0 * k));
+    if (!need(std::all_of(frames.begin(), frames.end(), [](const auto& f) { return f != nullptr; }), tag + ": frames")) return;
+    bool readyEarly = false, recordedAll = true;
+    for (int k = 0; k < kFrames; ++k) {
+        const UINT slot = UINT(k % 2);
+        if (!gpu.begin()) { recordedAll = false; break; }
+        recordedAll = pass.recordFlowFrame(gpu.list.Get(), slot, frames[size_t(k)].Get(), pitch, uint64_t(k + 1), k == 0) && recordedAll;
+        if (!gpu.submitAndWait()) { recordedAll = false; break; }
+        if (k < 6) readyEarly = readyEarly || pass.motionReady(slot, uint64_t(k + 1));
+    }
+    check(recordedAll, tag + ": ten real frames through the flow (one submission each)");
+    check(!readyEarly, tag + ": no motion during FidelityFX's warm-up");
+    const UINT last = UINT((kFrames - 1) % 2);
+    check(pass.motionReady(last, kFrames), tag + ": motion of the last frame is usable");
+    check(!pass.motionReady(last, kFrames + 1) && !pass.motionReady(1 - last, kFrames), tag + ": motion is tied to its own frame");
+    Plane output{pipeline::makeTexture(device, W, H, F, true), F, W, H, 4};
+    if (!need(output.texture != nullptr, tag + ": output")) return;
+    if (!gpu.begin()) return;
+    const bool motionOk = pass.recordMotion(gpu.list.Get(), gpu.queue.Get(), gpu.fence.Get(), gpu.value + 1, last, frames[kFrames - 2].Get(), frames[kFrames - 1].Get(),
+                                            pitch, kFrames - 1, kFrames);
+    const bool predicted = motionOk && pass.recordPredict(gpu.list.Get(), last, frames[kFrames - 2].Get(), frames[kFrames - 1].Get(), pitch, pass.motion(last),
+                                                          pass.trust(last), output.texture.Get(), pipeline::pushPredictStep(3));
+    auto rb = recordRead(gpu, output, D3D12_RESOURCE_STATE_COMMON);
+    if (!need(predicted && rb && gpu.submitAndWait(), tag + ": P of the last pair recorded and finished")) { return; }
+    pipeline::PushPredictCounters counters;
+    check(pass.counters(last, counters), tag + ": counters read");
+    const auto bytes = mapRead(output, rb.Get());
+    if (!need(bytes.size() == size_t(W) * H * 4, tag + ": P read back")) return;
+    // Away from the edges (a 24-pixel border: what enters the picture has no source).
+    const double tx = 12.0 * (kFrames - 1) + 4.0, ty = 9.0 * (kFrames - 1) + 3.0;   // the true picture at +1/3
+    double errP = 0, errB = 0; uint64_t n = 0;
+    for (uint32_t y = 24; y < H - 24; ++y)
+        for (uint32_t x = 24; x < W - 24; ++x) {
+            uint32_t w = 0; std::memcpy(&w, bytes.data() + (size_t(y) * W + x) * 4, 4);
+            const double truth = grey(double(x) - tx, double(y) - ty);
+            errP += std::abs(greyOf(w) - truth);
+            errB += std::abs(grey(double(x) - 12.0 * (kFrames - 1), double(y) - 9.0 * (kFrames - 1)) - truth);
+            ++n;
+        }
+    errP /= double(n); errB /= double(n);
+    std::printf("INFO %s: counters still %u held %u fallback %u warped %u; mean error against the true picture at +1/3: P %.2f, B %.2f (grey levels)\n",
+                tag.c_str(), counters.still, counters.held, counters.fallback, counters.warped, errP, errB);
+    if (mechanics.on) {
+        // FidelityFX found no motion on these waves: P must then be B where nothing is trusted (no invented motion).
+        checkValue(counters.warped == 0, tag + ": no motion found, nothing warped (P falls back to B)", counters.warped, 0);
+    } else {
+        checkValue(counters.warped > counters.fallback, tag + ": most moving pixels are warped", counters.warped, std::format("> {}", counters.fallback));
+        checkValue(errP < errB * 0.5, tag + ": P is nearer the true picture than B (less than half B's error)", errP, std::format("< {:.2f}", errB * 0.5));
+    }
+    // A gap (frame index 12 after 10): FidelityFX keeps its history, but that frame's motion spans two intervals.
+    if (gpu.begin()) {
+        const bool gapRecorded = pass.recordFlowFrame(gpu.list.Get(), 1, frames[kFrames - 1].Get(), pitch, kFrames + 2, false);
+        if (gpu.submitAndWait()) check(gapRecorded && !pass.motionReady(1, kFrames + 2), tag + ": the frame after a gap is not usable");
+    }
+    check(!gpu.debugErrors(), tag + ": no D3D12 debug-layer error");
+}
+
+// FidelityFX's self-check at several flow sizes (each a size no other test uses, so each runs its own check): what it
+// finds is logged ([push-predict] flow ... found= and the grid vectors); checked here: no device removal, and the
+// product's size (960x540, from a 4K work size) finds the known motion.
+void testPredictFidelitySizes(Gpu& gpu) {
+    const FidelityMechanics mechanics(gpu);
+    for (const auto& e : {pipeline::PushExtent{128, 128}, pipeline::PushExtent{256, 144}, pipeline::PushExtent{480, 270}, pipeline::PushExtent{960, 540}}) {
+        pipeline::PushPredictPass pass;
+        const std::string tag = std::format("predict fidelityfx {}x{}", e.width, e.height);
+        if (!pass.initialize(gpu.device.Get(), e.width * 4, e.height * 4, DXGI_FORMAT_R8G8B8A8_UNORM)) { check(false, tag + ": pass created"); continue; }
+        const bool made = pass.initializeFlow(gpu.device.Get(), e.width, e.height);
+        std::printf("INFO %s: flow %s\n", tag.c_str(), made ? pass.flowName() : "none");
+        check(SUCCEEDED(gpu.device->GetDeviceRemovedReason()), tag + ": the device is still there");
+        if (e.width == 960) check(made && pass.fidelityFlow(), tag + (mechanics.on ? ": the product's flow size runs FidelityFX's self-check (mechanics)" : ": the product's flow size passes FidelityFX's self-check"));
+    }
+}
+
+// The marker of a self-check that did not finish (PushFlowCheckBlock): with "running <this program>" in it, the pass runs
+// no flow at all and the predicted frame is unavailable; the marker then says "failed". A size no other test uses, so this
+// process's earlier self-check result (cached per adapter and size) does not answer first.
+void testPredictFlowMarker(Gpu& gpu) {
+    const auto marker = pipeline::PushPredictPass::flowCheckMarker();
+    const std::string identity = pipeline::PushPredictPass::flowCheckIdentity();
+    check(identity != "unknown", "predict flow marker: the program file is identified", identity);
+    std::error_code ec;
+    std::filesystem::create_directories(marker.parent_path(), ec);
+    { std::ofstream out(marker, std::ios::trunc); out << "running " << identity << "\n"; }
+    pipeline::PushPredictPass pass;
+    check(pass.initialize(gpu.device.Get(), 192, 160, DXGI_FORMAT_R8G8B8A8_UNORM), "predict flow marker: pass created");
+    check(!pass.initializeFlow(gpu.device.Get(), 48, 40) && !pass.flowReady(), "predict flow marker: no flow after a self-check that did not finish");
+    std::ifstream in(marker);
+    std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    in.close();
+    check(text.rfind("failed " + identity, 0) == 0, "predict flow marker: the marker now says failed", text);
+    std::filesystem::remove(marker, ec);
+    check(!gpu.debugErrors(), "predict flow marker: no D3D12 debug-layer error");
+}
+
 void testHudLock(Gpu& gpu) {
     constexpr uint32_t W = 256, H = 144;
     constexpr DXGI_FORMAT F = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -2598,6 +2972,21 @@ int main(int argc, char** argv) {
         {"gpu-path-real-wait", [](Gpu& g) { testGpuPathRealWait(g); }},
         {"predict", [](Gpu& g) { testPredict(g, false); }},
         {"predict-hdr10", [](Gpu& g) { testPredict(g, true); }},
+        {"predict-hud-lock", [](Gpu& g) { testPredictHudLock(g, false); }},          // Package 16, item 2
+        {"predict-hud-lock-hdr10", [](Gpu& g) { testPredictHudLock(g, true); }},
+        {"predict-flow-self-check", [](Gpu& g) { testPredictFlowSelfCheck(g); }},   // Package 16, item 4 (d)
+        {"predict-flow-marker", [](Gpu& g) { testPredictFlowMarker(g); }},
+        {"predict-flow-small-waves", [](Gpu& g) { testPredictFlowSmallWaves(g); }},
+        {"predict-fidelityfx", [](Gpu& g) { testPredictFidelity(g, false); }},        // 25 Nov 2026: P's default motion source
+        {"predict-fidelityfx-hdr10", [](Gpu& g) { testPredictFidelity(g, true); }},
+        {"predict-fidelityfx-sizes", [](Gpu& g) { testPredictFidelitySizes(g); }},
+        // Flow triage (opt-in: only with --only; see testDisCase).
+        {"dis-float-64x36", [](Gpu& g) { testDisCase(g, true, 64, 36); }},
+        {"dis-strict-64x36", [](Gpu& g) { testDisCase(g, false, 64, 36); }},
+        {"dis-float-240x135", [](Gpu& g) { testDisCase(g, true, 240, 135); }},
+        {"dis-strict-240x135", [](Gpu& g) { testDisCase(g, false, 240, 135); }},
+        {"dis-float-960x540", [](Gpu& g) { testDisCase(g, true, 960, 540); }},
+        {"dis-strict-960x540", [](Gpu& g) { testDisCase(g, false, 960, 540); }},
         {"clean-dither", [](Gpu& g) { testCleanDither(g); }},
         {"stream-change", [](Gpu& g) { testStreamChange(g); }},
         {"pushflow-sizes", [](Gpu&) { testPushFlowSizes(); }},
@@ -2635,6 +3024,12 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
+    // A flow self-check marker left by an earlier crashed run on this machine would block every flow case of this run
+    // (PushFlowCheckBlock: the product's rule). Tests start clean; predict-flow-marker tests the rule itself.
+    if (GetEnvironmentVariableW(L"VEYRA_TEST_KEEP_FLOW_MARKER", nullptr, 0) == 0) {
+        std::error_code ec;
+        if (std::filesystem::remove(pipeline::PushPredictPass::flowCheckMarker(), ec)) std::printf("NOTE removed a flow self-check marker left by an earlier run\n");
+    }
     Gpu gpu;
     if (!gpu.create()) { std::printf("FAIL setup: no D3D12 device got=none want=a hardware or WARP device\n"); return 1; }
     std::printf("INFO adapter %s class=%s debug=%d\n", gpu.adapter.c_str(), gpu.software ? "software" : "hardware", gpu.debug ? 1 : 0);
@@ -2658,6 +3053,7 @@ int main(int argc, char** argv) {
         const int64_t runStart = nowMs();
         for (const auto& t : tests) {
             if (!only.empty() && std::find(only.begin(), only.end(), std::string(t.name)) == only.end()) continue;
+            if (only.empty() && std::string_view(t.name).starts_with("dis-")) continue;   // opt-in triage cases
             currentTest = t.name;
             std::printf("RUN %s\n", t.name);
             const int64_t start = nowMs();

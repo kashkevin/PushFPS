@@ -133,6 +133,12 @@ class TriageTests(unittest.TestCase):
                       "fallbacks by reason (session): refused 1, unusable 2", text)
         self.assertIn("steady: 99.8 % on grid, 99.9 % shown", text)
         self.assertIn("delay split: not in this log", text.replace(triage.NOT_LOGGED, "not in this log"))
+        # Package 16 (review 1 SHOULD 7): the [fg-sched] lowDelay line's VFG mode, motion source and stalls ridden through.
+        sched = line(30, "fg-sched", "lowDelay state=active refusal=ok paused=none predictedPairs=600 lastPredictP95Ms=0.41 stallRides=2 "
+                     "flowSource=fidelityfx aloneMode=timestep (one predicted frame per real frame: PushLowDelay.h)")
+        text = triage.triage([("log-x.txt", on + [sched])])
+        self.assertIn("Lower delay details (last [fg-sched] line): VFG FrameIndex-2-only mode timestep; motion source fidelityfx; "
+                      "capture stalls ridden through 2", text)
 
     def test_delay_split_fields(self):
         # Package 15 TASK 3: the readout and its four parts, always on in [capture-timing].
@@ -181,9 +187,27 @@ class TriageTests(unittest.TestCase):
         self.assertIn("[fg-health]: not logged by this build or run", old)
         self.assertIn("[present-path]: not logged by this build or run", old)
 
+    def test_fg_health_display_path_fields(self):
+        # Stream "s10-display": the to-screen figure, the phase bins, late Presents and the completion polls.
+        def health(t):
+            return line(t, "fg-health", "windowS=10.0 realFrames=300 realMeanMs=30.10 realP50Ms=30.00 realP95Ms=31.00 realP99Ms=32.00 realMaxMs=40.00 "
+                        "intervalP50Ms=11.11 intervalP99Ms=12.80 onGrid1msPct=95.20 shownPct=99.90 reflexSleeps=0 "
+                        "toScreenSamples=600 toScreenP50Ms=9.40 toScreenP95Ms=14.50 toScreenP99Ms=17.00 toScreenMaxMs=21.00 "
+                        "toScreenRefreshesByMsToVblank=0-0.5:2.000/10,0.5-1:1.000/10,1-1.5:-1/0,1.5-2:-1/0,2-2.5:-1/0,2.5-3:-1/0,3-3.5:-1/0,3.5+:1.000/20 "
+                        "presentLateGenP50Ms=0.000 presentLateGenP99Ms=1.600 presentLateGenMaxMs=2.700 presentLateRealP50Ms=0.000 presentLateRealP99Ms=0.100 "
+                        "presentLateRealMaxMs=0.300 presentsLateOver1ms=20 readyWakesNearDeadline=25 readyWakesHeld=0 presentsAfterReadyWake=25 "
+                        "lateOver1msAfterReadyWake=18 lateOver1msOtherwise=2 polls=2000 pollP50Ms=0.200 pollP99Ms=1.900 pollMaxMs=3.100 pollsPastDeadline=19 "
+                        "pollOverrunP99Ms=2.000 pollOverrunMaxMs=2.600 (software timing, not photons)")
+        lines = session_lines(0, True) + [health(14), health(24)]
+        text = triage.triage([("log-x.txt", lines)])
+        self.assertIn("to screen (Present call -> the vblank that showed it, DXGI frame statistics; NOT in the delay above): P50 9.40 ms, P95 14.50 ms", text)
+        self.assertIn("0-0.5 ms 2.00 (20), 0.5-1 ms 1.00 (20)", text)
+        self.assertIn("late Presents (> 1 ms after the deadline): 40; generated P99 1.60 ms / worst 2.70 ms", text)
+        self.assertIn("completion polls: 4000, P50 0.200 ms, P99 1.900 ms, worst 3.100 ms; 38 ran past a due deadline (worst overrun 2.600 ms); late Presents after a ready wake 36 of 50, otherwise 4", text)
+
     def test_allow_lists_take_the_new_lines(self):
         import report
-        for component in ("fg-health", "present-path", "reflex", "present-overlay"):
+        for component in ("fg-health", "present-path", "reflex", "present-overlay", "vrr-profile", "scheduler", "capture-stall"):
             self.assertTrue(report.ALLOWED.search("[INFO ] [" + component + "] x=1"), component)
         self.assertTrue(report.ALLOWED.search("[WARN ] [reflex] sleep overrun: in two consecutive blocks"))
         self.assertFalse(report.ALLOWED.search("[INFO ] [reflex-marker] source=1 type=0 status=0"))

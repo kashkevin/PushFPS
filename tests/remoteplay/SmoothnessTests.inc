@@ -454,3 +454,23 @@ TEST(smooth_mode_close_target_is_not_called_a_non_multiple){
     in.targetFps = 90;
     CHECK(ninety.update(in).reason == PushSmoothReason::TargetNotMultiple);
 }
+
+// Package 16 ("Lower delay" with Smoothness Mode): a predicted pair (one VFG run + the predicted frame) is its own level,
+// never blended into the interpolated groups, and is used only while the predicted schedule runs.
+TEST(smooth_cost_model_keeps_predicted_pairs_apart) {
+    using namespace veyra::engine;
+    PushSmoothCostModel m;
+    m.record(2, 4.4);
+    m.recordPredicted(2, 9.0);
+    CHECK(m.measured(2) == 4.4 && m.measuredPredicted(2) == 9.0);
+    CHECK(m.predict(2) == 4.4);            // the schedule does not run: interpolated groups
+    m.preferPredicted(true);
+    CHECK(m.predict(2) == 9.0);            // it runs: what 3X costs now
+    CHECK(m.predict(1) > 0 && m.measuredPredicted(1) < 0);   // other levels: unchanged rules
+    PushSmoothCostModel n;
+    n.preferPredicted(true);
+    n.record(2, 5.0);
+    CHECK(n.predict(2) == 5.0);            // nothing predicted measured yet: the interpolated time
+    m.reset();
+    CHECK(m.measuredPredicted(2) < 0 && m.measured(2) < 0);
+}

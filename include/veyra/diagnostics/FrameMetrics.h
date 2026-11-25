@@ -13,6 +13,10 @@ enum class GpuStage { Color, Sr, Flow, Nr, Residual, Fg1, Fg2, Fg3, Fg4, Fg5, Fg
     AaNode0, AaNode1,
     BeautyNode0, BeautyNode1, BeautyNode2, BeautyNode3, BeautyNode4, BeautyNode5, BeautyDetect,
     Clean, // PushFPS restoration (pipeline/PushCleanPass.h)
+    // PushFPS Package 16 (the "picture" part of the delay readout itemised; envelopes that overlap the stages above):
+    BaseTail,    // from the end of Color to the real frame's hand-over to frame generation: SR / NR / tail passes, final write
+    VfgCapture,  // the real frame's copy into VFG's input and the shot-change test (inside Fg1, which is unchanged)
+    RealCompose, // the real frame's exclusion-box compose and Live HUD Lock's update
     Count };
 static_assert(unsigned(GpuStage::Fg5)-unsigned(GpuStage::Fg1)==4);
 static_assert(unsigned(GpuStage::FgBatch)>unsigned(GpuStage::Fg7));

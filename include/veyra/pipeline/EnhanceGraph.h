@@ -33,6 +33,7 @@
 // system (injected-layer era evidence, 2026-09-04): all committed resources
 // and NGX/NVOF objects are created BEFORE any descriptor view; the FG
 // warm-up evaluate runs before views exist; static views are created last.
+#include <chrono>
 #include <cstdint>
 #include "veyra/pipeline/ResetCoordinator.h"
 #include "veyra/diagnostics/DiagnosticEvent.h"
@@ -46,7 +47,8 @@
 #include "veyra/pipeline/GpuPassUtils.h"
 #include "veyra/core/SceneCadenceAnalyzer.h"
 #include "veyra/pipeline/FrameBatch.h"
-#include "veyra/pipeline/PushPredictPass.h"   // stream "predict"; nothing is created unless VEYRA_EXP_RP_FG_SCHEDULE=onepredicted
+#include "veyra/pipeline/PushPredictPass.h"
+#include "veyra/pipeline/PushPredictCheck.h"   // Package 16: a test-only check (VEYRA_TEST_PREDICT_CHECK)   // stream "predict"; nothing is created unless VEYRA_EXP_RP_FG_SCHEDULE=onepredicted
 #include "veyra/engine/EnhancementSettings.h"
 #include "veyra/engine/ContentCadence.h"
 #include "veyra/diagnostics/GpuTimer.h"
@@ -660,6 +662,16 @@ public:
     // nothing is created and the request is ignored (SwitchOff).
     void setPairSchedule(PushPairSchedule schedule){requestedSchedule_=schedule;}
     bool predictAvailable()const{return predict_&&predict_->ready()&&predict_->flowReady();}
+    // REL16 SHOULD 2 / delta SHOULD 1: the session's end (engine teardown): a real device removal while P did recent GPU
+    // work is a strike (pushPlayFaultAction; PushPredictPass::noteSessionEnd). Defined in EnhanceGraph.cpp.
+    void notePredictSessionEnd(bool deviceRemoved,bool engineError);
+    bool predictFloatFlow()const{return predict_&&predict_->floatFlow();}
+    const char* predictAloneModeName()const;
+    double predictCheckCostMs()const{return predict_?predict_->checkCostMs():-1.0;}   // review 1 SHOULD 4   // review 1 SHOULD 7: VFG's FrameIndex-2-only mode now   // Package 16, item 4 (d)
+    const char* predictFlowName()const{return predict_?predict_->flowName():"none";}   // P's motion source (PushPredictPass::flowName)
+    // Package 16 (the delay's "picture" itemised): the CPU submit of this record's base list -> the GPU starting its first
+    // timed stage, in ms (QPC and the queue's GetClockCalibration); empty when the record is not this graph's or unknown.
+    std::optional<double> submitToGpuStartMs(const diagnostics::GpuFrameTiming& timing)const;
     // Package 15: this graph was built wanting the pass (the row or the kit's switch), whether or not it could be created.
     bool predictAsked()const{return predictAsked_;}
     // Package 15: what a predicted pair would be refused for before any per-pair reason (no pass, not VFG, not 3X at
@@ -670,6 +682,8 @@ public:
     bool predictCounters(unsigned parity,PushPredictCounters& out)const{return predict_&&predict_->counters(parity%2,out);}
     // The counters of the P numbered `sequence` (FrameOutputs::predictSequence): false if its readback was reused since.
     bool predictCountersOf(uint64_t sequence,PushPredictCounters& out)const{return predict_&&predict_->countersOf(sequence,out);}
+    // Package 16, item 4: P number `sequence`'s GPU time by stage (PushPredictPass::stageTimesOf).
+    bool predictStageTimesOf(uint64_t sequence,PushPredictStageMs& out)const{out.fill(-1.0);return predict_&&predict_->stageTimesOf(sequence,out);}
     void presentationSubmitted(unsigned slot,ID3D12Fence* fence,uint64_t value){
         presentationFences_[slot%2]=fence;presentationValues_[slot%2]=value;
     }
@@ -1229,8 +1243,39 @@ private:
     bool predictAsked_=false;
     bool predictFailLogged_=false;
     PushPairSchedule requestedSchedule_=PushPairSchedule::Interpolate;
+    PushPredictRefusal predictDeclined_=PushPredictRefusal::Ok;   // why initPredict created no pass (pushPredictCreateRefusal)
+    bool predictFromSwitch_=false;
+    bool flowFedLastFrame_=false;
+    std::int64_t lastPredictWorkMs_=-1;   // delta SHOULD 1: the last time P's flow or a predicted pair was submitted (steady ms)   // REL16 SHOULD 3: the previous real frame went into P's flow (else the next one resets it)
+    // Review 1 SHOULD 6: VFG's FrameIndex-2-only ladder tried again (a real off -> on, at most once in 10 s; one retry 2 s
+    // after a refusal within the first second of a build). Times in steady-clock milliseconds.
+    std::uint32_t seenRetryEpoch_=0;
+    std::int64_t lastLadderResetMs_=-1,predictBuiltAtMs_=-1,earlyRetryAtMs_=-1;
+    bool ladderResetPending_=false;   // REL16 NOTES: a switch-on inside the 10 s gap resets the ladder when the gap has passed
+    bool earlyRetryUsed_=false;
+    static std::int64_t steadyMs(){return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();}   // VEYRA_EXP_RP_FG_SCHEDULE=onepredicted (P's FidelityFX flow is fed without the row)
     PushPredictRefusal lastPredictRefusal_=PushPredictRefusal::SwitchOff;
     bool initPredict();
+    // Package 16, item 2: the test-only check of a predicted frame's locked / excluded pixels against the real frame
+    // (PushPredictCheck.h; VEYRA_TEST_PREDICT_CHECK=1 or VEYRA_TEST_FAKE_VFG=1, read once per process; nothing exists or
+    // runs without it). One readback in flight; logged as [push-predict] hudLockMismatch=... when it has completed.
+    struct PredictCheck {
+        ComPtr<ID3D12Resource> p, b, state;   // readback buffers
+        D3D12_PLACED_SUBRESOURCE_FOOTPRINT colour{}, stateFootprint{};
+        uint64_t fence=0;
+        bool inFlight=false, hud=false, tenBit=false;
+        PushPredictBoxes boxes;
+        uint64_t checks=0;
+        PushPredictCheckCounts total;
+    };
+    std::unique_ptr<PredictCheck> predictCheck_;
+    struct BaseSubmit { uint64_t sourceFrameId=0,qpc=0; };
+    std::array<BaseSubmit,16> baseSubmits_{};   // Package 16: by source frame id (noteBaseSubmit / submitToGpuStartMs)
+    void noteBaseSubmit(uint64_t sourceFrameId);   // before the submission: the CPU submit time only (QueryPerformanceCounter)
+    void calibrateAfterSubmit();                   // after it: GetClockCalibration, at most once a second (review 1 MUST 2)
+    uint64_t calibrationQpc_=0,gpuCalibration_=0,cpuCalibration_=0;
+    bool recordPredictCheck(ID3D12GraphicsCommandList* list,unsigned predictedSlot,ID3D12Resource* presentedReal);
+    void collectPredictCheck();
     std::unique_ptr<StreamChangeRunner> streamChange_;  // PushFPS experiment: change of the decoded picture
     std::shared_ptr<AVFrame> streamChangeFrame_;        // the decoder picture its last list reads
     bool streamChangeFailed_=false;

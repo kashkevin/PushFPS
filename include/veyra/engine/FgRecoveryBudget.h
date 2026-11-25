@@ -81,8 +81,12 @@ public:
         if(!base||!fg||interval<=0||(*base+*fg)*10000>double(interval))return 0;
         return int64_t(*fg*10000);
     }
-    bool canAdmit(int64_t now,int64_t deadline,double elapsed,double present,bool warmingHistory=false,double queuedMs=0)const{
-        const auto cost=predicted(now,warmingHistory);
+    // groupFgMs (PushFPS Package 16, review 1 SHOULD 9): the FG cost of THIS pair's group when it is not the interpolated
+    // group the window learned (a predicted pair: Fg1 + P's measured P95, the same group its deadline was shifted with:
+    // pushLowDelayAdmissionGroupMs). Negative: the learned estimate (unchanged behaviour).
+    bool canAdmit(int64_t now,int64_t deadline,double elapsed,double present,bool warmingHistory=false,double queuedMs=0,double groupFgMs=-1)const{
+        const auto base=baseCost(now);
+        const auto cost=groupFgMs>=0&&base&&!warmingHistory?std::optional<double>(*base+groupFgMs):predicted(now,warmingHistory);
         // FG has not been submitted at admission. CPU time can at most cover
         // the base work; it must never erase the cost of future FG calls.
         const double queued=std::isfinite(queuedMs)?std::max(0.0,queuedMs):0.0;
@@ -90,8 +94,8 @@ public:
         const bool fits=double(deadline-now)/10000+10>=std::max(0.0,queued+cost.value_or(0)-progress)+std::max(0.0,present);
         return fits;
     }
-    bool admit(int64_t now,int64_t deadline,double elapsed,double present,bool warmingHistory=false,double queuedMs=0){
-        return recordAdmission(canAdmit(now,deadline,elapsed,present,warmingHistory,queuedMs));
+    bool admit(int64_t now,int64_t deadline,double elapsed,double present,bool warmingHistory=false,double queuedMs=0,double groupFgMs=-1){
+        return recordAdmission(canAdmit(now,deadline,elapsed,present,warmingHistory,queuedMs,groupFgMs));
     }
     // strictFirstOutput=false reproduces the 1.4.0 rule: only the whole group
     // against its last deadline. true additionally requires the first output to

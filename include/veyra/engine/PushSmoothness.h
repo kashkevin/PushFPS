@@ -183,20 +183,34 @@ struct PushSmoothConfig {
 // moving average (like the engine's own vfgChosenFgMs). A level not measured yet is predicted from the two measured
 // levels nearest to it as a fixed part (the optical flow, once per pair) plus a per-frame part; from one measured
 // level as all per-frame (cost x k / j: too high above it, which only delays a step up). -1: nothing measured.
+// Package 16 (Smoothness Mode with "Lower delay"): a 3X pair that ran the one-predicted schedule (I(2/3), B, P) costs one
+// VFG run plus the predicted frame, not two runs. Its group time is kept apart (recordPredicted) so it never blends
+// into the interpolated level; while the predicted schedule runs (preferPredicted(true), set by the engine from
+// PushLowDelaySchedule::active()) the level's prediction is the predicted pairs' time when measured, otherwise the
+// interpolated one. Nothing is recorded there and nothing changes with the row off (preferPredicted stays false).
 class PushSmoothCostModel {
 public:
     static constexpr unsigned kLevels = 32;
     PushSmoothCostModel() { reset(); }
-    void reset() { ms_.fill(-1.0); }
+    void reset() { ms_.fill(-1.0); predictedMs_.fill(-1.0); }
     void record(unsigned generated, double ms) {
         if (generated == 0 || generated >= kLevels || !std::isfinite(ms) || ms < 0) return;
         double& c = ms_[generated];
         c = c >= 0 ? c + 0.1 * (ms - c) : ms;
     }
+    void recordPredicted(unsigned generated, double ms) {
+        if (generated == 0 || generated >= kLevels || !std::isfinite(ms) || ms < 0) return;
+        double& c = predictedMs_[generated];
+        c = c >= 0 ? c + 0.1 * (ms - c) : ms;
+    }
+    void preferPredicted(bool on) { preferPredicted_ = on; }
+    bool prefersPredicted() const { return preferPredicted_; }
+    double measuredPredicted(unsigned generated) const { return generated < kLevels ? predictedMs_[generated] : -1.0; }
     double measured(unsigned generated) const { return generated < kLevels ? ms_[generated] : -1.0; }
     double predict(unsigned generated) const {
         if (generated == 0) return 0.0;
         if (generated >= kLevels) return -1.0;
+        if (preferPredicted_ && predictedMs_[generated] >= 0) return predictedMs_[generated];
         if (ms_[generated] >= 0) return ms_[generated];
         unsigned first = 0, second = 0;   // the two measured levels nearest to `generated`
         for (unsigned j = 1; j < kLevels; ++j) {
@@ -214,7 +228,8 @@ public:
     }
 
 private:
-    std::array<double, kLevels> ms_{};
+    std::array<double, kLevels> ms_{}, predictedMs_{};
+    bool preferPredicted_ = false;
 };
 
 struct PushSmoothInput {

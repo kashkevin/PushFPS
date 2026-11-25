@@ -1,8 +1,10 @@
 #include "veyra/pipeline/VfgBackend.h"
 #include "veyra/pipeline/VfgAmpereCompat.h"
+#include "veyra/pipeline/TestVfgBackend.h"
 #include "veyra/pipeline/FrameBatch.h"
 #include "veyra/pipeline/GpuPassUtils.h"
 #include "veyra/pipeline/PushGpuPath.h"
+#include "veyra/pipeline/PushPredict.h"
 #include "veyra/core/SceneCadenceAnalyzer.h"
 #include "veyra/engine/EnhancementSettings.h"
 #include "veyra/gfx/D3D12DeviceContext.h"
@@ -84,6 +86,7 @@ struct VfgBackend::Impl {
     int (__cdecl* create)(const char*,void**)=nullptr;
     void (__cdecl* destroy)(void*)=nullptr;
     int (__cdecl* setU32)(void*,const char*,unsigned)=nullptr;
+    int (__cdecl* setF32)(void*,const char*,float)=nullptr;   // Package 16: optional (explicit Timestep mode)
     int (__cdecl* setImage)(void*,const char*,void*)=nullptr;
     int (__cdecl* setStream)(void*,const char*,CUstream)=nullptr;
     int (__cdecl* loadEffect)(void*)=nullptr;
@@ -158,6 +161,14 @@ struct VfgBackend::Impl {
     unsigned outstanding=0;
     unsigned rejectRun=0,runCount=0; // process-local deterministic failure test
     bool rejectAlone=false;          // VEYRA_TEST_VFG_REJECT_ALONE=1: every "alone" job is refused (test of the graceful path)
+    bool rejectAloneDirect=false;    // VEYRA_TEST_VFG_REJECT_ALONE=direct: only the direct FrameIndex-2 request (Package 16's fallbacks run)
+    // Package 16, item 5 (PushPredict.h PushVfgAloneLadder): direct, then Timestep, then FrameIndex 1 + 2; worker thread only.
+    PushVfgAloneLadder aloneLadder;
+    bool aloneReported=false;
+    std::atomic<bool> resetLadder=false;                                        // review 1 SHOULD 6
+    std::atomic<std::uint8_t> aloneNow=static_cast<std::uint8_t>(PushVfgAloneMode::Direct);   // review 1 SHOULD 7
+    // runAlone: defined after cpuCall (its return type is deduced), just before cudaJob.
+
     std::atomic<bool> predictRefused=false;
     double testRunDelayMs=0; // VEYRA_TEST_VFG_DELAY_MS: a slower GPU, on this worker only
     bool profileCpu=false;
@@ -324,6 +335,30 @@ struct VfgBackend::Impl {
         if(buffer.memory){cu(cuDestroyExternalMemoryFn(buffer.memory),"cuDestroyExternalMemory");buffer.memory=nullptr;}
         buffer.resource.Reset();
     }
+    bool runAlone(Effect& e,PushVfgAloneMode mode,unsigned parity,unsigned sub,unsigned multiplier){
+        const auto dst=[&](unsigned s){return cv(cpuCall(5,[&]{return setImage(e.handle,"DstImage0",outputs[parity+2*(s-1)].image);}),"SetImage output");};
+        const auto index=[&](unsigned s){return cv(cpuCall(8,[&]{return setU32(e.handle,"FrameIndex",s);}),"SetU32 FrameIndex");};
+        const auto runOnce=[&]{return cv(cpuCall(9,[&]{return run(e.handle,1);}),"NvVFX_Run async");};
+        switch(mode){
+        case PushVfgAloneMode::Direct:return dst(sub)&&index(sub)&&runOnce();
+        case PushVfgAloneMode::Timestep:{
+            if(!setF32)return false;
+            e.boundMultiplier=0;   // FrameMultiplier 0 below: the next ordinary request sets the multiplier again
+            return cv(cpuCall(7,[&]{return setU32(e.handle,"FrameMultiplier",0u);}),"SetU32 FrameMultiplier 0 (Timestep mode)")&&
+                   cv(setF32(e.handle,"Timestep",pushVfgTimestep(sub,multiplier)),"SetF32 Timestep")&&dst(sub)&&runOnce();
+        }
+        case PushVfgAloneMode::IndexOneThenTwo:{
+            if(e.boundMultiplier!=multiplier){
+                if(!cv(cpuCall(7,[&]{return setU32(e.handle,"FrameMultiplier",multiplier);}),"SetU32 FrameMultiplier"))return false;
+                e.boundMultiplier=multiplier;
+            }
+            // FrameIndex 1 into the output this pair leaves unused (discarded), then the frame asked for.
+            return dst(1)&&index(1)&&runOnce()&&dst(sub)&&index(sub)&&runOnce();
+        }
+        case PushVfgAloneMode::Refused:break;
+        }
+        return false;
+    }
     bool cudaJob(const Job& job){
         const auto [parity,sub,multiplier,reset,revision,value,fast,producerValue,alone]=job;
         Current current(*this);if(!current.active)return false;
@@ -356,15 +391,34 @@ struct VfgBackend::Impl {
             ok=cv(cpuCall(7,[&]{return setU32(e.handle,"FrameMultiplier",multiplier);}),"SetU32 FrameMultiplier");
             if(ok)e.boundMultiplier=multiplier;
         }
-        ok=ok&&cv(cpuCall(5,[&]{return setImage(e.handle,"DstImage0",outputs[parity+2*(sub-1)].image);}),"SetImage output")&&
+        if(!alone)ok=ok&&cv(cpuCall(5,[&]{return setImage(e.handle,"DstImage0",outputs[parity+2*(sub-1)].image);}),"SetImage output")&&
             cv(cpuCall(8,[&]{return setU32(e.handle,"FrameIndex",sub);}),"SetU32 FrameIndex");
         if(ok&&testRunDelayMs>0){
             const auto until=std::chrono::steady_clock::now()+std::chrono::duration<double,std::milli>(testRunDelayMs*(second?.3:1));
             while(std::chrono::steady_clock::now()<until)std::this_thread::yield();
         }
-        if(ok){
+        if(ok&&alone){
+            // Package 16, item 5: the FrameIndex-2-only request through the fallback order; the SDK's status code of a
+            // refused call is in the [vfg] error line cv() writes. Only an "alone" failure is the experiment's (below).
+            ok=false;
+            if(resetLadder.exchange(false)){aloneLadder=PushVfgAloneLadder(setF32!=nullptr);aloneReported=false;log::info("vfg","FrameIndex-2-only ladder starts over (the row was switched on again, or a refusal right after a rebuild)");}
+            for(auto mode=aloneLadder.current();mode!=PushVfgAloneMode::Refused;){
+                const bool injected=rejectAlone||(rejectAloneDirect&&mode==PushVfgAloneMode::Direct);
+                if(injected)log::warn("vfg",std::format("injected rejection of a FrameIndex-2-only request, mode {} (VEYRA_TEST_VFG_REJECT_ALONE)",pushVfgAloneModeName(mode)));
+                const bool done=!injected&&runAlone(e,mode,parity,sub,multiplier);
+                const bool wasSettled=aloneLadder.settled();
+                const auto next=aloneLadder.outcome(done);
+                if(!done||(!wasSettled&&!aloneReported)){
+                    if(done)aloneReported=true;
+                    log::info("vfg",std::format("FrameIndex-2-only request: mode={} accepted={} next={} (Lower delay; order direct, timestep, index1-then-2; a refused call's SDK status is in the error line above)",
+                        pushVfgAloneModeName(mode),done,pushVfgAloneModeName(next)));
+                }
+                if(done){ok=true;break;}
+                mode=next;
+            }
+            aloneNow.store(static_cast<std::uint8_t>(aloneLadder.current()));
+        }else if(ok){
             if(rejectRun&&++runCount==rejectRun){log::warn("vfg","injected VFG Run rejection (test hook)");ok=false;}
-            else if(alone&&rejectAlone){log::warn("vfg","injected rejection of a FrameIndex-2-only request (VEYRA_TEST_VFG_REJECT_ALONE)");ok=false;}
             else ok=cv(cpuCall(9,[&]{return run(e.handle,1);}),"NvVFX_Run async");
         }
         if(profiling){
@@ -465,6 +519,9 @@ VfgBackend::~VfgBackend(){shutdown();}
 
 bool VfgBackend::initialize(gfx::D3D12DeviceContext& context,const std::wstring& root,unsigned width,unsigned height,DXGI_FORMAT format,unsigned multiplier,unsigned quality,bool asynchronousSubmission,bool fastFallback){
     shutdown();
+    // TEST ONLY (stream "e2e"): VEYRA_TEST_FAKE_VFG=1 puts TestVfgBackend behind this class (CI's software renderer has no
+    // CUDA). Every public method below forwards to it first; without the switch nothing changes.
+    if(TestVfgBackend::requested()){test_=std::make_unique<TestVfgBackend>();return test_->initialize(context,width,height,format,multiplier,quality,asynchronousSubmission);}
 #ifdef VEYRA_HAVE_CUDA_DRIVER_HEADERS
     auto& p=*impl_;
     if(context.adapter().vendorId!=0x10DE||!runtimeAvailable(root)||!width||!height||multiplier<2||multiplier>FrameBatch::Capacity||quality>=engine::kVfgQualityCount||
@@ -480,7 +537,8 @@ bool VfgBackend::initialize(gfx::D3D12DeviceContext& context,const std::wstring&
     wchar_t reject[16]{};
     const auto rejectLength=GetEnvironmentVariableW(L"VEYRA_TEST_VFG_REJECT_RUN",reject,16);
     if(rejectLength&&rejectLength<16)p.rejectRun=unsigned(std::clamp(_wtoi(reject),0,1000000));
-    p.rejectAlone=GetEnvironmentVariableW(L"VEYRA_TEST_VFG_REJECT_ALONE",nullptr,0)>0;
+    {wchar_t value[16]{};const DWORD n=GetEnvironmentVariableW(L"VEYRA_TEST_VFG_REJECT_ALONE",value,16);
+     p.rejectAloneDirect=n==6&&std::wstring_view(value,n)==L"direct";p.rejectAlone=n>0&&!p.rejectAloneDirect;}
     std::array<wchar_t,32768> system{};const auto n=GetSystemDirectoryW(system.data(),UINT(system.size()));if(!n||n>=system.size())return false;
     HMODULE driver=load(fs::path(system.data())/L"nvcuda.dll");if(!driver)return false;p.libraries.push_back(driver);
 #define BIND_CU(name,exported) if(!bind(driver,exported,p.name##Fn))return false
@@ -536,6 +594,8 @@ bool VfgBackend::initialize(gfx::D3D12DeviceContext& context,const std::wstring&
     log::info("vfg",std::format("compatibility={} compute={}.{}",ampere?"SM86-experimental":"native-no-patches",major,minor));
 #define BIND_VFX(member,name) if(!bind(core,name,p.member))return false
     BIND_VFX(create,"NvVFX_CreateEffect");BIND_VFX(destroy,"NvVFX_DestroyEffect");BIND_VFX(setU32,"NvVFX_SetU32");BIND_VFX(setImage,"NvVFX_SetImage");
+    // Package 16, item 5: optional (explicit Timestep mode); absent, that fallback step is skipped.
+    p.setF32=reinterpret_cast<decltype(p.setF32)>(GetProcAddress(core,"NvVFX_SetF32"));p.aloneLadder=PushVfgAloneLadder(p.setF32!=nullptr);
     BIND_VFX(setStream,"NvVFX_SetCudaStream");BIND_VFX(loadEffect,"NvVFX_Load");BIND_VFX(run,"NvVFX_Run");BIND_VFX(getVersion,"NvVFX_GetVersion");
 #undef BIND_VFX
 #define BIND_IMAGE(member,name) if(!bind(image,name,p.member))return false
@@ -609,6 +669,7 @@ bool VfgBackend::initialize(gfx::D3D12DeviceContext& context,const std::wstring&
 #endif
 }
 bool VfgBackend::created()const{
+    if(test_)return test_->created();   // TEST ONLY
 #ifdef VEYRA_HAVE_CUDA_DRIVER_HEADERS
     return impl_->ready;
 #else
@@ -616,6 +677,7 @@ bool VfgBackend::created()const{
 #endif
 }
 bool VfgBackend::capture(ID3D12GraphicsCommandList* list,ID3D12Resource* texture,unsigned parity,bool comparePrevious){
+    if(test_)return test_->capture(list,texture,parity,comparePrevious);   // TEST ONLY
 #ifdef VEYRA_HAVE_CUDA_DRIVER_HEADERS
     auto& p=*impl_;if(!p.ready||p.failed.load()||!list||!texture||parity>1)return false;
     const auto desc=texture->GetDesc();if(desc.Width!=p.width||desc.Height!=p.height||desc.Format!=p.format)return false;
@@ -633,6 +695,7 @@ bool VfgBackend::capture(ID3D12GraphicsCommandList* list,ID3D12Resource* texture
 #endif
 }
 bool VfgBackend::fastReady()const{
+    if(test_)return false;   // TEST ONLY: one model
 #ifdef VEYRA_HAVE_CUDA_DRIVER_HEADERS
     return impl_->ready&&impl_->effects[1].handle;
 #else
@@ -640,6 +703,7 @@ bool VfgBackend::fastReady()const{
 #endif
 }
 bool VfgBackend::generate(unsigned parity,unsigned sub,unsigned multiplier,bool reset,bool fast,bool alone){
+    if(test_)return test_->generate(parity,sub,multiplier,reset,fast,alone);   // TEST ONLY
 #ifdef VEYRA_HAVE_CUDA_DRIVER_HEADERS
     auto& p=*impl_;if(!p.ready||p.failed.load()||parity>1||multiplier<2||multiplier>p.maxMultiplier||sub<1||sub>=multiplier)return false;
     return p.handoff(parity,sub,multiplier,reset,fast,alone);
@@ -647,7 +711,21 @@ bool VfgBackend::generate(unsigned parity,unsigned sub,unsigned multiplier,bool 
     (void)parity;(void)sub;(void)multiplier;(void)reset;(void)fast;(void)alone;return false;
 #endif
 }
+void VfgBackend::resetAloneLadder(){
+#ifdef VEYRA_HAVE_CUDA_DRIVER_HEADERS
+    impl_->resetLadder.store(true);
+    impl_->aloneNow.store(static_cast<std::uint8_t>(PushVfgAloneMode::Direct));
+#endif
+}
+PushVfgAloneMode VfgBackend::aloneMode() const{
+#ifdef VEYRA_HAVE_CUDA_DRIVER_HEADERS
+    return static_cast<PushVfgAloneMode>(impl_->aloneNow.load());
+#else
+    return PushVfgAloneMode::Refused;
+#endif
+}
 bool VfgBackend::takePredictRefused(){
+    if(test_)return test_->takePredictRefused();   // TEST ONLY
 #ifdef VEYRA_HAVE_CUDA_DRIVER_HEADERS
     return impl_->predictRefused.exchange(false);
 #else
@@ -655,6 +733,7 @@ bool VfgBackend::takePredictRefused(){
 #endif
 }
 VfgBackend::SubmissionState VfgBackend::submissionState(unsigned slot)const{
+    if(test_)return test_->submissionState(slot);   // TEST ONLY
 #ifdef VEYRA_HAVE_CUDA_DRIVER_HEADERS
     return slot<kOutputs?impl_->states[slot].load():SubmissionState::Failed;
 #else
@@ -662,6 +741,7 @@ VfgBackend::SubmissionState VfgBackend::submissionState(unsigned slot)const{
 #endif
 }
 bool VfgBackend::copyOutput(ID3D12GraphicsCommandList* list,ID3D12Resource* texture,unsigned slot){
+    if(test_)return test_->copyOutput(list,texture,slot);   // TEST ONLY
 #ifdef VEYRA_HAVE_CUDA_DRIVER_HEADERS
     auto& p=*impl_;if(!p.ready||!list||!texture||slot>=2*(p.maxMultiplier-1))return false;
     const auto desc=texture->GetDesc();if(desc.Width!=p.width||desc.Height!=p.height||desc.Format!=p.format)return false;
@@ -700,6 +780,7 @@ bool VfgBackend::copyOutput(ID3D12GraphicsCommandList* list,ID3D12Resource* text
 #endif
 }
 bool VfgBackend::copyInput(ID3D12GraphicsCommandList* list,ID3D12Resource* texture,unsigned parity,bool onlyOnCut){
+    if(test_)return test_->copyInput(list,texture,parity,onlyOnCut);   // TEST ONLY
 #ifdef VEYRA_HAVE_CUDA_DRIVER_HEADERS
     auto& p=*impl_;if(!p.ready||!list||!texture||parity>=2)return false;
     const auto desc=texture->GetDesc();if(desc.Width!=p.width||desc.Height!=p.height||desc.Format!=p.format)return false;
@@ -723,6 +804,7 @@ bool VfgBackend::copyInput(ID3D12GraphicsCommandList* list,ID3D12Resource* textu
 #endif
 }
 ID3D12Resource* VfgBackend::inputBuffer(unsigned parity)const{
+    if(test_)return test_->inputBuffer(parity);   // TEST ONLY
 #ifdef VEYRA_HAVE_CUDA_DRIVER_HEADERS
     return impl_->ready&&parity<2?impl_->inputs[parity].resource.Get():nullptr;
 #else
@@ -730,6 +812,7 @@ ID3D12Resource* VfgBackend::inputBuffer(unsigned parity)const{
 #endif
 }
 uint32_t VfgBackend::inputRowPitch()const{
+    if(test_)return test_->inputRowPitch();   // TEST ONLY
 #ifdef VEYRA_HAVE_CUDA_DRIVER_HEADERS
     return impl_->ready?impl_->footprint.Footprint.RowPitch:0;
 #else
@@ -737,6 +820,7 @@ uint32_t VfgBackend::inputRowPitch()const{
 #endif
 }
 ID3D12Resource* VfgBackend::shotChangeResultsForTest()const{
+    if(test_)return test_->shotChangeResults();   // TEST ONLY
 #ifdef VEYRA_HAVE_CUDA_DRIVER_HEADERS
     return impl_->gpuShotChange?impl_->cutResults.Get():nullptr;
 #else
@@ -744,6 +828,7 @@ ID3D12Resource* VfgBackend::shotChangeResultsForTest()const{
 #endif
 }
 void VfgBackend::shutdown(){
+    if(test_){test_->shutdown();test_.reset();}   // TEST ONLY
 #ifdef VEYRA_HAVE_CUDA_DRIVER_HEADERS
     auto& p=*impl_;p.ready=false;p.stopWorker();
     if(p.cudaContext&&p.cuCtxPushCurrentFn&&p.cuCtxPopCurrentFn){

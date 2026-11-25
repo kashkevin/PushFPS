@@ -300,6 +300,8 @@ bool QmlPlayerBridge::setPreference(const QString& key, const QVariant& value) {
                                    "pushSmoothPacing", "pushSmoothPacing2",
                                    // PushFPS: the quick setup's G-SYNC row was used (driver profile checked, nothing left to set).
                                    "pushGsyncChecked",
+                                   // PushFPS (stream s10-display): a G-SYNC profile repair waits for a restart of PushFPS.
+                                   "pushGsyncRestartPending",
                                    // PushFPS going live: sound and microphone in the stream.
                                    "streamAudio", "streamMic",
                                    // PushFPS streaming mode mixer: mutes and the microphone filters.
@@ -321,7 +323,9 @@ bool QmlPlayerBridge::setPreference(const QString& key, const QVariant& value) {
                                    "pushCleanHud",
                                    // Package 15 "Lower delay" (PushLowDelayRow.qml): one predicted frame per real frame
                                    // on a capture card with VFG at 3X. Unset = off.
-                                   "pushLowDelay"};
+                                   "pushLowDelay",
+                                   // Package 16 review 1 MUST 3: the one-time reset of pushLowDelay was done (engine/PushLowDelay.h).
+                                   "pushLowDelayReset16"};
     QVariant stored;
     if (ranges.contains(key)) {
         bool ok = false; const int n = value.toInt(&ok);

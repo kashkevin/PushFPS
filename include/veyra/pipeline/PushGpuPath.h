@@ -72,11 +72,16 @@ struct PushRealPresentFenceInputs {
     std::uint64_t realFence = 0;  // out.videoFenceValue: the last list that writes or transitions the real frame
     std::uint64_t pairFence = 0;  // uploadFences_[parity]: the pair's last list
     bool restore = false;         // VEYRA_TEST_GPU_REAL_WAITS_GROUP=1
+    // Package 16 ("Lower delay"): the pair ran I(2/3), B, P. Its later lists never touch the real frame's texture, HUD
+    // Lock and exclusion boxes included: I composes from A (held parity and raw A, as every interpolated frame of a
+    // valid pair), P reads B from VFG's input buffer and composes from a copy of it (PushHudLock::kPredictedHeld) and
+    // from raw B (sourceReferences_, read only). So B never waits for P's work (its flow, warp and composes).
+    bool predictedPair = false;
 };
 
 // True when no list submitted after the real frame's own lists touches the real frame's texture (see 1 above).
 inline bool pushRealFrameFinalAtOwnFence(const PushRealPresentFenceInputs& in) {
-    return in.backend == PushFgPathKind::Vfg && !in.hudLock && !in.exclusion && !in.presentSinkFg;
+    return in.backend == PushFgPathKind::Vfg && !in.presentSinkFg && (in.predictedPair || (!in.hudLock && !in.exclusion));
 }
 
 // The fence value the presentation queue waits for before it blits the real frame.

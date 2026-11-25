@@ -3701,3 +3701,98 @@ Default ON, each restored by one `VEYRA_TEST_RP_LEGACY_*` line in slipstream.ini
   after its blit (capacity or output cap) is in a recording although not shown; the coverage probe is not issued for a
   prepared frame. Log: `[present-path] experiment blitAhead=1` and every 10 s `blitAhead prepared= presentedAsPrepared=
   discarded=`; `[present-cost] blitAhead=1` for a frame presented as prepared.
+
+## Display path and fullscreen region (stream s10-display, 24 Nov 2026; capture card)
+
+Evidence: the owner's Package 14 / 15 logs (out/research/P15_DISPLAY_AND_BASE_PATH.md, not in the repository). Unverified on
+Windows; nothing here was run on a GPU or a display.
+
+- **Always on, diagnostics only.** `[fg-health]` gains `toScreenSamples/P50/P95/P99/MaxMs` (Present call -> the vblank that
+  showed it, DXGI frame statistics; software timers, not photons; NOT part of the real-frame delay on the same line),
+  `toScreenLateCutPct`, `toScreenRefreshesLateCut` / `toScreenRefreshesOther` (mean whole refreshes waited for Presents
+  called within 1.5 ms of a vblank and for the others: about one refresh more for the first means they miss the
+  compositor's cut-off), `presentLateGen/RealP50/P99/MaxMs` (Present call begin - the frame's deadline, paced capture
+  frames), `presentsLateOver1ms`, `readyWakesNearDeadline` / `readyWakesHeld` (GPU-ready events that ended the owner's
+  precise wait within 2 ms of a deadline). `[present-path]` ends with the last second's `toScreenP50Ms/P95Ms`. The delay
+  badge's tooltip and the quick setup's auto-fullscreen row show the same figure as its own line (pushLiveStats
+  `toScreenKnown/P50Ms/P95Ms`).
+- **`VEYRA_EXP_RP_DEADLINE_HOLD=1`** (off unless exactly "1"; `DeadlineWait.h`, `PushDisplayPath.h`): a GPU-ready event
+  within 2 ms of a frame's deadline no longer ends the precise wait; the completion poll it would start runs after that
+  Present. The capture arrival event still ends the wait. Off: exactly the previous wait. What decides it on his PC:
+  `presentLate*`, `presentsLateOver1ms`, `onGrid1msPct` with and without the switch.
+- **`VEYRA_EXP_RP_FULLSCREEN_NO_REGION=1`** (off unless exactly "1"; review SHOULD 1: off by default). In the app's
+  fullscreen an interface item that cuts nothing out of the video window (the retracted dock, wholly above it) is no
+  longer a cover, so the video window has no region at all (`[present-path] region=full windowRgn=0`) instead of a
+  rectangle region of its own size. Pixels are unchanged; windowed play is unchanged. `[qml-window] fullscreen region: N
+  cover(s) outside the video window left out` names it when it acts.
+- **G-SYNC repair waits for a restart.** After the quick setup's G-SYNC repair, pref `pushGsyncRestartPending` keeps the row
+  "restart PushFPS to finish" in this process. Every process logs once, 20 s into playing, `[vrr-profile] start-state
+  vrrState=N requestedByPushFPS=… confirmed=true|false|unknown (reason=not-requested) afterRepairRestart=… gsyncChecked=…`;
+  after a repair the row then states only the driver's answer, and only where PushFPS requested variable refresh (no
+  troubleshooting instruction).
+- **`VEYRA_TEST_RP_LEGACY_PACKAGE15=1`** (PushLegacy.h; slipstream.ini accepts it; PACKAGE14 / PACKAGE13 imply it) restores
+  every Package-16 default-on part; parts `VEYRA_TEST_RP_LEGACY_DISPLAY_UI` (the "to screen" lines in the badge tooltip and
+  the quick setup) and `VEYRA_TEST_RP_LEGACY_GSYNC_RESTART` (the restart row). Later streams append their parts after these.
+- **More [fg-health] fields (always on):** `presentsAfterReadyWake`, `lateOver1msAfterReadyWake`, `lateOver1msOtherwise`,
+  `polls`, `pollP50/P99/MaxMs`, `pollsPastDeadline` (a completion poll that began before a due precise deadline and ended
+  after it), `pollOverrunP99/MaxMs`; the refresh-phase test is `toScreenRefreshesByMsToVblank` (0.5 ms bins).
+- **`VEYRA_EXP_RP_PRESENT_BEFORE_POLL=1`** (off unless exactly "1"; PushDisplayPath.h): within a hold sized from the measured
+  poll durations (P99 + 0.25 ms, 0.25-2 ms; 2 ms until 64 polls) of the head frame's deadline, readiness is stamped by fence
+  reads, the deadline is waited out, the head presented, then the completion poll runs. A model test shows the head is never
+  later and never early, and a sample arriving meanwhile is read at most the hold later. What decides it on his PC:
+  `pollsPastDeadline`, `lateOver1msAfterReadyWake`, `onGrid1msPct` with and without the switch.
+- **`[capture-stall]` (always on, rare).** A capture callback more than 3 intervals after the previous one: `kind=gap` with the
+  gap, the device timestamp step, its copy time and the copy times before it; then `kind=burst` with the burst that follows.
+
+## Capture-stall witness and stall evidence (stream "s10-stall", 25 Nov 2026)
+
+The owner's logs show capture stalls at every quarter hour (quarter + 5.45 / 11.05 / 16.75 s in a 45-minute cycle, a second
+one about 17 s later) whose cause the log cannot name. This records; it changes nothing about capture, buffering or
+scheduling.
+- **Stall witness (always on while a capture card runs; `include/veyra/engine/PushStallWitness.h`,
+  `src/source/PushStallWitnessWin.cpp`; reduced to the reviewer's minimal set by review S10_STALL_REVIEW1).** A lowest-priority
+  sampler reads once a second, into a 16-second ring: per-processor DPC / interrupt time, DPCs queued and interrupts per
+  second, context switches, hard faults, available / committed / standby / modified memory (PDH, English counter names), this
+  process's CPU, faults and working set, the busiest other programs from ONE NtQuerySystemInformation(SystemProcessInformation)
+  call (no handle to any process; a process started since the previous second counts with all its CPU time; programs that
+  start and end within one second are not seen), virtual-machine workers counted from the same names, device-interface and
+  power notifications, wall-clock jumps, the hypervisor (CPUID; also present with memory integrity alone). The capture callback
+  adds two thread-cycle reads and a lock-free report: a callback more than 2.5 intervals late, or a copy over 3 x the MEDIAN
+  of the last 64 copies (the baseline follows a lasting change within about a second and is forgotten when the frame size or
+  interval changes or the source restarts; a gap is reported even right after a copy report). 3 s after a stall the sampler
+  writes `[stall-witness]` (one line per second from -5 to +3 s, NAMING the busiest programs: PRIVATE, on no allow-list, the
+  start line says so) and `[capture-stall-cause]` (one line, numbers only, allow-listed). Gap stalls: at most 40 an hour;
+  copy-only reports: at most 8 an hour, a separate quota. captureThreadRanPct is uncalibrated (Microsoft documents that
+  interrupt time is not charged to the interrupted thread; for DPC time it says nothing). Per-second counters cannot show a
+  preemption of a few ms; a 100-200 ms storm on one processor does show (as 10-20 % of that second).
+- **`VEYRA_EXP_RP_STALL_WITNESS_DEEP=1`** (off unless exactly "1"; environment or slipstream.ini, which turns every
+  `VEYRA_EXP_RP_*` key into an environment variable): also the 10 ms normal-priority probe thread (`uiWakeMs`; a
+  high-resolution timer re-armed below the clock tick keeps the system clock at its fastest rate while it runs) and the disk
+  and network byte counters (the network one queries every adapter driver once a second). Off: those fields read -1.
+- **`VEYRA_TEST_RP_LEGACY_STALL_WITNESS=1`** (PushLegacy part `stallWitness`, covered by `VEYRA_TEST_RP_LEGACY_PACKAGE15=1`
+  and the earlier masters): no witness threads, no cycle reads, no lines.
+- **Kit:** `collect-diagnostics.ps1 -IncludeProcessNames` adds the `[stall-witness]` lines as `stall-witness-<copy>.txt`;
+  without it they are left out and the summary says so. `Collect-Stall-Evidence.cmd` (double-click; read-only, no
+  administrator rights; one text file next to PushFPS's logs): report mode (scheduled tasks flagged for a 1/3/5/9/15/45-minute
+  repetition or a last run within 20 s of a stall, Task Scheduler history if Windows keeps it, System / Application events
+  +-30 s around each stall, processes, services, the USB video device's chain to its controller with drivers and the power
+  setting, powercfg's USB / PCI Express / processor settings, adapters, hypervisor and VM workers); `-Mode watch` (opt-in, once
+  a second until 90 s after the next quarter hour, at most 20 minutes, measures and limits its own cost).
+  The trace script is a draft outside the kit (docs/drafts/Record-Stall-Trace.ps1, with the review's TODO list).
+## Package 16 ("Lower delay" with Smoothness Mode and Live HUD Lock; stream s10-lowdelay2)
+
+- **`VEYRA_TEST_PREDICT_CHECK=1`** (test only; also on with `VEYRA_TEST_FAKE_VFG=1`, the end-to-end engine test's fake
+  VFG; read once per process; nothing is created without it). One predicted frame in 32 is read back with its presented
+  real frame and the Live HUD Lock state; `[push-predict] hudLockMismatch=<n> hudLocked=<n> exclusionMismatch=<n>
+  excluded=<n> checks=<k> ...` counts the fully locked / fully excluded pixels of P that differ from B
+  (`pipeline/PushPredictCheck.h`). A checked pair's real frame waits for the whole pair (the readback reads its texture),
+  and the comparison runs on the engine thread: it changes timing, never use it for delay measurements.
+- No new behaviour switch: the changes act only with the "Lower delay" row on (or the kit's
+  `VEYRA_EXP_RP_FG_SCHEDULE=onepredicted`); off, the frame path is Package 15's (= Package 14's). Details:
+  `docs/drafts/LOW_DELAY_MODE.md`, section "Package 16".
+- **`VEYRA_TEST_VFG_REJECT_ALONE`** (test only, Package 15) now has two values: `direct` rejects only the direct
+  FrameIndex-2-only request, so Package 16's fallbacks run (explicit Timestep 2/3, then FrameIndex 1 + 2 with 1
+  discarded: `[vfg] FrameIndex-2-only request: mode= accepted= next=`); any other value rejects every mode, as before.
+- **`VEYRA_TEST_PREDICT_FLOW=strict|float`** (test only, read once): forces the predicted frame's flow precision;
+  otherwise the float-only GPU DIS build is used only when its start-up self-check against the strict (FP64) one
+  agrees (`[push-predict] flow ... precision= selfCheck: ...`).

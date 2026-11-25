@@ -15,9 +15,14 @@
 // tests/remoteplay/PredictTests.inc. Nothing here runs unless the "Lower delay" row is on (pref pushLowDelay ->
 // EnhanceGraphDesc::lowDelay) or VEYRA_EXP_RP_FG_SCHEDULE=onepredicted is in the environment (the test kit).
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <deque>
+#include <string>
 #include <string_view>
+#include <vector>
 
 namespace veyra::pipeline {
 
@@ -47,15 +52,20 @@ enum class PushPredictRefusal : std::uint8_t {
                       // analysis sees resets history, so it lands here. A cut seen only by VFG's GPU test is handled on
                       // the GPU: P is B, predicated on that test (VfgBackend::copyInput). There is no other cut check
                       // (review 2, SHOULD 7: the earlier "shot change" refusal was never set and is removed).
-    HudLockOrExclusion, // both compose into generated frames from held real frames; not designed for a predicted frame
+    HudLockOrExclusion, // Package 15 only: no longer produced since Package 16 (Live HUD Lock and exclusion boxes compose
+                        // into P from B, the real frame P follows: EnhanceGraph's predicted pair); kept for old logs
     PresentSinkFg,    // XeSS present-sink generation owns the presentation
     UnsupportedFormat, // VFG's buffers: R8G8B8A8_UNORM (SDR) or R10G10B10A2_UNORM (HDR10); scRGB FP16 has no VFG
     PassUnavailable,  // the predict pass or its flow could not be created
     LowConfidence,    // the scheduler's own decision from the previous pair's counters (pushPredictFrameUsable)
     VfgRefused,       // review 2, SHOULD 9: VFG refused or failed a FrameIndex-2-only request this session (one attempt; the
                       // row switched off and on allows another). Frame generation goes on as Package 14's.
-    SmoothnessMode,   // engine only (review 2, SHOULD 4): Smoothness Mode decides the multiplier and assumes the real
-                      // frame is the batch's last; the two are exclusive
+    SmoothnessMode,   // Package 15 only (review 2, SHOULD 4): the engine refused whenever Smoothness Mode had a target.
+                      // No longer produced since Package 16 (PushLowDelay.h pushLowDelayStaticRefusal); kept for old logs
+    MotionNotReady,   // 25 Nov 2026: P's FidelityFX motion of this real frame is not usable (FidelityFX warming up after a
+                      // reset: 7 frames; or the first frame after a gap, whose vectors span two frame intervals)
+    FlowTooSlow,      // review 1 SHOULD 4: the motion source's own start-up self-check took more GPU time than
+                      // kPushLowDelayEntryCostShare of an output slot on this card (PushLowDelay.h): the mode is not entered
 };
 
 struct PushPredictEligibility {
@@ -63,13 +73,14 @@ struct PushPredictEligibility {
     bool vfg = false;
     unsigned multiplier = 0;
     bool historyValid = false;
-    bool hudLock = false;
-    bool exclusion = false;
+    bool hudLock = false;      // Package 16: informational only (no longer a refusal)
+    bool exclusion = false;    // Package 16: informational only (no longer a refusal)
     bool presentSinkFg = false;
     bool formatSupported = false;
     bool passReady = false;
     bool vfgRefused = false;   // PushLowDelayShared::vfgRefused
     bool confident = true;   // the scheduler's verdict from the last counters; true when it has none yet
+    bool motionReady = true; // PushPredictPass::motionReady for this real frame (per pair, like historyValid)
 };
 
 inline PushPredictRefusal pushPredictPairRefusal(const PushPredictEligibility& e) {
@@ -78,19 +89,19 @@ inline PushPredictRefusal pushPredictPairRefusal(const PushPredictEligibility& e
     if (!e.vfg) return PushPredictRefusal::NotVfg;
     if (e.multiplier != 3) return PushPredictRefusal::NotThreeX;
     if (!e.formatSupported) return PushPredictRefusal::UnsupportedFormat;
-    if (e.hudLock || e.exclusion) return PushPredictRefusal::HudLockOrExclusion;
     if (!e.passReady) return PushPredictRefusal::PassUnavailable;
     if (e.vfgRefused) return PushPredictRefusal::VfgRefused;
     if (!e.historyValid) return PushPredictRefusal::NoHistory;
+    if (!e.motionReady) return PushPredictRefusal::MotionNotReady;
     if (!e.confident) return PushPredictRefusal::LowConfidence;
     return PushPredictRefusal::Ok;
 }
 
 // The part of the refusal known before a pair is asked (settings and the graph's shape: no pass, not VFG, not 3X, format,
-// HUD Lock or exclusion boxes, present-sink FG). The scheduler does not ask while one holds (Ineligible, no back-off);
+// present-sink FG; Package 15 also refused Live HUD Lock and exclusion boxes here). The scheduler does not ask while one holds (Ineligible, no back-off);
 // only the per-pair reasons (no history, a shot change, low confidence) remain for an asked pair.
 inline PushPredictRefusal pushPredictStaticRefusal(PushPredictEligibility e) {
-    e.historyValid = true; e.confident = true;
+    e.historyValid = true; e.confident = true; e.motionReady = true;
     return pushPredictPairRefusal(e);
 }
 
@@ -108,6 +119,8 @@ inline const char* pushPredictRefusalName(PushPredictRefusal r) {
     case PushPredictRefusal::LowConfidence: return "low-confidence";
     case PushPredictRefusal::SmoothnessMode: return "smoothness-mode";
     case PushPredictRefusal::VfgRefused: return "vfg-refused";
+    case PushPredictRefusal::MotionNotReady: return "motion-not-ready";
+    case PushPredictRefusal::FlowTooSlow: return "flow-too-slow";
     }
     return "?";
 }
@@ -125,6 +138,19 @@ inline bool pushPredictCreate(PushPairSchedule asked, bool fgEnabled, bool vfg, 
                               unsigned configuredMultiplier, bool formatOk) {
     return asked == PushPairSchedule::OnePredicted && fgEnabled && vfg && !otherGenerator && !presentSink &&
            configuredMultiplier >= 3 && formatOk;
+}
+
+// Why pushPredictCreate declined (the e2e scenario m2, 25 Nov 2026: the row on at a CONFIGURED 2X read "unavailable" /
+// switch-off, because no pass exists and the graph then reported SwitchOff). The graph reports this reason as its static
+// refusal while no pass exists, so the row reads "not here" with the real cause. Ok when it was created (or not asked).
+inline PushPredictRefusal pushPredictCreateRefusal(PushPairSchedule asked, bool fgEnabled, bool vfg, bool otherGenerator, bool presentSink,
+                                                   unsigned configuredMultiplier, bool formatOk) {
+    if (asked != PushPairSchedule::OnePredicted) return PushPredictRefusal::SwitchOff;
+    if (presentSink) return PushPredictRefusal::PresentSinkFg;
+    if (!fgEnabled || !vfg || otherGenerator) return PushPredictRefusal::NotVfg;
+    if (configuredMultiplier < 3) return PushPredictRefusal::NotThreeX;
+    if (!formatOk) return PushPredictRefusal::UnsupportedFormat;
+    return PushPredictRefusal::Ok;
 }
 
 // The frames of one predicted pair, in display order, and where each lives.
@@ -174,13 +200,25 @@ inline bool pushPredictedDropBeforeNext(std::int64_t predictedDeadline100ns, std
 // The fraction of the A->B motion P is advanced by: one output slot of the pair.
 inline float pushPredictStep(unsigned multiplier) { return 1.0f / float(std::max(1u, multiplier)); }
 
-// Flow extent for the work extent: a quarter in each axis (3840x2160 -> 960x540), at least 32 and at most 4096 per axis
-// (GpuDisOpticalFlow's limits). Motion is measured on the enhanced real frames, after SR and NR, at this size.
+// Flow extent for the work extent: a quarter in each axis (3840x2160 -> 960x540), at most 4096 per axis, and at least
+// kPushPredictMinFlowAxis where the work extent has that many pixels (AMD FidelityFX optical flow builds a 7-level input
+// pyramid, the last level at 1/64: under 64 pixels an axis has no level 6 and context creation fails; found on WARP,
+// gpu-quick run 45538401850, at 64x36). A work axis under 64 pixels keeps its own size (FidelityFX refuses it: logged).
+// Motion is measured on the enhanced real frames, after SR and NR, at this size.
 struct PushExtent { std::uint32_t width = 0, height = 0; };
+constexpr std::uint32_t kPushPredictMinFlowAxis = 64;
 inline PushExtent pushPredictFlowExtent(std::uint32_t workWidth, std::uint32_t workHeight) {
-    auto axis = [](std::uint32_t v) { return std::clamp<std::uint32_t>((v + 3u) / 4u, 32u, 4096u); };
+    auto axis = [](std::uint32_t v) { return std::clamp<std::uint32_t>((v + 3u) / 4u, std::min(kPushPredictMinFlowAxis, v), 4096u); };
     return {axis(workWidth), axis(workHeight)};
 }
+inline bool pushPredictFidelityExtentOk(PushExtent e) { return e.width >= kPushPredictMinFlowAxis && e.height >= kPushPredictMinFlowAxis; }
+// FidelityFX optical flow's block search reduces its SADs and minimums with wave operations over a 64-thread group and
+// combines two waves only for a lane count of 32 (ffx_opticalflow_compute_optical_flow_v5.h BlockSad64 /
+// SadMapMinReduction256): with fewer lanes per wave the reductions cover part of the group and the search returns zero
+// vectors. WARP reports 4 lanes: gpu-quick run 45542585360 found all-zero vectors at every size (64x64 .. 960x540). So
+// the source is used only where D3D12_OPTIONS1.WaveLaneCountMin is at least 32.
+constexpr unsigned kPushPredictFidelityMinWaveLanes = 32;
+inline bool pushPredictFidelityWaveOk(unsigned waveLaneCountMin) { return waveLaneCountMin >= kPushPredictFidelityMinWaveLanes; }
 
 // The per-pixel rule (shaders/PushPredict.hlsl implements exactly this; the CPU form is for the tests and the docs).
 // Inputs are per output pixel y, all in the encoded working values (0..1 per channel; PQ for HDR10):
@@ -264,5 +302,134 @@ inline bool pushPredictWholeFrameHeld(const PushPredictCounters& c) { return c.f
 inline bool pushPredictFrameUsable(const PushPredictCounters& c, double maxFallbackShare = 0.25) {
     return pushPredictFallbackShare(c) <= maxFallbackShare;
 }
+
+// Package 16: Live HUD Lock and exclusion boxes in a predicted pair (EnhanceGraph). The rule is the one every generated
+// frame follows, with the right real frame: a generated frame's locked / excluded pixels come from the real frame it is
+// generated from. I(2/3) lies between A and B and is composed as today's interpolated frames are (held parity A, raw A,
+// with the lock's state already updated with B in the base list); P is B advanced, so its pixels come from B (a copy of
+// B taken from VFG's input buffer: PushHudLock's held slot kPredictedHeld; raw B for the boxes). The state is updated
+// once per real frame only (in B's base list), never with a predicted frame.
+struct PushPredictComposeSources { unsigned hudHeld = 0, exclusionRaw = 0; };
+constexpr unsigned kPushPredictHeldCopy = 2;   // PushHudLock::compose's held index for the copy of B
+inline PushPredictComposeSources pushPredictComposeSources(bool predicted, unsigned parity) {
+    return predicted ? PushPredictComposeSources{kPushPredictHeldCopy, parity} : PushPredictComposeSources{1u - parity, 1u - parity};
+}
+
+// Package 16, item 4 (forensics F2): the predicted frame's GPU time by stage, from five timestamps the pass writes in its
+// own list (PushPredictPass): before the downsample, after it, after the flow (GPU DIS + validate), after the warp, after
+// the whole-frame verdict and its predicated copy. MEASURED on whatever GPU runs it; -1 where unknown. The graph's
+// composes after recordPredict (HUD Lock, boxes) are in the Fg2 stage of the graph's own timer, not here.
+enum class PushPredictStage : std::uint8_t { Downsample = 0, Flow, Warp, Verdict, Total, Count };
+inline const char* pushPredictStageName(PushPredictStage s) {
+    switch (s) {
+    case PushPredictStage::Downsample: return "downsample";
+    case PushPredictStage::Flow: return "flow";
+    case PushPredictStage::Warp: return "warp";
+    case PushPredictStage::Verdict: return "verdict";
+    case PushPredictStage::Total: return "total";
+    default: return "?";
+    }
+}
+constexpr unsigned kPushPredictStamps = 5;
+using PushPredictStageMs = std::array<double, static_cast<unsigned>(PushPredictStage::Count)>;
+// Ticks in submission order; a tick counter that went backwards or a zero frequency gives -1 for that stage.
+inline PushPredictStageMs pushPredictStagesFromTicks(const std::uint64_t (&t)[kPushPredictStamps], std::uint64_t frequency) {
+    PushPredictStageMs ms;
+    ms.fill(-1.0);
+    if (frequency == 0) return ms;
+    const auto span = [&](unsigned a, unsigned b) { return t[b] >= t[a] && t[a] != 0 ? double(t[b] - t[a]) * 1000.0 / double(frequency) : -1.0; };
+    for (unsigned i = 0; i + 1 < kPushPredictStamps; ++i) ms[i] = span(i, i + 1);
+    ms[static_cast<unsigned>(PushPredictStage::Total)] = span(0, kPushPredictStamps - 1);
+    return ms;
+}
+// The last kWindow100ns of samples per stage (at most kMaxSamples), with nearest-rank percentiles.
+class PushPredictCostWindow {
+public:
+    static constexpr std::int64_t kWindow100ns = 100000000;   // 10 s
+    static constexpr std::size_t kMaxSamples = 512;
+    void clear() { samples_.clear(); }
+    void add(std::int64_t now100ns, const PushPredictStageMs& ms) {
+        samples_.push_back({now100ns, ms});
+        while (samples_.size() > kMaxSamples || (!samples_.empty() && samples_.front().first < now100ns - kWindow100ns)) samples_.pop_front();
+    }
+    std::size_t size() const { return samples_.size(); }
+    // Percentile q (0..1) of a stage over the window; -1 with no measured sample.
+    double percentile(PushPredictStage stage, double q) const {
+        std::vector<double> v;
+        v.reserve(samples_.size());
+        for (const auto& s : samples_) { const double x = s.second[static_cast<unsigned>(stage)]; if (x >= 0) v.push_back(x); }
+        if (v.empty()) return -1.0;
+        std::sort(v.begin(), v.end());
+        const auto rank = static_cast<std::size_t>(std::ceil(std::clamp(q, 0.0, 1.0) * double(v.size())));
+        return v[rank == 0 ? 0 : rank - 1];
+    }
+
+private:
+    std::deque<std::pair<std::int64_t, PushPredictStageMs>> samples_;
+};
+// For [capture-timing]: "samples:<n>,downsample:P50/P95/P99,flow:...,warp:...,verdict:...,total:..." in ms (-1 unknown).
+inline std::string pushPredictCostText(const PushPredictCostWindow& w) {
+    std::string t = "samples:" + std::to_string(w.size());
+    for (unsigned i = 0; i < static_cast<unsigned>(PushPredictStage::Count); ++i) {
+        const auto stage = static_cast<PushPredictStage>(i);
+        char part[96];
+        const int n = std::snprintf(part, sizeof part, ",%s:%.2f/%.2f/%.2f", pushPredictStageName(stage), w.percentile(stage, 0.5), w.percentile(stage, 0.95), w.percentile(stage, 0.99));
+        if (n > 0) t.append(part, static_cast<std::size_t>(std::min(n, static_cast<int>(sizeof part) - 1)));
+    }
+    return t;
+}
+
+// Package 16, item 5 (forensics F3): how a predicted pair asks NVIDIA VFG for I(2/3) when it is not the pair's first
+// request. NVIDIA's page for the filter documents FrameMultiplier M with FrameIndex 1..M-1 ("t = i / M"; its example runs
+// 1, 2, 3 in sequence, no ordering rule stated) and an explicit timestep mode (FrameMultiplier 0, Timestep in (0, 1) set
+// before each run; setting FrameMultiplier resets FrameIndex and Timestep). Tried in this order, each at most once per
+// backend, the first that works kept for the rest of the session:
+//   Direct          FrameIndex 2 of 3 alone: one Run (the cost of one generated frame).
+//   Timestep        FrameMultiplier 0, Timestep 2/3: one Run; the multiplier is set back to 3 before the next normal pair.
+//   IndexOneThenTwo FrameIndex 1 (into the slot this pair leaves free, discarded), then 2: two Runs. Arithmetic with his
+//                   measured 2.0-2.3 ms per VFG frame at 4K: I is ready about one frame's run (about 2 ms) later than with
+//                   Direct, against one output slot (11.1 ms at 29.97 FPS) the schedule moves B by. Not a measurement.
+// All refused: the mode is unavailable for the session (as Package 15); frame generation itself goes on in every case.
+enum class PushVfgAloneMode : std::uint8_t { Direct = 0, Timestep, IndexOneThenTwo, Refused };
+inline const char* pushVfgAloneModeName(PushVfgAloneMode m) {
+    switch (m) {
+    case PushVfgAloneMode::Direct: return "direct";
+    case PushVfgAloneMode::Timestep: return "timestep";
+    case PushVfgAloneMode::IndexOneThenTwo: return "index1-then-2";
+    case PushVfgAloneMode::Refused: return "refused";
+    }
+    return "?";
+}
+// Review 1 SHOULD 6 (25 Nov 2026): VFG's FrameIndex-2-only ladder can be tried again. (a) A real off -> on of the row
+// (PushLowDelayShared::retryEpoch) resets it, at most once every kPushVfgLadderResetGapMs; (b) a refusal within
+// kPushVfgEarlyRefusalMs of the graph's build is not taken as the session's answer: one reset kPushVfgEarlyRetryMs later.
+constexpr std::int64_t kPushVfgLadderResetGapMs = 10000, kPushVfgEarlyRefusalMs = 1000, kPushVfgEarlyRetryMs = 2000;
+inline bool pushVfgLadderResetDue(std::int64_t nowMs, std::int64_t lastResetMs) { return lastResetMs < 0 || nowMs - lastResetMs >= kPushVfgLadderResetGapMs; }
+inline bool pushVfgEarlyRefusal(std::int64_t msSinceBuild, bool retryUsed) { return !retryUsed && msSinceBuild >= 0 && msSinceBuild < kPushVfgEarlyRefusalMs; }
+
+class PushVfgAloneLadder {
+public:
+    // timestepAvailable: the SDK exports NvVFX_SetF32 (needed for Timestep); otherwise that step is skipped.
+    explicit PushVfgAloneLadder(bool timestepAvailable = true) : timestep_(timestepAvailable) {}
+    PushVfgAloneMode current() const { return mode_; }
+    bool settled() const { return settled_; }
+    // The outcome of a request made in current(); returns the mode to try next for the SAME pair (current() again on
+    // success; Refused when nothing is left).
+    PushVfgAloneMode outcome(bool ok) {
+        if (mode_ == PushVfgAloneMode::Refused) return mode_;
+        if (ok) { settled_ = true; return mode_; }
+        if (settled_) { mode_ = PushVfgAloneMode::Refused; return mode_; }   // a mode that worked failed later: stop asking
+        if (mode_ == PushVfgAloneMode::Direct) mode_ = timestep_ ? PushVfgAloneMode::Timestep : PushVfgAloneMode::IndexOneThenTwo;
+        else if (mode_ == PushVfgAloneMode::Timestep) mode_ = PushVfgAloneMode::IndexOneThenTwo;
+        else mode_ = PushVfgAloneMode::Refused;
+        return mode_;
+    }
+
+private:
+    PushVfgAloneMode mode_ = PushVfgAloneMode::Direct;
+    bool timestep_ = true, settled_ = false;
+};
+// The Timestep value of FrameIndex `index` of multiplier `m` (2/3 for I(2/3)).
+inline float pushVfgTimestep(unsigned index, unsigned multiplier) { return multiplier ? float(index) / float(multiplier) : 0.0f; }
 
 }  // namespace veyra::pipeline

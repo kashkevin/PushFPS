@@ -12,6 +12,36 @@ has no graphics card (software renderer), no PS5 and no screen to measure (see "
 in the other documents that come from Linux models and simulators are models. Software timestamps are
 not proof of input-to-photon latency: only a camera or a light sensor on the screen is.
 
+## Package 16 (25 November 2026): the predicted schedule made to run with the owner's settings; evidence by itself
+
+**First hardware data of the capture-card path** (the owner connected the experimental copy's log folder, read-only):
+Package 15's "Lower delay" never ran on his PC (`lowDelay state=not-here refusal=smoothness-mode predictedPairs=0`): it
+was excluded with Smoothness Mode (his 90 FPS target) and Live HUD Lock, both of which he uses. MEASURED there (software
+timers): readout 31 ms = picture 4.7 + first generated frame 2.0 (NVIDIA VFG at 3840x2160 HDR10) + schedule wait 22.1 +
+margin 2.2; Present to the screen refresh a median of about 10 ms more (windowed, VRR not active for the app); all frames
+shown, about 95 % of Present intervals within 1 ms of the 11.1 ms grid; a pair of capture stalls after every quarter
+hour of the wall clock (cause outside the program, not identified). **Nothing new in Package 16 has run on a gaming PC or
+a real graphics card. Nothing is called fixed. No delay figure is promised.** TESTED = unit / QML tests and the Windows
+build machine's software renderer (WARP): logic and safety guards, never timing or stability.
+
+| Part | Default | Evidence | Undo | Hardware-verified |
+|---|---|---|---|---|
+| "Lower delay" runs with Smoothness Mode (pause below 3X, resume by itself) and with Live HUD Lock / exclusion boxes (locked pixels of the predicted frame from the real frame) | OFF; the preference is reset once at the first start of this version | end-to-end engine test with a test-only stand-in for VFG and the owner's configuration: the mode enters, order I, B, P, the real frame one slot earlier per predicted pair, HUD mismatch 0; WARP `predict-hud-lock*` | the row; `VEYRA_TEST_RP_LEGACY_LOWDELAY_SCHEDULE`, `VEYRA_TEST_RP_LEGACY_LOWDELAY_MIGRATE` | no |
+| Predicted frame's motion from AMD FidelityFX optical flow behind a start-up self-check on the user's card (six known motions through the real predicted path, scored against the exact picture; a 3 s budget; a fault is remembered); Package 15's strict (FP64) GPU DIS switched off: it removed the device on WARP at its first FP64 shader | with the row | self-check mechanics TESTED on WARP; FidelityFX's motion CANNOT be tested there (its search needs waves of 32 lanes; WARP has 4): first real run is the user's card | - | no |
+| VFG refusal ladder for the frame-index-2-only request (timestep mode, then index 1 + 2 with 1 discarded); a refusal is built never to switch frame generation off | with the row | unit tests, the stand-in refusing | - | no (VFG itself needs a real card) |
+| Entry / exit rule that survives isolated skips and capture stalls; exits for late, too-slow and unusable predictions; stop for the playback after three; the real frame does not wait for its own pair's predicted frame | with the row | unit tests, simulator, the end-to-end test | `VEYRA_TEST_RP_LEGACY_LOWDELAY_SCHEDULE` | no |
+| The row's line from live counters ("Running: N predicted frames shown a second", "Waiting", "Not running: reason"); only the first switch-on rebuilds | with the row | QML tests | - | no |
+| `[fg-health]` / `[present-path]` additions: "to screen" (Present to vblank), late Presents and their cause, completion-poll duration, picture-part GPU stages, submit to GPU start; quick-setup and tooltip "to screen" lines; `[vrr-profile] start-state` | on (log / display only) | tested; full Windows build | `VEYRA_TEST_RP_LEGACY_PACKAGE15` (interface lines) | no |
+| Stall witness: `[capture-stall]`, `[capture-stall-cause]` (numbers), `[stall-witness]` (program names at a stall: private; not in the kit's zip unless `-IncludeProcessNames`); once-a-second lowest-priority sampler, no handle to other processes; records only | on while a capture card runs | unit tests; first MSVC compile; never run with a capture card | `VEYRA_TEST_RP_LEGACY_STALL_WITNESS` | no |
+| Opt-in only: `VEYRA_EXP_RP_PRESENT_BEFORE_POLL`, `VEYRA_EXP_RP_DEADLINE_HOLD`, `VEYRA_EXP_RP_STALL_CLOCK`, `VEYRA_EXP_RP_FULLSCREEN_NO_REGION`, `VEYRA_EXP_RP_STALL_WITNESS_DEEP`, `VEYRA_EXP_RP_PRESENT_BLIT_AHEAD` | off | model tests | - | no |
+| The interface lines, the stall witness, the one-time reset and the row's schedule back to Package 15 (the always-on log figures and timestamps stay) | - | tested | `VEYRA_TEST_RP_LEGACY_PACKAGE15` (implied by `_PACKAGE14`, `_PACKAGE13`) | - |
+
+The end-to-end engine test (`docs/drafts/E2E_ENGINE_TEST.md`) first reproduced the owner's Package 15 log on Package 15's
+code and found that its first predicted pair removes the D3D12 device on WARP. Its gate on this tree: structure and
+safety strict in every run; timing with a stated tolerance, because the software renderer's timing varies between runs.
+In work for the following package: the project's own frame generator (motion once per pair for both generated frames,
+selectable next to NVIDIA's for a direct comparison), and a fully predicted schedule as a labelled experiment.
+
 ## Package 15 (24 November 2026): a lower-delay schedule (opt-in) and the picture's path to the screen (capture card)
 
 The owner on Package 14: 31 ms at 90 FPS (30 real + 60 generated), 4K; he asked for a much lower and stable delay

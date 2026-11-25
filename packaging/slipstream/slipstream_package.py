@@ -86,7 +86,8 @@ DOC_FILES = ("docs/SETUP.md", "docs/HARDWARE_TEST_PROCEDURE.md", "docs/KEYBOARD_
              "docs/drafts/FG_LATENCY.md", "docs/drafts/NR_STUTTER.md",
              "docs/drafts/DELAY_90.md",
              "docs/drafts/FG_SCHEDULING_NEXT.md", "docs/drafts/GPU_PATH_MAP.md",
-             "docs/drafts/LOW_DELAY_MODE.md", "docs/drafts/PREDICT_GPU.md", "docs/drafts/LATENCY_RESEARCH_RANKING.md")
+             "docs/drafts/LOW_DELAY_MODE.md", "docs/drafts/PREDICT_GPU.md", "docs/drafts/LATENCY_RESEARCH_RANKING.md",
+             "docs/drafts/E2E_ENGINE_TEST.md")
 TOP_FILES = ("Install-Slipstream.cmd", "Run-First-Test.cmd", "Run-Full-Test.cmd", "Collect-Diagnostics.cmd", "Rollback-Slipstream.cmd",
              "Uninstall-Slipstream.cmd")
 

@@ -35,6 +35,26 @@ TEST(gpupath_real_frame_keeps_the_group_wait_where_a_later_list_touches_it) {
     CHECK(pushRealPresentFence(in) == 12);
 }
 
+// Package 16, item 2: a predicted pair (I, B, P) with Live HUD Lock or exclusion boxes: B waits for its own lists only,
+// never for P's (P composes from a copy of B); restore and the other generators keep the group wait.
+TEST(gpupath_predicted_pair_real_frame_never_waits_for_p) {
+    auto in = vfgPair(); in.predictedPair = true; in.hudLock = true; in.pairFence = 14;   // 14: P's list
+    CHECK(pushRealPresentFence(in) == 10);
+    in.exclusion = true;
+    CHECK(pushRealPresentFence(in) == 10);
+    in.hudLock = false;
+    CHECK(pushRealPresentFence(in) == 10);
+    in.restore = true;                    // VEYRA_TEST_GPU_REAL_WAITS_GROUP=1: as before
+    CHECK(pushRealPresentFence(in) == 14);
+    in = vfgPair(); in.predictedPair = true; in.presentSinkFg = true;
+    CHECK(pushRealPresentFence(in) == 12);
+    in = vfgPair(); in.predictedPair = true; in.backend = PushFgPathKind::Other;
+    CHECK(pushRealPresentFence(in) == 12);
+    // Not a predicted pair: unchanged (the interpolated pair's rule above).
+    in = vfgPair(); in.hudLock = true;
+    CHECK(pushRealPresentFence(in) == 12);
+}
+
 TEST(gpupath_backend_classification_follows_the_generation_loop) {
     CHECK(pushFgPathKindOf(true, false, false, true) == PushFgPathKind::Vfg);
     CHECK(pushFgPathKindOf(false, true, false, true) == PushFgPathKind::Other);    // PushFlow

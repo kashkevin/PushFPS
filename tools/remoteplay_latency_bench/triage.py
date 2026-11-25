@@ -58,6 +58,9 @@ def parse(lines):
     return out
 
 
+PHASE_BINS = re.compile(r"toScreenRefreshesByMsToVblank=(\S+)")
+
+
 def numbers(text):
     return {k: float(v) for k, v in NUMBER.findall(text)}
 
@@ -211,6 +214,15 @@ def steadiness(lines):
     # Package 15 TASK 3: the delay readout and its split (always on from Package 15; absent in older builds).
     delay = None
     for _t, _l, c, text in lines:
+        # Package 16 (review 1 SHOULD 7): the [fg-sched] lowDelay line carries the VFG mode, P's motion source and stalls.
+        if c == "fg-sched" and text.startswith("lowDelay state="):
+            fw = words(text)
+            if low is None:
+                low = {"seconds": 0, "predictedShown": 0, "predictedPairs": 0, "switches": 0, "unusable": 0, "state": "", "exits": ""}
+            for key in ("aloneMode", "flowSource", "stallRides"):
+                if key in fw:
+                    low[key] = fw[key]
+            continue
         if c != "capture-timing": continue
         w = words(text)
         if "gridIntervals" not in w: continue
@@ -272,6 +284,32 @@ def fg_health(lines):
     for key in ("realFrames", "dropDeadline", "dropCapacity", "dropCap", "suppressed", "mailboxDropped", "duplicates", "reflexSleeps", "reflexOverruns"):
         out[key] = total(key)
     out["reflex"] = int(windows[-1].get("reflex", 0))
+    # Stream "s10-display": the display path (Present -> vblank, DXGI) and what decides the late Presents. Absent: None / 0.
+    for key in ("toScreenP50Ms", "toScreenP95Ms", "presentLateGenP99Ms", "presentLateRealP99Ms", "pollP50Ms", "pollP99Ms"):
+        out[key] = med(key)
+    for key in ("toScreenMaxMs", "presentLateGenMaxMs", "presentLateRealMaxMs", "pollMaxMs", "pollOverrunMaxMs"):
+        out[key] = top(key)
+    for key in ("toScreenSamples", "presentsLateOver1ms", "presentsAfterReadyWake", "lateOver1msAfterReadyWake", "lateOver1msOtherwise",
+                "readyWakesNearDeadline", "readyWakesHeld", "polls", "pollsPastDeadline"):
+        out[key] = total(key)
+    out["displayPathLogged"] = any("toScreenSamples" in w for w in windows)
+    out["pollLogged"] = any("polls" in w for w in windows)
+    # The refresh-phase bins (toScreenRefreshesByMsToVblank=lo-hi:mean/n,...), summed over the windows.
+    bins = {}
+    for _t, _l, c, text in lines:
+        if c != "fg-health": continue
+        m = PHASE_BINS.search(text)
+        if not m: continue
+        for item in m.group(1).split(","):
+            label, _, value = item.partition(":")
+            mean, _, n = value.partition("/")
+            try:
+                mean_f, n_i = float(mean), int(n)
+            except ValueError:
+                continue
+            total_n, total_r = bins.get(label, (0, 0.0))
+            bins[label] = (total_n + n_i, total_r + (mean_f * n_i if n_i > 0 else 0.0))
+    out["phaseBins"] = [(label, n, (r / n) if n else None) for label, (n, r) in bins.items()]
     return out
 
 
@@ -308,6 +346,19 @@ def health_lines(h, p):
                 "; ended for the session by a guard" if h["reflex"] == 2 else ""))
         else:
             out.append("NVIDIA low latency's Sleep: not called in this session (low latency off, not an NVIDIA card, or ended)")
+        if h.get("displayPathLogged"):
+            out.append("to screen (Present call -> the vblank that showed it, DXGI frame statistics; NOT in the delay above): P50 %s, P95 %s (medians of the windows), worst %s, %d dated presents" % (
+                number_text(h["toScreenP50Ms"], 2, " ms"), number_text(h["toScreenP95Ms"], 2, " ms"), number_text(h["toScreenMaxMs"], 2, " ms"), h["toScreenSamples"]))
+            if h.get("phaseBins"):
+                out.append("whole refreshes waited by time from the Present call to the next vblank: " + ", ".join(
+                    "%s ms %s (%d)" % (label, number_text(mean, 2, ""), n) for label, n, mean in h["phaseBins"]))
+            out.append("late Presents (> 1 ms after the deadline): %d; generated P99 %s / worst %s, real P99 %s / worst %s; ready wakes near a deadline %d (held %d)" % (
+                h["presentsLateOver1ms"], number_text(h["presentLateGenP99Ms"], 2, " ms"), number_text(h["presentLateGenMaxMs"], 2, " ms"),
+                number_text(h["presentLateRealP99Ms"], 2, " ms"), number_text(h["presentLateRealMaxMs"], 2, " ms"), h["readyWakesNearDeadline"], h["readyWakesHeld"]))
+        if h.get("pollLogged"):
+            out.append("completion polls: %d, P50 %s, P99 %s, worst %s; %d ran past a due deadline (worst overrun %s); late Presents after a ready wake %d of %d, otherwise %d" % (
+                h["polls"], number_text(h["pollP50Ms"], 3, " ms"), number_text(h["pollP99Ms"], 3, " ms"), number_text(h["pollMaxMs"], 3, " ms"),
+                h["pollsPastDeadline"], number_text(h["pollOverrunMaxMs"], 3, " ms"), h["lateOver1msAfterReadyWake"], h["presentsAfterReadyWake"], h["lateOver1msOtherwise"]))
     if p is None:
         out.append("[present-path]: " + NOT_LOGGED + " (a build before stream \"present\")")
     else:
@@ -352,10 +403,14 @@ def low_delay_lines(low):
         return []
     secs = max(1, low["seconds"])
     exits = ", ".join(part.replace(":", " ") for part in low["exits"].split(",") if part and not part.endswith(":0")) or "none"
-    return ["Lower delay (one predicted frame per real frame) was on: last state %s; predicted frames shown %d (%.1f/s), pairs run predicted %d, "
-            "schedule switches %d (%.1f a minute), predicted frames found mostly held %d; fallbacks by reason (session): %s" % (
-                low["state"] or "?", low["predictedShown"], low["predictedShown"] / secs, low["predictedPairs"], low["switches"],
-                low["switches"] * 60.0 / secs, low["unusable"], exits)]
+    out = ["Lower delay (one predicted frame per real frame) was on: last state %s; predicted frames shown %d (%.1f/s), pairs run predicted %d, "
+           "schedule switches %d (%.1f a minute), predicted frames found mostly held %d; fallbacks by reason (session): %s" % (
+               low["state"] or "?", low["predictedShown"], low["predictedShown"] / secs, low["predictedPairs"], low["switches"],
+               low["switches"] * 60.0 / secs, low["unusable"], exits)]
+    if any(k in low for k in ("aloneMode", "flowSource", "stallRides")):
+        out.append("Lower delay details (last [fg-sched] line): VFG FrameIndex-2-only mode %s; motion source %s; capture stalls ridden through %s" % (
+            low.get("aloneMode", "?"), low.get("flowSource", "?"), low.get("stallRides", "?")))
+    return out
 
 
 def delay_split_lines(delay):

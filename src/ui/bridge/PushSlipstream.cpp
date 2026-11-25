@@ -260,13 +260,22 @@ void QmlPlayerBridge::applyPushSmoothTarget() {
 void QmlPlayerBridge::applyPushLowDelay() {
     const bool on = impl_->prefBool("pushLowDelay", false);
     auto& shared = engine::pushLowDelayShared();
+    if (on && !shared.wanted.load(std::memory_order_relaxed)) shared.retryEpoch.fetch_add(1, std::memory_order_relaxed);   // review 1 SHOULD 6
     shared.wanted.store(on, std::memory_order_relaxed);
     shared.vfgRefused.store(false, std::memory_order_relaxed);   // switching the row allows one new attempt (review 2, SHOULD 9)
+    engine::pushLowDelayPublish(shared, engine::PushLowDelayRowFacts{});   // Package 16: no stale counters after a switch
     // Until the engine's next pair reports: off is idle at once; on is starting (the rebuild), or the engine says otherwise.
     shared.state.store(static_cast<std::uint8_t>(on ? engine::PushLowDelayState::Starting : engine::PushLowDelayState::Idle), std::memory_order_relaxed);
+    // Package 16, item 7: the pass is kept once the row was on in this run (pushLowDelayKeepPass): only the first
+    // switch-on rebuilds the graph; off and on again change only `wanted` above.
+    const bool keep = engine::pushLowDelayKeepPass(on, shared.passKept.load(std::memory_order_relaxed));
     auto s = settings();
-    if (s.lowDelay == on) return;
-    s.lowDelay = on;
+    if (s.lowDelay == keep) {
+        if (on) shared.passKept.store(true, std::memory_order_relaxed);
+        if (on && s.lowDelayShapesGraph()) shared.state.store(static_cast<std::uint8_t>(engine::PushLowDelayState::Calm), std::memory_order_relaxed);   // no rebuild comes
+        return;
+    }
+    s.lowDelay = keep;
     if (!impl_->commit(std::move(s))) {
         // Review 2, MUST 3: undo everything this call set, so the row never claims to be starting something that will
         // not start: the engine's flag and state, and the preference itself (the row then shows the switch off).
@@ -279,6 +288,7 @@ void QmlPlayerBridge::applyPushLowDelay() {
         emit notice(tr("引擎未接受更低延迟设置，原补帧方式保留"), true);
         return;
     }
+    if (on) shared.passKept.store(true, std::memory_order_relaxed);
     emit settingsChanged();
 }
 QVariantMap QmlPlayerBridge::pushLowDelayState() const {
@@ -295,7 +305,18 @@ QVariantMap QmlPlayerBridge::pushLowDelayState() const {
                        {"state", QString::fromLatin1(engine::pushLowDelayStateName(state))},
                        {"reason", QString::fromLatin1(pipeline::pushPredictRefusalName(refusal))},
                        {"paused", QString::fromLatin1(engine::pushLowDelaySuspendName(paused))},
-                       {"fromSwitch", fromSwitch}};
+                       {"fromSwitch", fromSwitch},
+                       // Package 16, item 6: the live counters the row's line is made from (PushLowDelayShared).
+                       {"predictedPerSecond", static_cast<int>(shared.predictedPerSecond.load(std::memory_order_relaxed))},
+                       {"shownPerSecond", static_cast<int>(shared.shownPerSecond.load(std::memory_order_relaxed))},
+                       {"pairsPerSecond", static_cast<int>(shared.pairsPerSecond.load(std::memory_order_relaxed))},
+                       {"lastStop", QString::fromLatin1(engine::pushLowDelayExitName(static_cast<engine::PushLowDelayExit>(shared.lastStop.load(std::memory_order_relaxed))))},
+                       {"lastStopAgeS", static_cast<int>(shared.lastStopAgeS.load(std::memory_order_relaxed))},
+                       {"calmHave", static_cast<int>(shared.calmHave.load(std::memory_order_relaxed))},
+                       {"calmNeed", static_cast<int>(shared.calmNeed.load(std::memory_order_relaxed))},
+                       {"zeroSeconds", static_cast<int>(shared.zeroSeconds.load(std::memory_order_relaxed))},
+                       {"checking", shared.checking.load(std::memory_order_relaxed)},
+                       {"stoppedFor", QString::fromLatin1(engine::pushLowDelayExitName(static_cast<engine::PushLowDelayExit>(shared.stoppedFor.load(std::memory_order_relaxed))))}};
 }
 QVariantMap QmlPlayerBridge::pushSmoothState() const {
     const auto& shared = engine::pushSmoothShared();

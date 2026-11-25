@@ -9,6 +9,7 @@
 #include "veyra/engine/PushBenchmarkProbe.h"
 #include "veyra/engine/PushCadence.h"
 #include "veyra/engine/PushVideoOverlay.h"
+#include "veyra/engine/PushDisplayPath.h"
 #include "veyra/ui/PushInPictureCompose.h"
 #include "veyra/engine/PushLegacyEnv.h"
 #include <map>
@@ -146,6 +147,22 @@ QVariantMap QmlPlayerBridge::pushLiveStats() const {
     m["latencyWaitMs"] = optionalNumber(flow.latencyWaitMs);
     m["latencyMarginMs"] = optionalNumber(flow.latencyMarginMs);
     m["latencySplitShare"] = flow.latencySplitShare;
+    // Stream "s10-display" (engine/PushDisplayPath.h): Present call -> the vblank that showed it, the last second (DXGI frame
+    // statistics; software timers, not photons). Its own figure: never added into latencyMs.
+    {
+        const double toScreenNowMs = double(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+        const auto toScreen = engine::pushToScreenBoard().read(toScreenNowMs);
+        // VEYRA_TEST_RP_LEGACY_PACKAGE15 / _DISPLAY_UI and _GSYNC_RESTART (PushLegacy.h): the interface additions as in Package 15.
+        static const bool displayUi = !engine::pushLegacyRestored(engine::PushLegacyPart::DisplayUi, engine::pushEnvironment());
+        static const bool gsyncRestartRow = !engine::pushLegacyRestored(engine::PushLegacyPart::GsyncRestart, engine::pushEnvironment());
+        m["gsyncRestartRow"] = gsyncRestartRow;
+        const bool toScreenKnown = displayUi && s.running && toScreen.known;
+        m["toScreenKnown"] = toScreenKnown;
+        m["toScreenP50Ms"] = toScreenKnown ? QVariant(toScreen.p50Ms) : QVariant();
+        m["toScreenP95Ms"] = toScreenKnown ? QVariant(toScreen.p95Ms) : QVariant();
+        m["toScreenCoversMonitor"] = toScreen.coversMonitor;
+        m["toScreenWindowedHwComposition"] = toScreen.windowedHw;
+    }
     m["fgActive"] = s.fgActive;
     // The multiplier the last pair used (adaptive mode, output cap or a reduced group).
     m["fgMultiplierNow"] = s.previewFgMultiplier;

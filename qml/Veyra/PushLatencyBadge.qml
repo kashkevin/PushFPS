@@ -67,6 +67,13 @@ Rectangle {
     readonly property string tipText: hasNumbers
         ? (splitText.length > 0 ? splitText + "\n" : "") + qsTr("从采集卡送来画面到这一帧交给显示（Present 返回）的时间，最近 1 秒真实帧的平均值。") + "\n"
           + qsTr("不包括游戏本身、主机的视频输出、采集卡和显示器的延迟。")
+          + (badge.toScreenText.length > 0 ? "\n" + badge.toScreenText : "")
+        : ""
+    // Stream "s10-display": the display path as its own figure (pushLiveStats toScreen*: Present call -> the vblank that showed
+    // it, DXGI frame statistics, the last second). Never added into the number above.
+    readonly property string toScreenText: hasNumbers && stats.toScreenKnown === true
+        ? qsTr("另外，Present 之后到屏幕刷新：中位数 %1 ms，P95 %2 ms（DXGI 帧统计，软件计时，不是光子测量；不计入上面的数字）")
+              .arg(Number(stats.toScreenP50Ms).toFixed(1)).arg(Number(stats.toScreenP95Ms).toFixed(1))
         : ""
     HoverHandler { id: badgeHover }
     ToolTip.visible: badgeHover.hovered && badge.tipText.length > 0

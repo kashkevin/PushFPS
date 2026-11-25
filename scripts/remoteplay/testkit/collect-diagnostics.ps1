@@ -56,6 +56,10 @@
   How much of the end of each log file is read (default 8 MB, about the last hours of use).
 .PARAMETER NoPing
   Send no pings.
+.PARAMETER IncludeProcessNames
+  Also put PushFPS's [stall-witness] lines into the zip (stall-witness-<copy>.txt): around each capture stall they name the
+  other programs that used the processor most. Those names are about your PC, so they are left out unless you give this
+  switch. The numbers-only summary of each stall ([capture-stall-cause]) is in log-<copy>.txt either way.
 .PARAMETER DryRun
   Reports on a made-up copy with a made-up log that holds private values which must not reach the zip. Used by
   the checks workflow.
@@ -69,6 +73,7 @@ param(
     [string]$OutRoot = '',
     [int]$MaxLogMb = 8,
     [switch]$NoPing,
+    [switch]$IncludeProcessNames,
     [switch]$DryRun
 )
 $ErrorActionPreference = 'Stop'
@@ -82,7 +87,7 @@ function Get-UtcStamp {
 # --- redaction -----------------------------------------------------------------------------------
 # The same rules as run-tests.ps1 and tools/remoteplay_latency_bench/report.py (redact_line); a test holds
 # the three copies equal. Change them together.
-$allowedLine = '\[(INFO |WARN |ERROR|TRACE)\] \[(push-(latency|quality|benchmark|mode|hardware|profile|adaptive-fg|predict)|remoteplay(-[a-z0-9-]+)?|slipstream-(governor|gpu-budget|watch|config|latency|latency-test|press|delivery|sr|fg|autorun|smartlink|swapchain|present|pipeline|nr|clean|quality|input|input-poll|scanout|cadence|net|smooth|capture|sizes)|capture-(driver-age|buffer|timing)|content-dedup|experiment-switches|nr-(runtime-status|adapt|reuse|model|hold)|frame-(flow|rate)|pacing|present-deviation|present-contract|present-priority|present-path|present-overlay|graph-priority|qml-window|ui-(dialog|fullscreen|window|resume)|fg-(validity|drops|ull|sched|health)|display-(vrr|refresh|latency|query)|gpu-(failure|reconnect|path)|reset-lifecycle|engine-(hang|test)|crash|reflex|overlay-hooks|log-backpressure|qml\] \[update-check)\] '
+$allowedLine = '\[(INFO |WARN |ERROR|TRACE)\] \[(push-(latency|quality|benchmark|mode|hardware|profile|adaptive-fg|predict)|remoteplay(-[a-z0-9-]+)?|slipstream-(governor|gpu-budget|watch|config|latency|latency-test|press|delivery|sr|fg|autorun|smartlink|swapchain|present|pipeline|nr|clean|quality|input|input-poll|scanout|cadence|net|smooth|capture|sizes)|capture-(driver-age|buffer|timing|stall|stall-cause)|content-dedup|experiment-switches|nr-(runtime-status|adapt|reuse|model|hold)|frame-(flow|rate)|pacing|present-deviation|present-contract|present-priority|present-path|present-overlay|graph-priority|qml-window|ui-(dialog|fullscreen|window|resume)|fg-(validity|drops|ull|sched|health)|display-(vrr|refresh|latency|query)|gpu-(failure|reconnect|path)|reset-lifecycle|engine-(hang|test)|vrr-profile|scheduler|crash|reflex|overlay-hooks|log-backpressure|qml\] \[update-check)\] '
 $refusedLine = '\[remoteplay-discovery\]|registration|regist[_ -]?key|rp[_ -]?key|account|psn(?!r=)|token|secret|passw|ssid|morning|nickname'
 
 function Protect-Text([string]$Line) {
@@ -327,6 +332,8 @@ function New-DryRunCopy([string]$Root) {
         '[INFO ] [remoteplay-health] grade=unsteady interval=unsteady seconds=5.0 lossPercent=0.200 lost=18 received=9000 frameJitterMs=1.40 frameJitterPeakMs=6.20 reordered=0 late=3 reorderTimeouts=0 skipped=0 fecRecovered=2 fecFailed=0 keyframeRequests=1 decoderResets=0 frameDrops=0 ingressDepth=0 ingressPeak=1 mailboxOverwrites=0 mbps=28.10 fps=59.9 rtt=0.45ms(at-connect) route=direct-lan link=ethernet linkMbps=1000',
         '[WARN ] [remoteplay-recovery] request keyframe; received=900 decoded=880 videoCallbacks=900 rejected=0 packetReceived=4000 packetLost=37',
         '[INFO ] [push-latency] done answered=20/20 meanMs=100.9 medianMs=100.0 minMs=83.3 maxMs=118.6 pushfpsMs=6.1',
+        '[INFO ] [capture-stall-cause] stall=1 kind=gap at=12:00:05.469 gapMs=137.2 ptsStepMs=33.338 copyMs=6.68 dpcPct=38.0 dpcCpu=5 hypervisor=1 vmWorkers=2 (made up)',
+        '[INFO ] [stall-witness] stall=1 dt=+0.5s at=12:00:05.969 dpcMax=38.0@5 topOtherCpu=61.0 top=StallWitnessToolX.exe:61.0,other.exe:2.0 (made up)',
         '[ERROR] [crash] unhandled exception code=0xC0000005 address=0x7FF6A1B2 module=C:\Users\Planted User Name\AppData\Local\Programs\PushFPS\PushFPS.exe offset=0x1234 thread=77'
     )
     $out = @()
@@ -516,6 +523,21 @@ foreach ($copy in $copies) {
         continue
     }
     Set-Content -LiteralPath (Join-Path $stage ('log-' + $label + '.txt')) -Value $lines -Encoding UTF8
+    # Stream "s10-stall": the private witness lines, only on request (they name other programs). Same masking as the log.
+    if ($IncludeProcessNames) {
+        $witness = @()
+        foreach ($logName in @('veyra-qml.old.log', 'veyra-qml.log')) {
+            $logPath = Join-Path $logFolder $logName
+            if (-not (Test-Path -LiteralPath $logPath)) { continue }
+            try {
+                foreach ($line in @(Read-LogTail $logPath ([long]$MaxLogMb * 1MB))) {
+                    if ((-not $line) -or ($line -cnotmatch '\[(INFO |WARN |ERROR|TRACE)\] \[stall-witness\] ') -or ($line -match $refusedLine)) { continue }
+                    $witness += (Hide-OwnWords (Protect-Text $line))
+                }
+            } catch { $problems.Add('A log file of copy "' + $label + '" could not be read for the stall witness: ' + $_.Exception.Message) }
+        }
+        if ($witness.Count -gt 0) { Set-Content -LiteralPath (Join-Path $stage ('stall-witness-' + $label + '.txt')) -Value $witness -Encoding UTF8 }
+    }
     $sessions = @(Get-Sessions $lines)
     Set-Content -LiteralPath (Join-Path $stage ('sessions-' + $label + '.csv')) -Value (Format-SessionRows $sessions) -Encoding UTF8
     foreach ($s in $sessions) {
@@ -598,6 +620,7 @@ $summary += @(
     '                     softwareLatencyMeanMs is the built-in test (a software clock inside the program), not the delay from button to screen.',
     '  log-*.txt          the log lines of PushFPS about streaming, frames, the display and the graphics card, with addresses, names and paths masked',
     '                     tools\remoteplay_latency_bench\triage.py of the test package reads them: "is it smooth, and if not, why", per session',
+    '                     ([capture-stall-cause] lines: numbers about the PC around a capture stall, no program names)',
     '',
     'WHAT IS NOT IN THE ZIP',
     '  - passwords and other credentials',
@@ -612,6 +635,11 @@ $summary += @(
     '  - the list of installed or running programs (only a fixed list of overlay and capture tools is looked for)',
     ''
 )
+if ($IncludeProcessNames) {
+    $summary += @('NAMES OF OTHER PROGRAMS: you asked for them (-IncludeProcessNames). stall-witness-*.txt names the programs that used the', '  processor most around each capture stall, if PushFPS recorded any.', '')
+} else {
+    $summary += @('  - the names of other programs that were busy around a capture stall ([stall-witness] lines; given only with -IncludeProcessNames)', '')
+}
 Set-Content -LiteralPath (Join-Path $stage 'summary.txt') -Value $summary -Encoding UTF8
 
 # --- final check and the zip ---------------------------------------------------------------------------

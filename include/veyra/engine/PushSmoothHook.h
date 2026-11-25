@@ -159,7 +159,14 @@ public:
     }
     // A completed full generation group: its FG stage time and how many frames it generated (Smoothness Mode's cost
     // per level, PushSmoothCostModel: a fixed part per pair, the flow, plus a part per generated frame).
-    void groupCost(double fgMs, unsigned generated) { costs_.record(generated, fgMs); }
+    // Package 16: a pair that ran "Lower delay"'s predicted schedule (I(2/3), B, P: one VFG run + the predicted frame) is
+    // kept apart from the interpolated groups (PushSmoothCostModel::recordPredicted); preferPredictedCosts(true) while
+    // that schedule runs makes the 3X level's load use those times. Row off: never called with predicted = true.
+    void groupCost(double fgMs, unsigned generated, bool predicted = false) {
+        if (predicted) costs_.recordPredicted(generated, fgMs);
+        else costs_.record(generated, fgMs);
+    }
+    void preferPredictedCosts(bool on) { costs_.preferPredicted(on); }
     void ready(unsigned valid, unsigned invalid) { generated_ += valid; invalid_ += invalid; }
     // Stream "fglat": the latency fields (PushFgLatency.h PushFgLatencyWindow), statistics switch only. The engine
     // checks wantsLatency() before it computes anything for them.

@@ -1,10 +1,12 @@
 #pragma once
 #include <d3d12.h>
+#include "veyra/pipeline/PushPredict.h"
 #include <memory>
 #include <string>
 
 namespace veyra::gfx { class D3D12DeviceContext; }
 namespace veyra::pipeline {
+class TestVfgBackend;   // TEST ONLY (VEYRA_TEST_FAKE_VFG=1): TestVfgBackend.h
 // Public NvVFX 1.3 API. SDK metadata is allocated by NVCVImage.dll; no SDK
 // headers, models or implementation are vendored into the source repository.
 // Borrowed encoded textures stay in the graph's normal FrameLease pool.
@@ -40,6 +42,10 @@ public:
     // reports it once; VEYRA_TEST_VFG_REJECT_ALONE=1 refuses every such request (a test of that path).
     bool generate(unsigned parity,unsigned subframe,unsigned multiplier,bool reset,bool fast=false,bool alone=false);
     bool takePredictRefused();
+    // Review 1 SHOULD 6 / 7: start the FrameIndex-2-only ladder over at the next such request (from any thread), and the
+    // mode the ladder is on now (direct, timestep, index1-then-2, refused).
+    void resetAloneLadder();
+    PushVfgAloneMode aloneMode() const;
     // A second effect is loaded: a mixed tier's second model, or with fastFallback
     // the next faster model, for pairs the chosen one would finish too late for.
     bool fastReady() const;
@@ -66,5 +72,6 @@ public:
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
+    std::unique_ptr<TestVfgBackend> test_;   // TEST ONLY: set by initialize() when VEYRA_TEST_FAKE_VFG=1
 };
 }

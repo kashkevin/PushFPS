@@ -38,6 +38,7 @@
 #include "veyra/engine/PushLowDelay.h"
 #include "veyra/pipeline/PushPredict.h"
 #include "veyra/engine/PushSmoothness.h"
+#include "veyra/engine/PushStallClock.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -129,6 +130,11 @@ inline std::vector<PairCosts> drawCosts(const Costs& c, std::uint32_t seed, std:
     return out;
 }
 
+// Package 16: model inputs taken from the parts the owner's own log of 24 Nov 2026 measured (Package 15, 3840x2160 HDR10
+// from a 30 Hz capture, NVIDIA VFG 3X): the real frame's picture work 4.6-4.8 ms (mean), one VFG frame P50 2.0-2.15 ms,
+// P95 2.3-3.3 ms. Spread, spikes and their rates are made up. Results with it are SIMULATED, not his PC's.
+inline Costs ownerCosts() { return {"owner-p15-parts", 4.2, 5.2, 2.1, 0.25, 0.02, 1.2, 0.0, 0.0, 0.0, 0.0}; }
+
 // --- configurations --------------------------------------------------------------------------------------------------
 enum class Source { Card, Stream };
 // Candidate scheduling changes (stream "lagfix", Directive 25). 0 / false: today's behaviour.
@@ -163,6 +169,25 @@ struct Fixes {
     // A bad (unusable) P: the share of the picture's motion the pass held at B (1.0: wholly held, the upper bound; the
     // pass holds only its untrusted pixels, so a real bad P lies below). Its content is modelled as B + (1 - h) x T/3.
     double heldShare = 1.0;
+    // Package 16: Smoothness Mode with the owner's target (pref pushSmoothTarget, e.g. 90) and no output cap, on a 180 Hz
+    // panel, as PushSmoothHook::choose runs it: 0 = no target (the earlier results). With "Lower delay" the predicted
+    // pairs' group time goes to the cost model's own level and is preferred while the schedule runs (as the engine).
+    int smoothTarget = 0;
+    // Package 16, item 3: i.i.d. skipped pairs forced on top of the cost model (admission says Skip), from their own random
+    // numbers (the cost draws are unchanged), and which interruption rule the schedule runs (PushLowDelayInterrupts:
+    // true = Package 15's Strict, false = the engine's Tolerant).
+    double forcedSkipShare = 0.0;
+    bool ldStrict = false;
+    // Package 16, the stall clock (PushStallClock.h): the owner's late-type capture stalls (QUARTER_HOUR_STALLS.md): every
+    // stallEveryS seconds a callback gap of stallGapMs, then the frames that were held arrive stallBurstMs apart until they
+    // are back on time (the device timestamps keep their 33 ms steps). stallClock: the gap and burst are one discontinuity
+    // (held anchor, no phase / margin samples); false: today's smoother and learners.
+    double stallEveryS = 0.0, stallGapMs = 120.0, stallBurstMs = 7.0;
+    bool stallClock = false;
+    int stallClockParts = 3;   // with stallClock: bit 1 the held anchor, bit 2 no phase / margin samples (investigation)
+    // Proposal 2 (model only): of a burst, present only the newest real frame: a stall pair's real frame (and its P) is not
+    // presented when the next sample has already arrived by its Present; the generated frames before it were already shown.
+    bool stallNewest = false;
 };
 struct Config {
     std::string name;
@@ -186,7 +211,9 @@ struct Result {
     double offShare = 0, longestMs = 0;          // present intervals more than 1 ms off content/M; the longest
     double holdsPerMin = 0, probeHoldsPerMin = 0;// FG-off holds (rejection or ULL) started; FgCostSettling holds started
     double phaseMeanMs = 0;                      // pairDelay (the scheduled phase) on admitted, not held pairs
-    double twoXShare = 0;                        // share of pairs at 2X (Smoothness Mode under part "headroom")
+    double twoXShare = 0;                        // share of pairs at 2X (Smoothness Mode under part "headroom" or a target)
+    std::uint64_t multiplierPauses = 0;          // Package 16: "Lower delay" paused because the multiplier left 3X
+    std::uint64_t smoothStepDowns = 0, smoothStepUps = 0;   // Smoothness Mode's own steps (PushSmoothnessMode)
     double predShownPerS = 0, predHeldShownPerS = 0;   // Package 15: P frames shown; of them, P found mostly held
     double predictedPairShare = 0, switchesPerMin = 0; // pairs run predicted; schedule entries + exits per minute
     double lastPredShownS = -1;                  // the last predicted frame's present, seconds after the run's start
@@ -202,6 +229,10 @@ struct Result {
     double contentEvenPct = 0;                    // shown frames whose content step is within half a slot of the ideal
     double contentErrorSlotsPerMin = 0;           // sum over shown frames of |step - ideal| / ideal, per minute
     std::size_t pairs = 0;
+    std::uint64_t anchorSnaps = 0, stallPairs = 0;  // Package 16: LiveArrivalSmoother's snaps; pairs inside a capture stall
+    std::uint64_t burstSkipped = 0;               // Fixes::stallNewest: burst real frames not presented (a newer one had arrived)
+    std::vector<std::int64_t> realPresentAt;      // each real frame's Present (100 ns), in pair order (with realPairs)
+    std::vector<double> phaseMsByPair;            // the scheduled phase (pairDelay, ms) of every pair, in pair order
 };
 
 // --- the simulation ----------------------------------------------------------------------------------------------------
@@ -232,7 +263,13 @@ inline Result simulate(const Costs& costs, Source source, const Config& cfg, std
     const PushFgMask offered = (1u << 2) | (1u << 3) | (1u << 4);
 
     struct Pending { std::int64_t done, submit; bool admitted; double totalMs, groupMs; std::int64_t anchor; std::vector<std::int64_t> ready; std::vector<std::int64_t> pts; std::int64_t b;
-                     bool predicted = false, unusable = false; double fg1Ms = 0; };
+                     bool predicted = false, unusable = false; double fg1Ms = 0; bool stall = false; };
+    PushStallClock stallClock;                                   // Package 16 (Fixes::stallClock)
+    PushCaptureStallRide ldStallRide;
+    std::int64_t lastCallback = 0, stallGapEnd = 0, nextStallAt = 0;
+    bool inStallGap = false;
+    std::vector<std::int64_t> realPresentAt;
+    std::vector<double> phaseByPair;
     std::deque<Pending> pending;
     std::int64_t gpuFree = 0, lastPresentEnd = 0, lastPresentBegin = 0, lastEvaluated = 0;
     unsigned coldGroups = 0;
@@ -258,6 +295,8 @@ inline Result simulate(const Costs& costs, Source source, const Config& cfg, std
     lowDelay.setPolicy(cfg.fixes.ldPolicy >= 1 ? PushLowDelayPolicy::StayIn : PushLowDelayPolicy::LeaveOnUnusable);
     if (cfg.fixes.ldPolicy == 2) lowDelay.setSustain(4, 3, 60);
     if (cfg.fixes.ldPolicy == 3) lowDelay.setSustain(60, 15, 300);
+    lowDelay.setInterruptRule(cfg.fixes.ldStrict ? PushLowDelayInterrupts::Strict : PushLowDelayInterrupts::Tolerant);
+    Rng forcedSkips(seed ^ 0x51ed270bu);
     LivePairLatency predictedLatency;
     std::int64_t ldInterp = 0, ldPred = 0, ldLastPred = 0;
     Rng motion(seed ^ 0x9e3779b9u);
@@ -299,7 +338,10 @@ inline Result simulate(const Costs& costs, Source source, const Config& cfg, std
             const bool costSettling = settling.observe(!p.admitted, p.admitted, p.done);
             if (settling.holdUntil() != holdBefore) ++probeHolds;
             budget.complete(p.totalMs, p.admitted, costSettling, p.done, p.admitted ? std::optional<double>(p.groupMs) : std::nullopt, true);
-            if (p.admitted && !costSettling) smoothCosts.record(unsigned(p.ready.size() - 1), p.groupMs);
+            if (p.admitted && !costSettling) {   // EngineController: smoothHook.groupCost(ms, fgEvaluated, predictedPair)
+                if (p.predicted) smoothCosts.recordPredicted(unsigned(p.ready.size() - 1), p.groupMs);
+                else smoothCosts.record(unsigned(p.ready.size() - 1), p.groupMs);
+            }
             if (p.admitted && !costSettling) {
                 while (!fgSamples.empty() && (fgSamples.size() >= 64 || fgSamples.front().first < p.done - 20000000)) fgSamples.pop_front();
                 fgSamples.emplace_back(p.done, p.groupMs);
@@ -310,7 +352,7 @@ inline Result simulate(const Costs& costs, Source source, const Config& cfg, std
                 fg1Samples.emplace_back(p.done, p.fg1Ms);
             }
             const bool behind = cfg.fixes.phaseBehindWarmup && queueGuard.excluded(p.submit, p.done, costSettling, p.admitted);
-            if (adaptiveCapturePhase && p.admitted && !costSettling && !behind) {
+            if (adaptiveCapturePhase && p.admitted && !costSettling && !behind && !(cfg.fixes.stallClock && (cfg.fixes.stallClockParts & 2) && p.stall)) {
                 std::int64_t required = 0;
                 for (std::size_t i = 0; i < p.ready.size(); ++i) required = std::max(required, p.ready[i] - p.anchor + p.b - p.pts[i]);
                 (p.predicted ? predictedLatency : pairLatency).observe(p.done, required);
@@ -318,10 +360,36 @@ inline Result simulate(const Costs& costs, Source source, const Config& cfg, std
         }
     };
 
+    std::vector<std::int64_t> callbacks(pairs + 2, 0);
+    for (std::size_t k = 1; k <= pairs + 1; ++k) {   // the callbacks first (Fixes::stallNewest looks one sample ahead)
+        std::int64_t callback = start + std::int64_t(k) * T + std::int64_t((k <= pairs ? pc[k].jitterMs : 0.0) * double(kMs));
+        if (cfg.fixes.stallEveryS > 0) {   // Fixes::stallEveryS: a late-type capture stall (gap, then a burst)
+            if (!nextStallAt) nextStallAt = start + std::int64_t(cfg.fixes.stallEveryS * 1e7 * 0.5);
+            if (!inStallGap && callback >= nextStallAt) {
+                stallGapEnd = callback + std::int64_t(cfg.fixes.stallGapMs * double(kMs));
+                nextStallAt += std::int64_t(cfg.fixes.stallEveryS * 1e7);
+                inStallGap = true;
+            }
+            if (inStallGap) {
+                const std::int64_t late = std::max(stallGapEnd, lastCallback + std::int64_t(cfg.fixes.stallBurstMs * double(kMs)));
+                if (late > callback) callback = late;
+                else inStallGap = false;
+            }
+        }
+        callbacks[k] = callback;
+        lastCallback = callback;
+    }
+    lastCallback = 0;
+    PushCaptureStallRide newestRide;
+    std::uint64_t burstSkipped = 0;
     for (std::size_t k = 1; k <= pairs; ++k) {
         const PairCosts& c = pc[k];
         const std::int64_t b = std::int64_t(k) * T, a = b - T;
-        const std::int64_t callback = start + b + std::int64_t(c.jitterMs * double(kMs));
+        const std::int64_t callback = callbacks[k];
+        const bool burstPair = newestRide.pair(lastCallback ? callback - lastCallback : 0, T);
+        const bool inStall = stallClock.pair(callback, T, !cfg.fixes.stallClock);
+        const bool ldStall = ldStallRide.pair(lastCallback ? callback - lastCallback : 0, T);   // EngineController's lowDelayStallRide (today)
+        lastCallback = callback;
         const std::int64_t pickup = callback + 3000, now = pickup + 3000;
         completeUpTo(now);
         // The row (Fixes::rowOnS / rowOffS); a switch rebuilds the graph before this pair (EngineController's settings
@@ -336,10 +404,12 @@ inline Result simulate(const Costs& costs, Source source, const Config& cfg, std
             pairLatency.reset(); predictedLatency.reset(); margin.reset(); rejectionHold.reset(); ullHold.reset(); queueGuard.reset();
         }
 
-        // Smoothness Mode (part "headroom" only): PushSmoothHook::choose.
-        if (headroomTarget) {
+        // Smoothness Mode (part "headroom", or Package 16's Fixes::smoothTarget): PushSmoothHook::choose.
+        if (headroomTarget || cfg.fixes.smoothTarget) {
             PushSmoothInput in;
-            in.targetFps = headroomTarget; in.contentFps = 1e7 / double(T); in.capFps = 180.0; in.refreshHz = 180.0;
+            smoothCosts.preferPredicted(lowDelay.active());   // EngineController: smoothHook.preferPredictedCosts
+            in.targetFps = cfg.fixes.smoothTarget ? cfg.fixes.smoothTarget : headroomTarget; in.contentFps = 1e7 / double(T);
+            in.capFps = cfg.fixes.smoothTarget ? 0.0 : 180.0; in.refreshHz = 180.0;
             in.ceiling = ceiling; in.offered = offered; in.baseMs = budget.baseCost(now).value_or(-1.0); in.costs = &smoothCosts;
             in.blitMs = 0.3; in.admitted = admittedPairs; in.rejected = rejectedPairs; in.now100ns = now;
             const auto d = smooth.update(in);
@@ -392,7 +462,9 @@ inline Result simulate(const Costs& costs, Source source, const Config& cfg, std
         }
         bool robustPair = false;
         bool admitted = !resetPair && !settling.holding(now) && budget.admit(now, lastDeadline, 0.3, 0.3, false);
-        if (!admitted && !resetPair && !settling.holding(now) && cfg.fixes.admit) {
+        const bool forcedSkip = cfg.fixes.forcedSkipShare > 0 && forcedSkips.uniform() < cfg.fixes.forcedSkipShare;
+        if (forcedSkip) admitted = false;
+        if (!admitted && !forcedSkip && !resetPair && !settling.holding(now) && cfg.fixes.admit) {
             const double base = budget.baseCost(now).value_or(0.0), progress = std::clamp(0.3, 0.0, base);
             if (cfg.fixes.admit == 1) {
                 admitted = (!cfg.fixes.robustGuard || robustGuard.allowed(now)) && pushRobustAdmitFits(now, lastDeadline, 0.3, 0.3, budget.baseCost(now), costWindow.robust(now));
@@ -415,7 +487,7 @@ inline Result simulate(const Costs& costs, Source source, const Config& cfg, std
         if (admitted && coldGroups) --coldGroups;
         if (admitted) lastEvaluated = now;
         Pending job;
-        job.admitted = admitted; job.anchor = callback; job.b = b; job.submit = pickup;
+        job.admitted = admitted; job.anchor = callback; job.b = b; job.submit = pickup; job.stall = inStall;
         std::int64_t t = gpuStart + std::int64_t(c.base * double(kMs));
         const std::int64_t realReady = t + 2000;
         double group = 0;
@@ -462,7 +534,7 @@ inline Result simulate(const Costs& costs, Source source, const Config& cfg, std
         wasHeld = held;
 
         // Presentation anchor, grace, timeline.
-        const std::int64_t smoothed = smoothAnchor ? arrival.anchor(b, callback, T) : callback;
+        const std::int64_t smoothed = smoothAnchor ? pushStallAnchor(arrival, inStall && (cfg.fixes.stallClockParts & 1), b, callback, T) : callback;
         const std::int64_t presentAnchor = held ? callback : smoothed;
         std::int64_t grace = liveGeneratedGrace100ns(callback, presentAnchor);
         if (ull.grace) grace = pushUllGeneratedGrace(grace, kLiveGeneratedGrace100ns, T, M);
@@ -501,7 +573,7 @@ inline Result simulate(const Costs& costs, Source source, const Config& cfg, std
             if (at > deadline + grace) { ++genDropped; lastPresentEnd = std::max(lastPresentEnd, std::min(at, deadline + grace)); return false; }
             ++genShown;
             ++shownInPair;
-            if (marginPair && !held) margin.observe(at, deadline, ready, extra);
+            if (marginPair && !held && !(inStall && (cfg.fixes.stallClockParts & 2))) margin.observe(at, deadline, ready, extra);
             present(at, M, content);
             return true;
         };
@@ -514,15 +586,21 @@ inline Result simulate(const Costs& costs, Source source, const Config& cfg, std
             if (at > deadline + grace) { ++genDropped; lastPresentEnd = std::max(lastPresentEnd, std::min(at, deadline + grace)); continue; }
             ++genShown;
             ++shownInPair;
-            if (marginPair && !held) margin.observe(at, deadline, ready, extra);
+            if (marginPair && !held && !(inStall && (cfg.fixes.stallClockParts & 2))) margin.observe(at, deadline, ready, extra);
             present(at, M, pts);
         }
         const std::int64_t at = std::max({timeline.deadline(b), realReady, lastPresentEnd});
-        present(at, M, b);
-        realDelay.push_back(double(at + 3000 - callback) / double(kMs));
-        realPairOf.push_back(k);
+        const bool skipReal = cfg.fixes.stallNewest && burstPair && callbacks[k + 1] <= at;   // a newer sample is already here
+        if (skipReal) ++burstSkipped;
+        else {
+            present(at, M, b);
+            realDelay.push_back(double(at + 3000 - callback) / double(kMs));
+            realPairOf.push_back(k);
+            realPresentAt.push_back(at);
+            phaseByPair.push_back(double(pairDelay) / double(kMs));
+        }
         // An unusable P holds a share h of the picture's motion at B (Fixes::heldShare; h = 1: B once more).
-        const bool predShownNow = ranPredicted && presentGenerated(veyra::pipeline::pushPredictedPts(a, b, 3), predReady,
+        const bool predShownNow = ranPredicted && !skipReal && presentGenerated(veyra::pipeline::pushPredictedPts(a, b, 3), predReady,
                 unusableNow ? b + std::int64_t(std::llround((1.0 - std::clamp(cfg.fixes.heldShare, 0.0, 1.0)) * double(veyra::pipeline::pushPredictedPts(a, b, 3) - b)))
                             : veyra::pipeline::pushPredictedPts(a, b, 3));
         if (ranPredicted && (cfg.fixes.ldWatch & 1)) lowDelay.predictedOutcome(!predShownNow);   // EngineController: shown, or dropped late
@@ -531,18 +609,20 @@ inline Result simulate(const Costs& costs, Source source, const Config& cfg, std
             if (unusableNow) ++predHeldShown;
             lastPredShown = double(lastPresentBegin - start) / 1e7;
         }
-        if (shownInPair) realGenDelay.push_back(realDelay.back());
+        if (shownInPair && !skipReal) realGenDelay.push_back(realDelay.back());
         if (robustPair) robustGuard.observe(at, pairBad);
         if (ranPredicted) { ldLastPred = now; ++predPairs; }
         if (rowOn || ldPrevPredicted) {   // EngineController: (lowDelayWanted || lowDelayPrevPredicted)
-            ldPrevPredicted = ranPredicted;
-            ldInterpRun = ranPredicted ? 0 : ldInterpRun + 1;
-            if (marginPair && !ranPredicted && ldInterpRun >= kPushLowDelayLearnedRun) ldInterp = interpPhase;
+            ldPrevPredicted = pushLowDelayPreviousRan(ldPrevPredicted, ranPredicted, admitted);   // Package 16: as the engine
+            if (admitted) ldInterpRun = ranPredicted ? 0 : ldInterpRun + 1;
+            if (marginPair && admitted && !ranPredicted && ldInterpRun >= kPushLowDelayLearnedRun) ldInterp = interpPhase;
         }
         if (rowOn || lowDelay.active()) {   // EngineController: the schedule for the next pair
             PushLowDelayPair ld;
             ld.wanted = rowOn; ld.eligible = ldCard; ld.ranPredicted = ranPredicted;
             ld.skipped = !admitted && !resetPair; ld.held = held || settling.holding(now);
+            ld.multiplierPause = rowOn && !stream && marginPair && M != 3;   // Package 16: the graph's not-3x
+            ld.stall = ldStall;
             lowDelay.pair(ld);
         }
     }
@@ -581,6 +661,8 @@ inline Result simulate(const Costs& costs, Source source, const Config& cfg, std
     r.probeHoldsPerMin = probeHolds / duration * 60.0;
     r.phaseMeanMs = phaseCount ? phaseSum / phaseCount : -1.0;
     r.twoXShare = twoX / double(pairs);
+    r.multiplierPauses = lowDelay.multiplierPauses();
+    r.smoothStepDowns = smooth.stepDowns(); r.smoothStepUps = smooth.stepUps();
     r.predShownPerS = predShown / duration;
     r.predHeldShownPerS = predHeldShown / duration;
     r.predictedPairShare = predPairs / double(pairs);
@@ -594,6 +676,11 @@ inline Result simulate(const Costs& costs, Source source, const Config& cfg, std
     r.presents = std::move(presents);
     r.realDelays = realDelay;
     r.realPairs = std::move(realPairOf);
+    r.anchorSnaps = arrival.snaps();
+    r.burstSkipped = burstSkipped;
+    r.stallPairs = stallClock.pairs();
+    r.realPresentAt = std::move(realPresentAt);
+    r.phaseMsByPair = std::move(phaseByPair);
     return r;
 }
 

@@ -370,6 +370,8 @@ veyra_add_compute_shader(veyra_shader_flow_fill FlowFill)
 veyra_add_compute_shader(veyra_shader_flow_claim FlowClaim)
 # VfgShotChange: per-pair shot-change test for VFG (replaces the SDK's automatic one).
 veyra_add_compute_shader(veyra_shader_vfg_shot_change VfgShotChange)
+# TEST ONLY: the fake VFG's blend (TestVfgBackend, VEYRA_TEST_FAKE_VFG=1; CI's end-to-end engine test).
+veyra_add_compute_shader(veyra_shader_test_vfg_blend TestVfgBlend)
 veyra_add_compute_shader(veyra_shader_rgb_nv12 RgbToNv12)
 
 # ---------------------------------------------------------------------------
@@ -446,6 +448,7 @@ add_library(veyra_pipeline STATIC
   src/pipeline/LmxxfNrBackend.cpp
   src/pipeline/Rdna3NrBackend.cpp
   src/pipeline/VfgBackend.cpp
+  src/pipeline/TestVfgBackend.cpp
   src/pipeline/VfgAmpereCompat.cpp
   src/pipeline/VfxSrBackend.cpp
 )
@@ -789,6 +792,7 @@ if(VEYRA_FFMPEG_ROOT AND EXISTS "${VEYRA_FFMPEG_ROOT}/include/libavformat/avform
   add_dependencies(veyra_pipeline veyra_shader_push_hud_lock_update veyra_shader_push_hud_lock_compose veyra_shader_push_compare_sbs veyra_shader_push_compare_vertical veyra_shader_push_compare_raw veyra_shader_push_compare_overlay veyra_shader_push_layer_blend veyra_shader_push_canvas_convert veyra_shader_effect_exclusion veyra_shader_sr_resolve veyra_shader_nr_downsample veyra_shader_nr_residual veyra_shader_nr_temporal veyra_shader_nr_hold veyra_shader_nr_reuse_compose veyra_shader_nr_reuse_warp veyra_shader_flow_adapt veyra_shader_flow_refine veyra_shader_flow_fill veyra_shader_flow_claim veyra_shader_vfg_shot_change)
   # PushFPS experiment VEYRA_EXP_RP_STREAM_DEDUP: change of the decoded stream picture (pipeline/StreamChangePass.h).
   add_dependencies(veyra_pipeline veyra_shader_push_stream_change)
+  add_dependencies(veyra_pipeline veyra_shader_test_vfg_blend)   # TEST ONLY (TestVfgBackend)
   add_library(veyra_sources STATIC
     src/source/NativeCaptureSink.cpp
     src/source/MediaFileSource.cpp
@@ -806,6 +810,7 @@ if(VEYRA_FFMPEG_ROOT AND EXISTS "${VEYRA_FFMPEG_ROOT}/include/libavformat/avform
     src/source/CaptureCompressedDecoder.cpp
     src/source/WasapiAudioInput.cpp
     src/source/MagewellCapture.cpp
+    src/source/PushStallWitnessWin.cpp
   )
   veyra_apply_warnings(veyra_sources)
   # Optional external DeckLink SDK. Generate the official COM ABI outside the
@@ -853,6 +858,7 @@ if(VEYRA_FFMPEG_ROOT AND EXISTS "${VEYRA_FFMPEG_ROOT}/include/libavformat/avform
   target_link_libraries(veyra_sources PUBLIC veyra_pipeline veyra_media veyra_base)
   target_link_libraries(veyra_sources PRIVATE ${FFMPEG_LIBRARIES} strmiids ole32 oleaut32 d3d12 dxgi)
   target_link_libraries(veyra_sources PRIVATE d3d11 windowsapp dwmapi)
+  target_link_libraries(veyra_sources PRIVATE pdh cfgmgr32 powrprof)   # stream "s10-stall": the stall witness
 
   if(VEYRA_ENABLE_REMOTEPLAY)
     set(VEYRA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -1244,6 +1250,11 @@ add_executable(veyra_sound_profile_tests tests/unit/SoundProfileTests.cpp src/si
   target_compile_features(veyra_presentation_pacing_tests PRIVATE cxx_std_20)
   target_compile_options(veyra_presentation_pacing_tests PRIVATE /utf-8)
   target_link_libraries(veyra_presentation_pacing_tests PRIVATE veyra_engine)
+  # PushFPS: end-to-end engine test of "Lower delay" (replay as a capture card, fake VFG; docs/drafts/E2E_ENGINE_TEST.md).
+  add_executable(veyra_lowdelay_e2e_tests tests/integration/LowDelayE2ETests.cpp)
+  target_compile_features(veyra_lowdelay_e2e_tests PRIVATE cxx_std_20)
+  target_compile_options(veyra_lowdelay_e2e_tests PRIVATE /utf-8)
+  target_link_libraries(veyra_lowdelay_e2e_tests PRIVATE veyra_engine)
   target_compile_features(veyra_scheduling_chain_tests PRIVATE cxx_std_20)
   target_link_libraries(veyra_scheduling_chain_tests PRIVATE veyra_engine)
   target_compile_features(veyra_player_tracks_tests PRIVATE cxx_std_20)

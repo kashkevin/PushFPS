@@ -23,6 +23,9 @@
                    stable builds, Wi-Fi, a trace with a planted word that must be withheld).
   The kit part also plants a different bitrate in one arm (-DryRunMismatchArm mod-input): RESULT.txt / result.json
   must refuse exactly that arm and name the bitrate.
+    stall-evidence Collect-Stall-Evidence.ps1 -DryRun in report and watch mode (stream "s10-stall"): the sections, the
+                   three stalls of a made-up Package 15 log (two on the quarter-hour model), no own names or addresses;
+                   the watch's sample lines and its closing line.
     diagnostics    collect-diagnostics.ps1 -DryRun: exactly one zip, the expected files, nothing planted in it,
                    the list of what is not collected in its summary.
   Every problem becomes one "::error::" line; the evidence that explains it is printed in groups below.
@@ -733,6 +736,68 @@ if ($unzippedDiag) {
 }
 Add-Group 'diagnostics: tree (from the zip)' (Get-Tree $unzippedDiag)
 
+# Stream "s10-stall": the private [stall-witness] lines stay out of the default zip; the nameless [capture-stall-cause]
+# line is in its log; -IncludeProcessNames puts the witness lines into their own file.
+if ($unzippedDiag) {
+    if (@($diagFiles | Select-String -SimpleMatch -Pattern 'StallWitnessToolX').Count -gt 0) { Add-Problem $part 'a [stall-witness] process name reached the default zip' }
+    if (@($diagFiles | Where-Object { $_.Name -like 'stall-witness-*' }).Count -gt 0) { Add-Problem $part 'stall-witness file in the default zip' }
+    Test-Holds $part $log @('[capture-stall-cause] stall=1 kind=gap') 'log file'
+    Test-Holds $part $summary @('the names of other programs that were busy around a capture stall') 'summary'
+}
+$part = 'diagnostics-names'
+$namesOut = Join-Path $OutRoot 'diagnostics-names'
+try {
+    & (Join-Path $kit 'collect-diagnostics.ps1') -DryRun -NoPing -IncludeProcessNames -OutRoot $namesOut
+} catch {
+    Add-Problem $part ("collect-diagnostics.ps1 -IncludeProcessNames stopped: " + $_.Exception.Message + " (script line " + $_.InvocationInfo.ScriptLineNumber + ")")
+}
+$unzippedNames = Expand-OnlyZip $part $namesOut
+if ($unzippedNames) {
+    $namesFiles = @(Get-ChildItem -LiteralPath $unzippedNames -Recurse -File)
+    $witnessFile = @($namesFiles | Where-Object { $_.Name -eq 'stall-witness-PushFPS-dryrun.txt' })
+    if ($witnessFile.Count -ne 1) { Add-Problem $part 'no stall-witness-PushFPS-dryrun.txt with -IncludeProcessNames' }
+    Test-Holds $part $witnessFile @('top=StallWitnessToolX.exe:61.0') 'stall-witness file'
+    if (@($namesFiles | Where-Object { $_.Name -like 'log-*' } | Select-String -SimpleMatch -Pattern 'StallWitnessToolX').Count -gt 0) { Add-Problem $part 'a process name reached log-*.txt' }
+    $withheldNames = Join-Path $unzippedNames 'withheld.txt'
+    if ((Test-Path -LiteralPath $withheldNames) -and (@(Get-Content -LiteralPath $withheldNames)[0] -ne 'files left out of the zip by the final check: 0')) { Add-Problem $part ('the tool withheld its own files: ' + (@(Get-Content -LiteralPath $withheldNames) -join '; ')) }
+}
+
+# ====================================================================================================
+# Part 4 (stream "s10-stall"): Collect-Stall-Evidence.ps1, report and watch, dry
+# ====================================================================================================
+$part = 'stall-evidence'
+$evidenceOut = Join-Path $OutRoot 'stall-evidence'
+New-Item -ItemType Directory -Force -Path $evidenceOut | Out-Null
+$reportFile = Join-Path $evidenceOut 'report.txt'
+$watchFile = Join-Path $evidenceOut 'watch.txt'
+try { & (Join-Path $kit 'Collect-Stall-Evidence.ps1') -DryRun -OutFile $reportFile } catch { Add-Problem $part ("report stopped: " + $_.Exception.Message + " (script line " + $_.InvocationInfo.ScriptLineNumber + ")") }
+if (-not (Test-Path -LiteralPath $reportFile)) { Add-Problem $part 'report mode wrote no file' }
+else {
+    $reportText = @(Get-Item -LiteralPath $reportFile)
+    Test-Holds $part $reportText @('READ-ONLY. Nothing was changed on this PC. Commands this run uses:', 'DRY RUN', 'WHAT THIS FILE IS:', 'It stays on this PC unless you send it',
+        'Best run AFTER playing', 'fingerprint ', '=== CAPTURE STALLS FROM PUSHFPS''S LOGS (UTC) ===', '3 stall(s) found', 'callback 158 ms late, copy 6.9 ms', '[ms]',
+        'frames late (burst', '=== THE QUARTER-HOUR PATTERN', 'fit: 2 of 3 stalls', 'predicted next stalls', '=== SCHEDULED TASKS', '=== TASK SCHEDULER HISTORY',
+        '=== EVENT LOG ENTRIES WITHIN 30 S OF THE NEWEST 24 STALLS', '=== PROCESSES', '=== SERVICES RUNNING', '=== USB VIDEO / MEDIA DEVICES', '=== POWER PLAN',
+        '=== NETWORK ADAPTERS', '=== HYPERVISOR AND VIRTUAL MACHINES', '# done: this run took', 'masking self-test: [ip] [ipv6] [mac] ') 'stall evidence report'
+    if (@($reportText | Select-String -SimpleMatch -Pattern 'made up, not a stall').Count -gt 0) { Add-Problem $part 'a normal callback was taken for a stall' }
+    foreach ($address in @('192.168.1.77', 'fe80::1ff', '00:1A:2B:3C:4D:5E')) { if (@($reportText | Select-String -SimpleMatch -Pattern $address).Count -gt 0) { Add-Problem $part ('an address reached the report: ' + $address) } }
+    foreach ($own in @($env:COMPUTERNAME, $env:USERNAME)) {
+        if ($own -and ($own.Length -ge 3) -and (@($reportText | Select-String -SimpleMatch -Pattern $own).Count -gt 0)) { Add-Problem $part ('the report holds this PC''s own name or user name') }
+    }
+    Add-Group 'stall-evidence: report.txt (first 120 lines)' (Get-Content -LiteralPath $reportFile -TotalCount 120)
+}
+try { & (Join-Path $kit 'Collect-Stall-Evidence.ps1') -DryRun -Mode watch -WatchSeconds 6 -OutFile $watchFile } catch { Add-Problem $part ("watch stopped: " + $_.Exception.Message + " (script line " + $_.InvocationInfo.ScriptLineNumber + ")") }
+if (-not (Test-Path -LiteralPath $watchFile)) { Add-Problem $part 'watch mode wrote no file' }
+else {
+    $watchLines = @(Get-Content -LiteralPath $watchFile)
+    $samples = @($watchLines | Where-Object { $_ -match ' dpcTot=.* selfCpuMs=' })
+    if ($samples.Count -lt 3) { Add-Problem $part ('watch wrote ' + $samples.Count + ' sample line(s), expected at least 3 of 6 seconds') }
+    if (@($watchLines | Where-Object { $_ -match '^# \d+ second\(s\) written; ' }).Count -ne 1) { Add-Problem $part 'watch did not write its closing line with its own count and stop reason' }
+    Add-Group 'stall-evidence: watch.txt' $watchLines
+}
+foreach ($leftover in @(Get-ChildItem -LiteralPath ([System.IO.Path]::GetTempPath()) -Directory -Filter 'pushfps-stall-dry-*' -ErrorAction SilentlyContinue)) { Add-Problem $part ('the dry run left a folder behind: ' + $leftover.Name) }
+
+
 # ====================================================================================================
 if ($problems.Count -gt 0) {
     # The job log needs a sign-in to read and GitHub keeps ten annotations of a kind per step: the first one
@@ -760,5 +825,5 @@ if ($problems.Count -gt 0) {
     }
     exit 1
 }
-Write-Host ("dry runs passed: kit " + $kitRuns + " runs with every mode, expected files, reliability verdicts and RESULT refusals, nothing planted in any zip; kill-switch run kept its evidence; versus/full and resume sessions complete; diagnostics zip complete and clean")
+Write-Host ("dry runs passed: kit " + $kitRuns + " runs with every mode, expected files, reliability verdicts and RESULT refusals, nothing planted in any zip; kill-switch run kept its evidence; versus/full and resume sessions complete; diagnostics zip complete and clean (process names only with -IncludeProcessNames); stall evidence report and watch complete")
 exit 0

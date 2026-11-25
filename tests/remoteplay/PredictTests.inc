@@ -3,6 +3,11 @@
 // include/veyra/pipeline/PushPredict.h (stream "predict"): the switch, per-pair eligibility, the plan of one predicted
 // pair, timestamps, the flow size, the per-pixel rule and the whole-frame confidence. Values are examples.
 #include "veyra/pipeline/PushPredict.h"
+#include "veyra/pipeline/PushPredictCheck.h"
+#include "veyra/engine/PushLowDelay.h"
+#include <cmath>
+#include <cstring>
+#include <vector>
 #include <cmath>
 #include <cstdint>
 #include <string_view>
@@ -35,8 +40,9 @@ TEST(predict_pair_refusals_in_order) {
     e = eligible(); e.multiplier = 2;       CHECK(pushPredictPairRefusal(e) == PushPredictRefusal::NotThreeX);
     e = eligible(); e.multiplier = 4;       CHECK(pushPredictPairRefusal(e) == PushPredictRefusal::NotThreeX);
     e = eligible(); e.historyValid = false; CHECK(pushPredictPairRefusal(e) == PushPredictRefusal::NoHistory);
-    e = eligible(); e.hudLock = true;       CHECK(pushPredictPairRefusal(e) == PushPredictRefusal::HudLockOrExclusion);
-    e = eligible(); e.exclusion = true;     CHECK(pushPredictPairRefusal(e) == PushPredictRefusal::HudLockOrExclusion);
+    // Package 16, item 2: Live HUD Lock and exclusion boxes no longer refuse (P composes from B).
+    e = eligible(); e.hudLock = true;       CHECK(pushPredictPairRefusal(e) == PushPredictRefusal::Ok);
+    e = eligible(); e.exclusion = true;     CHECK(pushPredictPairRefusal(e) == PushPredictRefusal::Ok);
     e = eligible(); e.presentSinkFg = true; CHECK(pushPredictPairRefusal(e) == PushPredictRefusal::PresentSinkFg);
     e = eligible(); e.formatSupported = false; CHECK(pushPredictPairRefusal(e) == PushPredictRefusal::UnsupportedFormat);
     e = eligible(); e.passReady = false;    CHECK(pushPredictPairRefusal(e) == PushPredictRefusal::PassUnavailable);
@@ -90,9 +96,9 @@ TEST(predict_static_refusal_ignores_per_pair_reasons) {
     e.historyValid = false; e.confident = false;
     CHECK(pushPredictStaticRefusal(e) == PushPredictRefusal::Ok);
     CHECK(pushPredictPairRefusal(e) == PushPredictRefusal::NoHistory);
-    e.hudLock = true;
-    CHECK(pushPredictStaticRefusal(e) == PushPredictRefusal::HudLockOrExclusion);
-    e.hudLock = false; e.formatSupported = false;
+    e.hudLock = true; e.exclusion = true;   // Package 16: not a refusal any more
+    CHECK(pushPredictStaticRefusal(e) == PushPredictRefusal::Ok);
+    e.hudLock = false; e.exclusion = false; e.formatSupported = false;
     CHECK(pushPredictStaticRefusal(e) == PushPredictRefusal::UnsupportedFormat);
     e.formatSupported = true; e.passReady = false;
     CHECK(pushPredictStaticRefusal(e) == PushPredictRefusal::PassUnavailable);
@@ -132,13 +138,38 @@ TEST(predict_timestamps_put_p_one_slot_after_b) {
     CHECK(std::abs(pushPredictStep(3) - 1.0f / 3.0f) < 1e-7f);
 }
 
+// e2e scenario m2: the row on at a configured 2X reads not-here / not-3x, not unavailable / switch-off.
+TEST(predict_create_refusal_names_the_shape) {
+    using S = PushPairSchedule; using R = PushPredictRefusal;
+    CHECK(pushPredictCreateRefusal(S::OnePredicted, true, true, false, false, 2, true) == R::NotThreeX);
+    CHECK(pushPredictCreateRefusal(S::OnePredicted, true, true, false, false, 3, true) == R::Ok);
+    CHECK(pushPredictCreateRefusal(S::OnePredicted, true, true, false, false, 4, true) == R::Ok);
+    CHECK(pushPredictCreateRefusal(S::OnePredicted, true, false, false, false, 3, true) == R::NotVfg);
+    CHECK(pushPredictCreateRefusal(S::OnePredicted, true, true, true, false, 3, true) == R::NotVfg);
+    CHECK(pushPredictCreateRefusal(S::OnePredicted, true, true, false, true, 3, true) == R::PresentSinkFg);
+    CHECK(pushPredictCreateRefusal(S::OnePredicted, true, true, false, false, 3, false) == R::UnsupportedFormat);
+    CHECK(pushPredictCreateRefusal(S::Interpolate, true, true, false, false, 3, true) == R::SwitchOff);
+    // It matches pushPredictCreate: Ok exactly when the pass is created.
+    for (unsigned m : {1u, 2u, 3u, 4u}) for (int bits = 0; bits < 16; ++bits) {
+        const bool fg = bits & 1, vfg = bits & 2, other = bits & 4, sink = bits & 8;
+        CHECK((pushPredictCreateRefusal(S::OnePredicted, fg, vfg, other, sink, m, true) == R::Ok) == pushPredictCreate(S::OnePredicted, fg, vfg, other, sink, m, true));
+    }
+    // And the row's state: not here (with its reason), not unavailable.
+    CHECK(veyra::engine::pushLowDelayStateFor(true, veyra::engine::PushLowDelaySuspend::None, true, true, R::NotThreeX, false) == veyra::engine::PushLowDelayState::NotHere);
+}
+
 TEST(predict_flow_extent_is_a_quarter_within_limits) {
     const auto k = pushPredictFlowExtent(3840, 2160);
     CHECK(k.width == 960 && k.height == 540);
     const auto q = pushPredictFlowExtent(2560, 1440);
     CHECK(q.width == 640 && q.height == 360);
     const auto t = pushPredictFlowExtent(64, 40);
-    CHECK(t.width == 32 && t.height == 32);
+    CHECK(t.width == 64 && t.height == 40 && !pushPredictFidelityExtentOk(t));   // an axis under 64 keeps its own size
+    const auto e2e = pushPredictFlowExtent(160, 90);                             // the e2e fast loop's size
+    CHECK(e2e.width == 64 && e2e.height == 64 && pushPredictFidelityExtentOk(e2e));
+    CHECK(pushPredictFidelityExtentOk(pushPredictFlowExtent(3840, 2160)) && pushPredictFidelityExtentOk(pushPredictFlowExtent(256, 144)));
+    // FidelityFX's search needs waves of at least 32 lanes (WARP: 4; NVIDIA: 32; AMD: 32 or 64).
+    CHECK(!pushPredictFidelityWaveOk(4) && !pushPredictFidelityWaveOk(16) && pushPredictFidelityWaveOk(32) && pushPredictFidelityWaveOk(64) && !pushPredictFidelityWaveOk(0));
     const auto odd = pushPredictFlowExtent(1921, 1081);
     CHECK(odd.width == 481 && odd.height == 271);
 }
@@ -274,6 +305,231 @@ TEST(predict_frame_confidence) {
     c.fallback = 150;   // 150 / 400 moving fell back
     CHECK(!pushPredictFrameUsable(c));
     CHECK(pushPredictFrameUsable(c, 0.5));
+}
+
+
+// Package 16, item 2: where a predicted pair's frames take their locked / excluded pixels from.
+TEST(predict_hud_lock_and_boxes_compose_from_the_frame_followed) {
+    for (unsigned parity = 0; parity < 2; ++parity) {
+        const auto i = pushPredictComposeSources(false, parity);   // I(2/3) and every interpolated frame: A
+        CHECK(i.hudHeld == 1 - parity && i.exclusionRaw == 1 - parity);
+        const auto p = pushPredictComposeSources(true, parity);    // P: B (the copy of it for HUD Lock, raw B for boxes)
+        CHECK(p.hudHeld == kPushPredictHeldCopy && p.exclusionRaw == parity);
+    }
+}
+
+// Package 16, item 2: the test-only check's CPU side (PushPredictCheck.h), on made-up pictures.
+TEST(predict_check_counts_fully_locked_and_excluded_pixels_only) {
+    constexpr std::uint32_t W = 16, H = 8, pitch = W * 4;
+    std::vector<std::uint8_t> state(std::size_t(pitch) * H, 0), p(std::size_t(pitch) * H, 0), b(std::size_t(pitch) * H, 0);
+    const auto put = [&](std::vector<std::uint8_t>& v, std::uint32_t x, std::uint32_t y, std::uint32_t w) { std::memcpy(v.data() + y * pitch + x * 4, &w, 4); };
+    const auto half = [](float f) -> std::uint16_t { return f >= 1.0f ? 0x3C00 : f >= 0.96f ? 0x3BAE : f >= 0.5f ? 0x3800 : f >= 0.2f ? 0x3266 : 0; };
+    // Columns 2..5 locked (still 1.0, contrast 0.2: above 2.5 x 0.04); column 6 still 0.5 (feathered, not counted).
+    for (std::uint32_t y = 0; y < H; ++y)
+        for (std::uint32_t x = 0; x < W; ++x) {
+            const std::uint16_t v[2] = {half(x >= 2 && x <= 5 ? 1.0f : x == 6 ? 0.5f : 0.0f), half(x >= 2 && x <= 5 ? 0.2f : 0.0f)};
+            std::memcpy(state.data() + y * pitch + x * 4, v, 4);
+            put(b, x, y, 0xFF102030u);
+            put(p, x, y, 0xFF102030u);
+        }
+    CHECK(std::fabs(pushHalfToFloat(0x3BAE) - 0.95996f) < 1e-4f && pushHalfToFloat(0x3C00) == 1.0f && pushHalfToFloat(0x3266) > 0.199f);
+    PushHudLockStateView view{state.data(), pitch, W, H, 0};
+    PushPredictBoxes none;
+    auto c = pushPredictCheck(p.data(), pitch, b.data(), pitch, W, H, false, view, none);
+    CHECK(c.hudLocked == 4 * H && c.hudLockMismatch == 0 && c.excluded == 0);
+    put(p, 3, 2, 0x00102030u);   // alpha differs only: not a mismatch
+    put(p, 4, 2, 0xFF102031u);   // a locked pixel differs
+    put(p, 6, 2, 0xFF999999u);   // a feathered pixel differs: not counted
+    put(p, 12, 2, 0xFF999999u);  // a moving pixel differs: not counted
+    c = pushPredictCheck(p.data(), pitch, b.data(), pitch, W, H, false, view, none);
+    CHECK(c.hudLocked == 4 * H && c.hudLockMismatch == 1);
+    // A box over x 8..16 (normalised), feather 2: fully inside where at least 2 px from every edge -> x 10..13, y 2..5.
+    PushPredictBoxes box; box.enabled = true; box.feather = 2; box.regions[0] = {0.5f, 0.0f, 1.0f, 1.0f};
+    c = pushPredictCheck(p.data(), pitch, b.data(), pitch, W, H, false, PushHudLockStateView{}, box);
+    CHECK(c.hudLocked == 0 && c.excluded == 4 * 4 && c.exclusionMismatch == 1);   // (12, 2)
+    // An ellipse is sent with left and right swapped.
+    PushPredictBoxes ellipse; ellipse.enabled = true; ellipse.feather = 0; ellipse.regions[0] = {1.0f, 0.0f, 0.0f, 1.0f};
+    CHECK(pushExclusionFull(ellipse, 8, 4, W, H) && !pushExclusionFull(ellipse, 0, 0, W, H));
+    // 10-bit: the two alpha bits are ignored, every colour bit counts.
+    std::vector<std::uint8_t> p10(std::size_t(pitch) * H, 0), b10(std::size_t(pitch) * H, 0);
+    put(p10, 3, 3, 0xC0000001u); put(b10, 3, 3, 0x00000001u); put(p10, 4, 3, 0x20000000u);
+    c = pushPredictCheck(p10.data(), pitch, b10.data(), pitch, W, H, true, view, none);
+    CHECK(c.hudLockMismatch == 1);
+    // Due: switch, a predicted pair, nothing in flight, the 1st, 33rd, ... predicted pair.
+    CHECK(pushPredictCheckDue(true, true, false, 1) && pushPredictCheckDue(true, true, false, 1 + kPushPredictCheckEvery));
+    CHECK(!pushPredictCheckDue(false, true, false, 1) && !pushPredictCheckDue(true, false, false, 1) && !pushPredictCheckDue(true, true, true, 1) &&
+          !pushPredictCheckDue(true, true, false, 2));
+}
+
+// Package 16, item 4: stage times from the pass's five timestamps, the 10 s window's percentiles and its log text.
+TEST(predict_stage_times_from_timestamps) {
+    const std::uint64_t ticks[kPushPredictStamps] = {1000000, 1100000, 3100000, 3600000, 3700000};   // a 1 MHz counter
+    const auto ms = pushPredictStagesFromTicks(ticks, 1000000);
+    CHECK(std::fabs(ms[0] - 100.0) < 1e-9 && std::fabs(ms[1] - 2000.0) < 1e-9 && std::fabs(ms[2] - 500.0) < 1e-9 &&
+          std::fabs(ms[3] - 100.0) < 1e-9 && std::fabs(ms[4] - 2700.0) < 1e-9);
+    CHECK(pushPredictStagesFromTicks(ticks, 0)[4] < 0);
+    const std::uint64_t backwards[kPushPredictStamps] = {5, 4, 6, 7, 8};
+    CHECK(pushPredictStagesFromTicks(backwards, 1000)[0] < 0 && pushPredictStagesFromTicks(backwards, 1000)[4] >= 0);
+    PushPredictCostWindow w;
+    CHECK(w.percentile(PushPredictStage::Total, 0.5) < 0);
+    for (int i = 1; i <= 100; ++i) { PushPredictStageMs m; m.fill(-1.0); m[4] = double(i); m[1] = double(i) / 2; w.add(1000000000LL + i * 333667LL, m); }
+    CHECK(w.size() == 100 && w.percentile(PushPredictStage::Total, 0.5) == 50.0 && w.percentile(PushPredictStage::Total, 0.95) == 95.0 &&
+          w.percentile(PushPredictStage::Total, 0.99) == 99.0 && w.percentile(PushPredictStage::Flow, 0.95) == 47.5);
+    CHECK(w.percentile(PushPredictStage::Warp, 0.5) < 0);   // never measured
+    PushPredictStageMs late; late.fill(1.0);
+    w.add(1000000000LL + 100 * 333667LL + PushPredictCostWindow::kWindow100ns + 1, late);   // 10 s later: the old samples go
+    CHECK(w.size() == 1);
+    CHECK(pushPredictCostText(w) == "samples:1,downsample:1.00/1.00/1.00,flow:1.00/1.00/1.00,warp:1.00/1.00/1.00,verdict:1.00/1.00/1.00,total:1.00/1.00/1.00");
+}
+
+// Package 16, item 4 (d): the float-only flow's start-up check (CPU side) and the choice.
+TEST(predict_float_flow_self_check_and_choice) {
+    constexpr std::uint32_t W = 8, H = 4;
+    const auto half = [](float f) -> std::uint16_t {   // exact for the small values used here
+        if (f == 0.0f) return 0;
+        std::uint16_t sign = f < 0 ? 0x8000 : 0; float a = std::fabs(f); int e = 0;
+        while (a >= 2.0f) { a /= 2; ++e; } while (a < 1.0f) { a *= 2; --e; }
+        return std::uint16_t(sign | ((e + 15) << 10) | std::uint16_t(std::lround((a - 1.0f) * 1024.0f)));
+    };
+    struct Flow { std::vector<std::uint8_t> motion, trust; };
+    const auto make = [&](float vx, float vy, std::uint8_t t, int untrustedColumns) {
+        Flow f; f.motion.resize(W * H * 4); f.trust.resize(W * H);
+        for (std::uint32_t y = 0; y < H; ++y)
+            for (std::uint32_t x = 0; x < W; ++x) {
+                const std::uint8_t tt = int(x) < untrustedColumns ? 0 : t;
+                const float scale = float(tt) / 255.0f;
+                const std::uint16_t h[2] = {half(vx * scale), half(vy * scale)};
+                std::memcpy(f.motion.data() + (y * W + x) * 4, h, 4);
+                f.trust[y * W + x] = tt;
+            }
+        return f;
+    };
+    const auto view = [&](const Flow& f) { return PushFlowView{f.motion.data(), W * 4, f.trust.data(), W}; };
+    const Flow strict = make(-3.0f, -1.0f, 255, 1), same = make(-3.0f, -1.0f, 255, 1);
+    auto a = pushFlowAgreement(view(strict), view(same), W, H, -3.0f, -1.0f);
+    CHECK(a.pass && a.trustDisagree == 0.0 && a.meanDiffPx < 1e-3 && a.strictErrorPx < 1e-3 && a.strictTrusted == 7.0 / 8.0);
+    const Flow off = make(-2.5f, -1.0f, 255, 1);   // half a pixel off everywhere: fails the mean difference
+    a = pushFlowAgreement(view(strict), view(off), W, H, -3.0f, -1.0f);
+    CHECK(!a.pass && a.meanDiffPx > 0.4);
+    const Flow lessTrusted = make(-3.0f, -1.0f, 255, 2);   // one column more untrusted: 1 / 8 of the pixels disagree
+    a = pushFlowAgreement(view(strict), view(lessTrusted), W, H, -3.0f, -1.0f);
+    CHECK(!a.pass && std::fabs(a.trustDisagree - 0.125) < 1e-9);
+    const Flow nothing = make(0.0f, 0.0f, 0, 0);
+    CHECK(!pushFlowAgreement(view(nothing), view(nothing), W, H, -3.0f, -1.0f).pass);   // the strict flow found nothing: no float
+    CHECK(pushPredictFlowChoiceFrom(std::string_view("float")) == PushPredictFlowChoice::Float &&
+          pushPredictFlowChoiceFrom(std::wstring_view(L"strict")) == PushPredictFlowChoice::Strict &&
+          pushPredictFlowChoiceFrom(std::string_view("Float")) == PushPredictFlowChoice::Auto);
+}
+
+// Crash containment of the flow self-check (gate run 45526571434): what may run, and what is used.
+TEST(predict_flow_check_plan_and_use) {
+    using C = PushPredictFlowChoice; using U = PushFlowUse; using B = PushFlowCheckBlock;
+    // Default: FidelityFX only (never GPU DIS); GPU DIS only when chosen, the strict build only with FP64.
+    auto p = pushFlowCheckPlan(C::Auto, true, true, B::None);
+    CHECK(p.fidelity && !p.strict && !p.flt && p.block == B::None);
+    p = pushFlowCheckPlan(C::Auto, true, false, B::None);
+    CHECK(!p.fidelity && !p.strict && !p.flt);                    // a build without FidelityFX: nothing (no GPU DIS fallback)
+    p = pushFlowCheckPlan(C::FidelityFx, false, true, B::None);
+    CHECK(p.fidelity && !p.strict && !p.flt);
+    p = pushFlowCheckPlan(C::Strict, true, true, B::None);
+    CHECK(p.strict && !p.flt && !p.fidelity);
+    p = pushFlowCheckPlan(C::Strict, false, true, B::None);
+    CHECK(!p.strict && !p.flt && !p.fidelity);                    // forced strict without FP64: nothing to run
+    p = pushFlowCheckPlan(C::Float, true, true, B::None);
+    CHECK(p.flt && !p.strict && !p.fidelity);
+    for (B b : {B::StoppedInsideLastTime, B::FailedThisProcess}) {
+        p = pushFlowCheckPlan(C::Auto, true, true, b);
+        CHECK(!p.strict && !p.flt && !p.fidelity && p.block == b);
+    }
+    // A flow is used only after its own self-run completed and found the known motion.
+    const auto fid = pushFlowCheckPlan(C::Auto, true, true, B::None), flt = pushFlowCheckPlan(C::Float, true, true, B::None),
+               st = pushFlowCheckPlan(C::Strict, true, true, B::None), none = pushFlowCheckPlan(C::Auto, true, true, B::FailedThisProcess);
+    CHECK(pushFlowUse(fid, true, true) == U::FidelityFx && pushFlowUse(fid, true, false) == U::None && pushFlowUse(fid, false, true) == U::None);
+    CHECK(pushFlowUse(flt, true, true) == U::Float && pushFlowUse(st, true, true) == U::Strict && pushFlowUse(none, true, true) == U::None);
+    PushFlowAgreement a; a.strictTrusted = 0.9; a.floatErrorPx = 0.05;
+    CHECK(pushFlowFoundMotion(a));
+    a.floatErrorPx = 0.6; CHECK(!pushFlowFoundMotion(a));
+    a.floatErrorPx = 0.05; a.strictTrusted = 0.4; CHECK(!pushFlowFoundMotion(a));
+    CHECK(std::string_view(pushFlowUseName(U::None)) == "none" && std::string_view(pushFlowUseName(U::FidelityFx)) == "fidelityfx");
+    CHECK(pushPredictFlowChoiceFrom(std::string_view("fidelityfx")) == C::FidelityFx && std::string_view(pushPredictFlowChoiceName(C::Auto)) == "auto");
+    CHECK(pushPredictFlowChoiceFrom(std::wstring_view(L"zero")) == C::Zero && std::string_view(pushPredictFlowChoiceName(C::Zero)) == "zero");
+    p = pushFlowCheckPlan(C::Zero, true, true, B::None);
+    CHECK(!p.fidelity && !p.strict && !p.flt);   // the test-only zero source runs no self-check (nothing to check)
+}
+
+TEST(predict_flow_check_windows) {
+    const auto w = pushFlowCheckWindows(3840, 2160, 960, 540);
+    CHECK(w[0].vx == 0 && w[0].vy == 0 && w[1].vx == 4 && w[1].vy == 4 && w[2].vx == 16 && w[2].vy == -16);
+    CHECK(w[3].vx == -48 && w[3].vy == 16 && w[4].vx == 120 && w[4].vy == 0 && w[5].vx == -16 && w[5].vy == -4);
+    CHECK(w[0].x0 == 0 && w[2].x1 == 3840 && w[3].y0 == 1080 && w[5].y1 == 2160);   // 3 x 2, covering the picture
+    bool both = false;   // both signs on both axes among the moving windows
+    { bool px = false, nx = false, py = false, ny = false; for (const auto& o : w) { px |= o.vx > 0; nx |= o.vx < 0; py |= o.vy > 0; ny |= o.vy < 0; } both = px && nx && py && ny; }
+    CHECK(both);
+    const auto t = pushFlowCheckWindows(256, 144, 64, 64);   // a small test size: speeds capped at 1/8 of a window
+    CHECK(t[4].flowVx == 2 && t[4].vx == 8 && t[3].flowVx == -2 && t[1].flowVx == 1);
+    CHECK(pushFlowCheckMargin(w[4], 32.0) == int(std::ceil(120.0 * 4.0 / 3.0 + 32.0)) + 4);
+    CHECK(pushFlowWindowPass(w[0], 0.5, 9.0) && !pushFlowWindowPass(w[0], 2.0, 9.0));
+    CHECK(pushFlowWindowPass(w[4], 4.0, 9.0) && !pushFlowWindowPass(w[4], 5.0, 9.0) && !pushFlowWindowPass(w[4], 0.0, 0.0));
+    CHECK(std::fabs(pushPsnr(1.0) - 48.13) < 0.01 && pushPsnr(0.0) == 99.0);
+    CHECK(std::fabs(pushFlowCheckGrey(0, 0) - 128.0 - 25.0 * 0.0) < 1e-9);
+}
+
+TEST(predict_flow_check_marker) {
+    using B = PushFlowCheckBlock;
+    const std::string_view id = "01dc5e7a9b3c0000-0000000002a1b000";
+    CHECK(pushFlowCheckMarker("", id) == B::None);
+    CHECK(pushFlowCheckMarker("running 01dc5e7a9b3c0000-0000000002a1b000\n", id) == B::StoppedInsideLastTime);
+    CHECK(pushFlowCheckMarker("failed 01dc5e7a9b3c0000-0000000002a1b000\r\n", id) == B::StoppedInsideLastTime);
+    CHECK(pushFlowCheckMarker("failed 01dc5e7a9b3c0000-0000000002a1b001\n", id) == B::None);   // another program file (an update)
+    CHECK(pushFlowCheckMarker("running 01dc5e7a9b3c0000-0000000002a1b001\n", id) == B::None);
+    CHECK(pushFlowCheckMarker("running ", id) == B::None && pushFlowCheckMarker("garbage", id) == B::None);
+}
+
+// Package 16, item 5: the order in which a FrameIndex-2-only request is tried, and when it stops.
+// Review 1 SHOULD 6: the ladder tried again after a real off -> on (at most once in 10 s), and once 2 s after a refusal
+// within the first second of a build.
+TEST(predict_vfg_ladder_retry_rules) {
+    CHECK(pushVfgLadderResetDue(5000, -1) && !pushVfgLadderResetDue(14999, 5000) && pushVfgLadderResetDue(15000, 5000));
+    CHECK(pushVfgEarlyRefusal(0, false) && pushVfgEarlyRefusal(999, false) && !pushVfgEarlyRefusal(1000, false));
+    CHECK(!pushVfgEarlyRefusal(10, true) && !pushVfgEarlyRefusal(-5, false));
+    CHECK(kPushVfgEarlyRetryMs == 2000);
+}
+
+TEST(predict_vfg_alone_ladder) {
+    PushVfgAloneLadder a;
+    CHECK(a.current() == PushVfgAloneMode::Direct);
+    CHECK(a.outcome(true) == PushVfgAloneMode::Direct && a.settled());           // accepted: kept
+    PushVfgAloneLadder b;
+    CHECK(b.outcome(false) == PushVfgAloneMode::Timestep);
+    CHECK(b.outcome(false) == PushVfgAloneMode::IndexOneThenTwo);
+    CHECK(b.outcome(true) == PushVfgAloneMode::IndexOneThenTwo && b.settled());
+    CHECK(b.outcome(false) == PushVfgAloneMode::Refused);                       // a working mode that later fails: stop
+    CHECK(b.outcome(true) == PushVfgAloneMode::Refused);
+    PushVfgAloneLadder c(false);                                                 // no NvVFX_SetF32: no Timestep step
+    CHECK(c.outcome(false) == PushVfgAloneMode::IndexOneThenTwo && c.outcome(false) == PushVfgAloneMode::Refused);
+    CHECK(std::fabs(pushVfgTimestep(2, 3) - 2.0f / 3.0f) < 1e-7f && pushVfgTimestep(1, 0) == 0.0f);
+    CHECK(std::string_view(pushVfgAloneModeName(PushVfgAloneMode::IndexOneThenTwo)) == "index1-then-2");
+}
+
+// Release review REL16 MUST 3: the self-check's budget is enforced by construction: each frame waits at most what is left
+// (at least the floor), so a frame that never finishes ends the check by budget + floor.
+TEST(predict_flow_check_budget_bounds_every_wait) {
+    CHECK(pushFlowCheckWaitMs(0.0, false) == kPushFlowCheckBudgetMs);
+    CHECK(pushFlowCheckWaitMs(2900.0, false) == kPushFlowCheckWaitFloorMs);   // 100 ms left: the floor
+    CHECK(pushFlowCheckWaitMs(1000.0, false) == 2000.0);
+    CHECK(pushFlowCheckWaitMs(5000.0, false) == kPushFlowCheckWaitFloorMs);
+    CHECK(pushFlowCheckWaitMs(0.0, true) == 10000.0);                        // the test-only mechanics switch: no budget
+    // The worst case: a card that reaches the last frame at any time t <= budget and then never finishes is stopped at
+    // t + wait(t) <= budget + floor.
+    for (double t = 0.0; t <= kPushFlowCheckBudgetMs; t += 50.0)
+        CHECK(t + pushFlowCheckWaitMs(t, false) <= kPushFlowCheckBudgetMs + kPushFlowCheckWaitFloorMs + 1e-9);
+    CHECK(pushFlowCheckOverBudget(3000.1) && !pushFlowCheckOverBudget(3000.0));
+    // REL16 delta MUST 2: a frame still in flight at the budget is a failure (marker "failed", nothing cached) and keeps
+    // the objects it uses; a check that only ran over the budget between frames is neither.
+    CHECK(pushFlowCheckFailed(false, false, false, true) && pushFlowCheckGpuMayStillUse(false, false, true));
+    CHECK(pushFlowCheckFailed(true, false, false, false) && pushFlowCheckGpuMayStillUse(true, false, false));
+    CHECK(pushFlowCheckFailed(false, false, true, false) && !pushFlowCheckGpuMayStillUse(false, false, false));   // a CPU fault
+    CHECK(!pushFlowCheckFailed(false, false, false, false));
 }
 
 }  // namespace predict_tests
