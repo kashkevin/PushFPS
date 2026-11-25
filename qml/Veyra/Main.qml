@@ -252,6 +252,9 @@ Window {
         case "watch":
             // PushFPS video playback mode: the picture beside its controls.
             return watchPage.videoViewport
+        case "kbm":
+            // PushFPS Mouse & Keyboard page: the game picture beside the calibration wizard's step, else none.
+            return kbmPage.videoViewport
         default:
             return { x: 0, y: 0, width: 0, height: 0 }
         }
@@ -329,6 +332,13 @@ Window {
             onVideoViewportChanged: if (root.page === "live" && !root.fullscreen) videoHost.syncRect()
             onRequestPage: p => root.goPage(p)
             onRequestLayout: id => { dialogs.layoutScene = id; dialogs.open("layout") }
+        }
+        PushKbmPage {
+            id: kbmPage
+            pageId: "kbm"
+            home: pages
+            onVideoViewportChanged: if (root.page === "kbm" && !root.fullscreen) videoHost.syncRect()
+            onRequestPage: p => root.goPage(p)
         }
         SettingsPage { id: settingsPage; pageId: "set"; home: pages; onRequestPage: p => root.goPage(p) }
     }
@@ -906,8 +916,29 @@ Window {
         z: 31
         x: videoHost.x + 12
         y: videoHost.y + 12
+        videoOrigin: Qt.point(videoHost.x, videoHost.y)   // stream "present" R1: drawn in the picture (PushInPicture.js)
         visible: wanted && stats.running === true && videoHost.width > 200 && root.page !== "home" && root.page !== "set"
     }
+    // PushFPS: the optional statistics overlay (quick setup switch, off by default), under the badge's place.
+    PushStatsOverlay {
+        z: 31
+        x: videoHost.x + 12
+        y: videoHost.y + 50
+        videoOrigin: Qt.point(videoHost.x, videoHost.y)   // stream "present" R1: drawn in the picture (PushInPicture.js)
+        visible: wanted && stats.running === true && videoHost.width > 320 && videoHost.height > 260 && root.page !== "home" && root.page !== "set"
+    }
+    // PushFPS: network diagnostics of a PS5 stream (with the overlay, only when [slipstream-net] runs), top right.
+    PushNetDiagnostics {
+        z: 31
+        x: videoHost.x + videoHost.width - width - 12
+        y: videoHost.y + 50
+        videoOrigin: Qt.point(videoHost.x, videoHost.y)   // stream "present" R1: drawn in the picture (PushInPicture.js)
+        visible: wanted && available && videoHost.width > 760 && videoHost.height > 420 && root.page !== "home" && root.page !== "set"
+    }
+
+    // PushFPS performance modes: keeps the chosen mode right for the source that plays (idle while no
+    // mode is chosen). Its notices use the same toast as the bridge's.
+    PushModeDriver { onNotice: text => toast.show(text, false) }
 
     // RivaTuner, NVIDIA's overlay or GamePP started after Veyra (QmlPlayerBridge): RTSS's
     // OSD is kept out until a restart; the other two cannot be, and froze 2.0 in the field.

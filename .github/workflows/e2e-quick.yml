@@ -1,0 +1,244 @@
+# Fast loop for the "Lower delay" end-to-end engine test (docs/drafts/E2E_ENGINE_TEST.md): builds ONLY the engine and the
+# test host veyra_lowdelay_e2e_tests (no Qt app, no streaming sources, no packaging) and runs tests/integration/lowdelay_e2e.py
+# on WARP. Triggered only by pushes to check branches ck/e2e*. The real gate stays the step in build-windows.yml.
+# Dependencies and configure options follow build-windows.yml (same pins, same engine with the streaming sources compiled in);
+# differences: no Qt app (VEYRA_BUILD_QML_UI off), no PushFlow runtime, the optional NVOF headers not fetched.
+name: e2e-quick
+
+on:
+  push:
+    branches: ['ck/e2e*']
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: 'Comma-separated run names for lowdelay_e2e.py (empty: all)'
+        required: false
+        default: ''
+      expect:
+        description: 'p15 or fixed'
+        required: false
+        default: 'p15'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-quick-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  VCPKG_COMMIT: 30ef65cad98f08e7197c9a1656fbd871bcb72f2d
+  DLSS_TAG: v310.7.0
+  NVCODEC_TAG: n13.0.19.0
+  CUDART_ZIP: https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/windows-x86_64/cuda_cudart-windows-x86_64-12.9.79-archive.zip
+  XESS_TAG: v3.0.2
+  FFX1_TAG: v1.1.4
+  FFX2_TAG: v2.3.0
+  AMF_COMMIT: 57ee0cfb0e1a08d9041f77435653794c1b012be0
+  CHIAKI_COMMIT: 0e16950165f06e5c3291537c2eeba6e852be7120
+  MOONLIGHT_COMMIT: f900dd4767759c7b9d0e93bcea666b55c69ea62f
+
+jobs:
+  e2e:
+    runs-on: windows-2022
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DEPS: D:\deps
+      BUILD: D:\b
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: SDK headers (DLSS, NVENC, CUDA driver header, XeSS, FidelityFX, AMF)
+        shell: bash
+        run: |
+          set -e
+          mkdir -p /d/deps && cd /d/deps
+          GIT_LFS_SKIP_SMUDGE=1 git clone -q --depth 1 --branch "$DLSS_TAG" --filter=blob:none --sparse https://github.com/NVIDIA/DLSS.git dlss
+          git -C dlss sparse-checkout set include lib/Windows_x86_64/x64
+          git clone -q --depth 1 --branch "$NVCODEC_TAG" https://github.com/FFmpeg/nv-codec-headers.git nv-codec-headers
+          curl -sSfL "$CUDART_ZIP" -o cudart.zip && unzip -q cudart.zip -d cudart && mv cudart/*/ cudart-root
+          gh release download "$XESS_TAG" -R intel/xess -p '*.zip' -O xess.zip && unzip -q xess.zip -d xess
+          GIT_LFS_SKIP_SMUDGE=1 git clone -q --depth 1 --branch "$FFX2_TAG" --filter=blob:none --sparse https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK.git ffx2
+          git -C ffx2 sparse-checkout set Kits/FidelityFX/api/include Kits/FidelityFX/framegeneration/include Kits/FidelityFX/upscalers/include
+          gh release download "$FFX1_TAG" -R GPUOpen-LibrariesAndSDKs/FidelityFX-SDK -p '*.zip' -O ffx1.zip && unzip -q ffx1.zip -d ffx1
+          git init -q amf && git -C amf remote add origin https://github.com/GPUOpen-LibrariesAndSDKs/AMF.git
+          git -C amf fetch -q --depth 1 --filter=blob:none origin "$AMF_COMMIT"
+          git -C amf sparse-checkout set amf/public/include && git -C amf checkout -q FETCH_HEAD
+
+      - name: Restore the FidelityFX 1.1.4 build
+        id: ffx-cache
+        uses: actions/cache@v4
+        with:
+          path: D:\deps\ffx1\sdk\bin
+          key: e2e-ffx1-${{ env.FFX1_TAG }}-v1
+
+      - name: Build FidelityFX 1.1.4 optical flow (static)
+        if: steps.ffx-cache.outputs.cache-hit != 'true'
+        working-directory: D:\deps\ffx1\sdk
+        run: |
+          cmake -S . -B build -A x64 -DFFX_API_BACKEND=DX12_X64 -DFFX_ALL=OFF -DFFX_OF=ON -DFFX_AUTO_COMPILE_SHADERS=1 `
+            -DCMAKE_POLICY_DEFAULT_CMP0091=NEW -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build --config Release --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Locate SDK roots
+        shell: bash
+        run: |
+          xess=$(dirname "$(dirname "$(dirname "$(find /d/deps/xess -name xefg_swapchain_d3d12.h | head -1)")")")
+          ffx1lib=$(find /d/deps/ffx1/sdk/bin -iname 'ffx_opticalflow_x64.lib' | head -1)
+          ffx1=$(dirname "$(dirname "$(dirname "$ffx1lib")")")
+          { echo "XESS_ROOT=$(cygpath -m "$xess")"; echo "FFX1_ROOT=$(cygpath -m "$ffx1")"; } >> "$GITHUB_ENV"
+
+      # build-windows.yml's binary cache (FFmpeg takes ~25 min to build); this workflow saves its own under the same prefix.
+      - name: Restore vcpkg binaries
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: D:\deps\vcpkg-binary
+          key: vcpkg-bin-${{ env.VCPKG_COMMIT }}-v2-${{ github.run_id }}
+          restore-keys: vcpkg-bin-${{ env.VCPKG_COMMIT }}-v2-
+
+      - name: FFmpeg 9.0.1 (vcpkg at the pinned baseline)
+        working-directory: D:\deps
+        run: |
+          git init -q vcpkg; git -C vcpkg remote add origin https://github.com/microsoft/vcpkg.git
+          git -C vcpkg fetch -q --depth 1 origin $env:VCPKG_COMMIT; git -C vcpkg checkout -q FETCH_HEAD
+          & vcpkg\bootstrap-vcpkg.bat -disableMetrics
+          New-Item -ItemType Directory -Force vcpkg-binary | Out-Null
+          $env:VCPKG_DEFAULT_BINARY_CACHE = "$env:DEPS\vcpkg-binary"
+          & vcpkg\vcpkg.exe install "ffmpeg[core,avcodec,avformat,avfilter,swresample,swscale]:x64-windows" --clean-after-build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Streaming dependencies (static, for PS5 Remote Play, Moonlight and Xbox)
+        working-directory: D:\deps
+        run: |
+          $env:VCPKG_DEFAULT_BINARY_CACHE = "$env:DEPS\vcpkg-binary"
+          # The same static tree Veyra uses (scripts/xbox/dependency-lock.json): one OpenSSL for Chiaki,
+          # Moonlight and libdatachannel; libjuice with Veyra's reviewed overlay.
+          & vcpkg\vcpkg.exe install --classic --triplet x64-windows-static "--x-install-root=$env:DEPS\stream-installed" `
+            "--overlay-ports=$env:GITHUB_WORKSPACE\scripts\xbox\vcpkg-overlay" `
+            openssl opus json-c libevent miniupnpc protobuf "sdl3" "libdatachannel[srtp,ws]" nlohmann-json pkgconf zlib --clean-after-build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem "$env:DEPS\stream-installed\x64-windows-static\lib" -Filter *.lib | Format-Table Name, Length
+
+      - name: Save vcpkg binaries
+        if: always() && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: D:\deps\vcpkg-binary
+          key: vcpkg-bin-${{ env.VCPKG_COMMIT }}-v2-${{ github.run_id }}
+
+      - name: Streaming sources (Chiaki-ng with Veyra's patches, moonlight-common-c)
+        working-directory: D:\deps
+        run: |
+          git config --global core.autocrlf false
+          git config --global advice.detachedHead false
+          # Chiaki-ng: a clean pinned checkout, and a worktree with scripts/remoteplay/patches 0001-0010 applied in order.
+          git clone -q https://github.com/streetpea/chiaki-ng.git chiaki-clean
+          git -C chiaki-clean checkout -q $env:CHIAKI_COMMIT
+          git -C chiaki-clean submodule update -q --init --recursive
+          git -C chiaki-clean worktree add -q --detach "$env:DEPS\chiaki-stage" $env:CHIAKI_COMMIT
+          git -C chiaki-stage submodule update -q --init --recursive
+          foreach ($p in '0001-chiaki-msvc-vla-compat.patch', '0002-chiaki-video-metadata.patch', '0003-chiaki-feedback-history.patch', '0004-chiaki-transport-tuning.patch', '0005-chiaki-reorder-queue-drop.patch', '0006-chiaki-takion-send-buffer-teardown.patch', '0007-chiaki-http-header-bounds.patch', '0008-chiaki-login-pin-log.patch', '0009-chiaki-send-buffer-size-switch.patch', '0010-chiaki-send-buffer-counters.patch') {
+            git -C chiaki-stage apply "$env:GITHUB_WORKSPACE\scripts\remoteplay\patches\$p"
+            if ($LASTEXITCODE -ne 0) { Write-Host "::error::$p does not apply"; exit 1 }
+          }
+          python "$env:GITHUB_WORKSPACE\scripts\remoteplay\verify-chiaki-stage.py" --stage "$env:DEPS\chiaki-stage" --clean "$env:DEPS\chiaki-clean"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # moonlight-common-c with its pinned ENet and nanors.
+          git clone -q https://github.com/moonlight-stream/moonlight-common-c.git moonlight-common-c
+          git -C moonlight-common-c checkout -q $env:MOONLIGHT_COMMIT
+          git -C moonlight-common-c submodule update -q --init --recursive
+          python "$env:GITHUB_WORKSPACE\scripts\moonlight\verify-moonlight-stage.py" --source "$env:DEPS\moonlight-common-c" --lock "$env:GITHUB_WORKSPACE\scripts\moonlight\dependency-lock.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Chiaki's protocol buffers are generated by nanopb's Python generator, which also runs protoc
+          # (from the static tree) to build its own descriptor module.
+          python -m pip install -q protobuf
+          "$env:DEPS\stream-installed\x64-windows-static\tools\protobuf" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
+      - name: Configure (engine only)
+        run: |
+          $ffmpeg = "$env:DEPS\vcpkg\installed\x64-windows"
+          $stream = "$env:DEPS\stream-installed\x64-windows-static"
+          $env:PKG_CONFIG_PATH = "$stream\lib\pkgconfig"
+          # As build-windows.yml (the engine with Remote Play, Moonlight and Xbox compiled in: the shipped engine; it does
+          # not build with them off), without the Qt app and PushFlow.
+          cmake -S . -B $env:BUILD -G Ninja -DCMAKE_BUILD_TYPE=Release `
+            "-DCMAKE_PREFIX_PATH=$ffmpeg;$stream" `
+            -DVEYRA_BUILD_QML_UI=OFF -DVEYRA_ENABLE_EXPERIMENTAL_DLSSNR=ON -DVEYRA_ENABLE_D3D12_DEBUG=OFF `
+            -DVEYRA_ENABLE_REMOTEPLAY=ON -DVEYRA_ENABLE_MOONLIGHT=ON -DVEYRA_ENABLE_XBOX=ON `
+            "-DVEYRA_RP_CHIAKI_SOURCE_DIR=$env:DEPS\chiaki-stage" "-DVEYRA_RP_CHIAKI_VERIFY_DIR=$env:DEPS\chiaki-clean" `
+            "-DVEYRA_MOONLIGHT_SOURCE_DIR=$env:DEPS\moonlight-common-c" `
+            "-DPROTOC=$stream\tools\protobuf\protoc.exe" "-DPKG_CONFIG_EXECUTABLE=$stream\tools\pkgconf\pkgconf.exe" `
+            -DOPENSSL_USE_STATIC_LIBS=ON -DOPENSSL_MSVC_STATIC_RT=ON `
+            "-DVEYRA_DISPLAY_VERSION=2.1.5-pushfps.e2e" -DSLIPSTREAM_BUILD=ON `
+            "-DVEYRA_FFMPEG_ROOT=$ffmpeg" `
+            "-DVEYRA_DLSS_SDK_ROOT=$env:DEPS\dlss" `
+            "-DVEYRA_NVENC_HEADERS_ROOT=$env:DEPS\nv-codec-headers" `
+            "-DVEYRA_CUDA_DRIVER_INCLUDE_DIR=$env:DEPS\cudart-root\include" `
+            "-DVEYRA_XESS_ROOT=$env:XESS_ROOT" `
+            "-DVEYRA_FIDELITYFX_ROOT=$env:FFX1_ROOT" `
+            "-DVEYRA_FIDELITYFX2_ROOT=$env:DEPS\ffx2\Kits\FidelityFX" `
+            "-DVEYRA_AMF_SDK_ROOT=$env:DEPS\amf\amf\public"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build the engine test host
+        run: |
+          cmake --build $env:BUILD --target veyra_lowdelay_e2e_tests --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # The D3D12 debug layer (Windows "Graphics Tools") so a device removal on WARP names its cause; optional.
+      - name: Graphics Tools (D3D12 debug layer), optional
+        continue-on-error: true
+        timeout-minutes: 12
+        run: |
+          $cap = Get-WindowsCapability -Online -Name 'Tools.Graphics.DirectX*' | Select-Object -First 1
+          if ($cap -and $cap.State -ne 'Installed') { Add-WindowsCapability -Online -Name $cap.Name | Out-Host }
+          Get-WindowsCapability -Online -Name 'Tools.Graphics.DirectX*' | Format-Table Name, State
+
+      - name: Lower delay end-to-end engine test
+        timeout-minutes: 35
+        env:
+          E2E_RUNS: ${{ inputs.runs }}
+          E2E_EXPECT: ${{ inputs.expect || 'p15' }}
+          E2E_EXPECT_INPUT: ${{ inputs.expect }}
+          E2E_D3D12_DEBUG: '1'
+        run: |
+          $exe = Get-ChildItem $env:BUILD -Recurse -Filter 'veyra_lowdelay_e2e_tests.exe' | Select-Object -First 1
+          $env:PATH = "$($exe.DirectoryName);$env:DEPS\vcpkg\installed\x64-windows\bin;$env:PATH"
+          $out = Join-Path $env:RUNNER_TEMP 'lowdelay-e2e'
+          $runs = @()
+          if ($env:E2E_RUNS) { $runs = @('--runs', $env:E2E_RUNS) }
+          # Extra arguments for an investigation round, committed with it (for example --size 160x90 --runs ...).
+          $argsFile = "$env:GITHUB_WORKSPACE\tests\integration\e2e_quick.args"
+          if (Test-Path $argsFile) { $runs += @((Get-Content $argsFile -Raw).Trim() -split '\s+' | Where-Object { $_ }) ; Write-Host "extra arguments: $runs" }
+          # A gate branch (Package 15 + the fix merged, published as ck/e2e-gate*) is asserted as fixed; others as Package 15.
+          $expect = $env:E2E_EXPECT
+          if (-not $env:E2E_EXPECT_INPUT -and $env:GITHUB_REF_NAME -like '*gate*') { $expect = 'fixed' }
+          Write-Host "branch $env:GITHUB_REF_NAME -> --expect $expect"
+          python "$env:GITHUB_WORKSPACE\tests\integration\lowdelay_e2e.py" --exe $exe.FullName --out $out --expect $expect --seconds 20 @runs
+          $code = $LASTEXITCODE
+          Get-ChildItem $out -Include *.y4m, *.mp4, *.mkv -Recurse | Remove-Item -ErrorAction SilentlyContinue
+          if (Test-Path "$out\summary.json") { Get-Content "$out\summary.json" | Out-Host }
+          Write-Host "lowdelay e2e exit $code"
+          if ($code -ne 0) { exit 1 }
+
+      - name: Upload the logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lowdelay-e2e-quick-${{ github.run_id }}
+          path: ${{ runner.temp }}/lowdelay-e2e
+          if-no-files-found: ignore
+          retention-days: 7
