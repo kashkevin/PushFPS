@@ -28,6 +28,9 @@ struct FrameLease {
     uint64_t readyFence=0,consumerFence=0;
     uint32_t slot=0;
     bool referencesValid=false;
+    bool predicted=false;   // stream "predict": the predicted frame P (our own pass, not the generator's output)
+    bool ownFrame=false;    // stream "ownfg": a predicted pair's I made by PushWarp (not a VFG submission)
+    bool causal=false;      // stream "ownfg", step 4: a prediction of a causal pair B, P, P (its outcome goes to PushCausalLadder)
     bool ready()const{return fenceComplete(readyFenceObject.Get(),readyFence);}
 };
 struct BatchFrame {

@@ -291,6 +291,19 @@ void testExistingChainContracts() {
           check(requiresGraphRebuild(base, next), "switching the LUT rebuilds"); }
         { auto next = base; next.nrPolicy = veyra::pipeline::NrSizePolicy::Native;
           check(requiresGraphRebuild(base, next), "changing the NR size policy rebuilds"); }
+        // Package 15 "Lower delay": the predicted-frame pass exists only with VFG at 3X, so the row rebuilds only there,
+        // and never counts as a live parameter (the engine reads the row itself once a pair).
+        { auto vfg3 = base; vfg3.frameGenerationBackend = FrameGenerationBackend::Vfg; vfg3.multiplier = 3;
+          auto on = vfg3; on.lowDelay = true;
+          check(requiresGraphRebuild(vfg3, on) && requiresGraphRebuild(on, vfg3), "the Lower delay row rebuilds with VFG at 3X, both ways");
+          check(!vfg3.sameVideoConfiguration(on), "with VFG at 3X the row is a new graph configuration (a new revision)");
+          check(on.sameActiveVideoParameters(vfg3), "the row is never a live parameter");
+          auto vfg2 = vfg3; vfg2.multiplier = 2; auto vfg2On = vfg2; vfg2On.lowDelay = true;
+          check(!requiresGraphRebuild(vfg2, vfg2On) && vfg2.sameVideoConfiguration(vfg2On), "at 2X the row changes nothing in the graph");
+          auto dlss3 = base; dlss3.frameGenerationBackend = FrameGenerationBackend::Dlss; dlss3.multiplier = 3; auto dlss3On = dlss3; dlss3On.lowDelay = true;
+          check(!requiresGraphRebuild(dlss3, dlss3On) && dlss3.sameVideoConfiguration(dlss3On), "with another method the row changes nothing in the graph");
+          auto vfg4 = vfg3; vfg4.multiplier = 4; auto vfg4On = vfg4; vfg4On.lowDelay = true;
+          check(requiresGraphRebuild(vfg4, vfg4On), "a 4X ceiling may run 3X pairs: the pass is part of the graph there too"); }
     }
 
     {
