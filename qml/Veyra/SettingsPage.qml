@@ -1346,6 +1346,12 @@ VPage {
                             hint: (veyra.ps5.host || "").length > 0 ? veyra.ps5.host + (veyra.remotePlayState.length > 0 ? " · " + veyra.remotePlayState : "") : qsTr("还没有配对的主机")
                             VButton { text: qsTr("管理"); onClicked: veyra.openPs5Dialog() }
                         }
+                        // PushFPS Mouse & Keyboard page (PushKbmPage.qml).
+                        VRow {
+                            label: qsTr("键盘和鼠标")
+                            hint: qsTr("用键盘和鼠标玩 PS5 串流：开关、按键和校准")
+                            VButton { objectName: "set-kbm-open"; text: qsTr("打开"); onClicked: root.requestPage("kbm") }
+                        }
                         VRow {
                             label: qsTr("画质")
                             VSelect {
@@ -1564,6 +1570,8 @@ VPage {
                             }
                         }
                     }
+                    // PushFPS: the experimental neural layer's runtime (NVIDIA's signed original only).
+                    PushNeuralRuntime { }
                     Text {
                         Layout.fillWidth: true
                         text: qsTr("运行组件均为实验运行时，非 NVIDIA 官方合作或认证。详细哈希见 release-runtime-manifest.json。")

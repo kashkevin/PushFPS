@@ -92,7 +92,10 @@ bool RemotePlaySource::connect(const RemotePlayConnectDesc& desc)
     request_.credentials.registrationKey = desc.request.credentials.registrationKey;
     request_.credentials.sessionKey = desc.request.credentials.sessionKey;
     decodeMode_=desc.decodeMode;decodeDevice_=desc.decodeDevice;hardwareFallback_=false;
+    if(decodeFallback_.keepHardwareOnStreamError()!=desc.keepHardwareOnStreamError)decodeFallback_=remoteplay::HardwareDecodeFallback(desc.keepHardwareOnStreamError);
+    decodeFallback_.connected();
     discardMedia_=desc.controlOnly;
+    clockFollowRate_=desc.clockFollowRate;
 
     origin100ns_ = static_cast<std::uint64_t>(remoteplay::monotonic100ns());
     try {
@@ -102,6 +105,7 @@ bool RemotePlaySource::connect(const RemotePlayConnectDesc& desc)
         veyra::log::error("remoteplay", "invalid queue limits");
         return false;
     }
+    inbox_->wakeOn(wake_);
     auto token = inbox_->begin(static_cast<remoteplay::HostTime>(origin100ns_));
     inbox_->streamProfile(request_.video);
     token_ = token; // Keep a second weak token; backend owns the moved copy.
@@ -138,7 +142,7 @@ bool RemotePlaySource::connect(const RemotePlayConnectDesc& desc)
         info_.color.pixelFormat=pipeline::SourcePixelFormat::P010;info_.color.matrix=pipeline::YuvMatrix::BT2020NCL;
         info_.color.transfer=pipeline::TransferFunction::PQ;info_.color.primaries=pipeline::ColorPrimaries::BT2020;info_.color.displayReferred709=true;
     }
-    clock_.reset(static_cast<remoteplay::HostTime>(origin100ns_), request_.video.fps);
+    clock_.reset(static_cast<remoteplay::HostTime>(origin100ns_), request_.video.fps, clockFollowRate_);
     sequence_ = 0;
     fallbackSourceIndex_ = 0;
     decoderEpoch_ = 1;
@@ -248,7 +252,10 @@ pipeline::FramePacket RemotePlaySource::makePacket(const remoteplay::VideoSample
     packet.arrivalHost100ns = sample.arrival100ns;
     const auto stamp = clock_.video(sourceIndex, sample.arrival100ns);
     if (stamp) {
-        if(sourceIndex%600==0)veyra::log::info("remoteplay-clock",std::format("wireIndex={} ptsMs={:.3f} arrivalMinusPtsMs={:.3f} nominalFps={} (arrival-disciplined local estimate, not PS5 native PTS)",sourceIndex,double(stamp->pts100ns)/10000,double(sample.arrival100ns-static_cast<int64_t>(origin100ns_)-stamp->pts100ns)/10000,info_.averageFps));
+        // wireFps: indexes the console numbered and sent per second of arrival since the previous line (stream
+        // "sync"; -1 = unknown, e.g. the first line after a decoder reset); clockRate: VEYRA_EXP_RP_CLOCK_RATE.
+        if(sourceIndex%600==0){const auto wireFps=clock_.takeWireFps(sourceIndex,sample.arrival100ns);
+            veyra::log::info("remoteplay-clock",std::format("wireIndex={} ptsMs={:.3f} arrivalMinusPtsMs={:.3f} nominalFps={} wireFps={:.3f} clockRate={} (arrival-disciplined local estimate, not PS5 native PTS; wireFps: frames the console sent per second)",sourceIndex,double(stamp->pts100ns)/10000,double(sample.arrival100ns-static_cast<int64_t>(origin100ns_)-stamp->pts100ns)/10000,info_.averageFps,wireFps.value_or(-1.0),clock_.followRate()?1:0));}
         packet.pts = pipeline::Rational{stamp->pts100ns, 10000000};
         packet.duration = pipeline::Rational{stamp->duration100ns, 10000000};
         if (stamp->discontinuity) packet.flags |= static_cast<pipeline::FrameFlags>(pipeline::FrameFlagBits::Discontinuity);
@@ -315,7 +322,7 @@ bool RemotePlaySource::drainDecoder(std::uint64_t sourceIndex, const pipeline::F
         info_.color = packet.colorInfo;
         const bool hardware=decoderFrame_->format==AV_PIX_FMT_D3D12;
         if(sequence_==1||info_.hardwareDecodeActive!=hardware)veyra::log::info("remoteplay-decode",std::format("actual={} pixelFormat={} {}x{} fallback={}",hardware?"D3D12VA":"software",decoderFrame_->format,decoderFrame_->width,decoderFrame_->height,hardwareFallback_));
-        info_.hardwareDecodeActive=hardware;
+        info_.hardwareDecodeActive=hardware;decodeFallback_.decoded(hardware);
 #ifdef _WIN32
         if(sequence_==1&&hardware){
             auto* native=reinterpret_cast<AVD3D12VAFrame*>(decoderFrame_->data[0]);
@@ -414,7 +421,7 @@ SourceReadStatus RemotePlaySource::read(pipeline::FramePacket& out, const AVFram
         info_.color.pixelFormat=pipeline::SourcePixelFormat::P010;info_.color.matrix=pipeline::YuvMatrix::BT2020NCL;
         info_.color.transfer=pipeline::TransferFunction::PQ;info_.color.primaries=pipeline::ColorPrimaries::BT2020;info_.color.displayReferred709=true;
     }
-    clock_.reset(static_cast<remoteplay::HostTime>(origin100ns_), request_.video.fps);
+    clock_.reset(static_cast<remoteplay::HostTime>(origin100ns_), request_.video.fps, clockFollowRate_);
         pendingOpenFlag_ = true;
     }
     const auto extended = sample.wireFrameIndex ? wireSequence_.observe(*sample.wireFrameIndex)
@@ -438,9 +445,19 @@ SourceReadStatus RemotePlaySource::read(pipeline::FramePacket& out, const AVFram
                 veyra::log::error("remoteplay-decode","requested hardware decode failed; choose automatic or software");
                 inbox_->decodeFailed(sample.generation);return SourceReadStatus::Error;
             }
+            if(decodeFallback_.hardwareFailed()==remoteplay::HardwareDecodeFallback::Decision::KeepHardware){
+                // Experiment VEYRA_EXP_RP_DECODE_KEEP_HW: hardware decoding worked on this connection, so this is
+                // taken as a stream error: flushed above, the keyframe is asked for below, D3D12VA stays.
+                veyra::log::warn("remoteplay-decode",std::format("hardware decode failed; kept, waiting for a keyframe (keepHw=1 consecutive={} of {} hardwareFrames={} kept={} fallbacks={})",
+                    decodeFallback_.consecutive(),decodeFallback_.maxConsecutive(),decodeFallback_.hardwareFrames(),decodeFallback_.kept(),decodeFallback_.fallbacks()));
+            }else{
             hardwareFallback_=true;avcodec_free_context(&codecContext_);decoderReady_=false;
             info_.hardwareDecodeActive=false;
-            veyra::log::warn("remoteplay-decode","hardware decode failed; switching to software at next keyframe");
+            if(decodeFallback_.keepHardwareOnStreamError())
+                veyra::log::warn("remoteplay-decode",std::format("hardware decode failed; switching to software at next keyframe (keepHw=1 hardwareFrames={} kept={} fallbacks={})",
+                    decodeFallback_.hardwareFrames(),decodeFallback_.kept(),decodeFallback_.fallbacks()));
+            else veyra::log::warn("remoteplay-decode","hardware decode failed; switching to software at next keyframe");
+            }
         }
         inbox_->decodeFailed(sample.generation);
         return SourceReadStatus::Waiting;

@@ -20,11 +20,27 @@ DialogLayer {
 
     property var st: ({})
     property int trials: 8
+    // Latency test v2 (docs/LATENCY_MEASUREMENT.md): the button pressed. "ps" is the original test;
+    // "options" and "dpad-right-left" answer faster than the PS5's control centre.
+    property string button: "ps"
     readonly property bool running: st.state === "running"
     readonly property bool streaming: veyra.sourceKind === "ps5"
-    function begin() { if (veyra.pushLatencyTestBegin(lt.trials)) { lt.st = veyra.pushLatencyTestStatus() || {}; poll.start() } }
+    // Seconds per press: open, answer, close and settle for PS / OPTIONS; press and settle for the D-pad.
+    // OPTIONS / D-pad are an experiment (VEYRA_EXP_RP_LATENCY_BUTTONS=1): offered only when the bridge's status says
+    // so (buttonsAvailable); otherwise hidden and the PS button is used, exactly the original test.
+    property var idleStatus: ({})
+    readonly property bool buttonsAvailable: (st.buttonsAvailable !== undefined ? st.buttonsAvailable : idleStatus.buttonsAvailable) === true
+    readonly property string usedButton: buttonsAvailable ? button : "ps"
+    readonly property real secondsPerPress: usedButton === "dpad-right-left" ? 1 : 3
+    function begin() {
+        const ok = lt.usedButton === "ps" ? veyra.pushLatencyTestBegin(lt.trials) : veyra.pushLatencyTestBeginWith(lt.trials, lt.usedButton)
+        if (ok) { lt.st = veyra.pushLatencyTestStatus() || {}; poll.start() }
+    }
     Timer { id: poll; interval: 200; repeat: true; onTriggered: { lt.st = veyra.pushLatencyTestStatus() || {}; if (lt.st.state !== "running") stop() } }
-    onShownChanged: if (!shown && running) { veyra.pushLatencyTestCancel(); poll.stop() }
+    onShownChanged: {
+        if (shown) lt.idleStatus = veyra.pushLatencyTestStatus() || ({})
+        if (!shown && running) { veyra.pushLatencyTestCancel(); poll.stop() }
+    }
 
     actions: running ? [{ label: qsTr("取消") }] : [{ label: qsTr("关闭") }, { label: qsTr("开始测试"), primary: true }]
     onActionTriggered: label => {
@@ -33,7 +49,14 @@ DialogLayer {
         else lt.dialogHost.close()
     }
 
+    readonly property int kDetectableMinPresses: 30
+    readonly property bool enoughForDetectable: Number(st.answered || 0) >= kDetectableMinPresses
+    // Presses the picture was moving for (OPTIONS / D-pad; bridge key "unmeasurable", exp/s4-autofix).
+    readonly property int unmeasurable: Math.max(0, Math.floor(Number(st.unmeasurable || st.unknownPresses || 0)))
+    readonly property bool notValid: st.valid === false || (st.shams !== undefined && Number(st.shamAnswered || 0) > 0)
+    readonly property bool stoppedMoving: st.state === "failed" && st.stopReason === "picture-moving"
     function ms(v) { return Math.round(Number(v || 0)) + " ms" }
+    function ms2(v) { return Number(v || 0).toFixed(1) + " ms" }
     DialogGroup {
         VRow {
             visible: !lt.streaming
@@ -42,8 +65,13 @@ DialogLayer {
         }
         VRow {
             visible: lt.streaming && !lt.running && lt.st.state !== "done"
+            objectName: "latency-test-before"
             label: qsTr("开始前")
-            hint: qsTr("进入游戏画面，放下手柄。测试约 %1 秒，会打开和关闭 PS5 的控制中心 %2 次").arg(lt.trials * 3).arg(lt.trials)
+            hint: lt.usedButton === "ps"
+                  ? qsTr("进入游戏画面，放下手柄。测试约 %1 秒，会打开和关闭 PS5 的控制中心 %2 次").arg(lt.trials * 3).arg(lt.trials)
+                  : lt.usedButton === "options"
+                    ? qsTr("打开一个静止的画面（例如游戏的暂停菜单或 PS5 主页，不要用运动中的游戏画面），放下手柄。测试约 %1 秒，会按 OPTIONS 键打开和关闭菜单 %2 次").arg(Math.round(lt.trials * lt.secondsPerPress)).arg(lt.trials)
+                    : qsTr("打开一个静止的菜单（例如游戏的暂停菜单或 PS5 主页，不要用运动中的游戏画面），放下手柄。测试约 %1 秒，会按方向键右、左交替移动选中项 %2 次").arg(Math.round(lt.trials * lt.secondsPerPress)).arg(lt.trials)
         }
         VRow {
             visible: lt.running
@@ -53,8 +81,10 @@ DialogLayer {
         }
         VRow {
             visible: lt.st.state === "failed"
+            objectName: "latency-test-failed"
             label: qsTr("测试没有完成")
-            hint: String(lt.st.error || "")
+            hint: lt.stoppedMoving ? qsTr("大多数按键无法测量，因为画面在运动。请打开一个静止的菜单画面再试")
+                  : String(lt.st.error || "").length > 0 ? String(lt.st.error) : qsTr("测试提前结束了。请确认 PS5 串流仍在运行，然后再试一次")
         }
         VRow {
             visible: lt.st.state === "done"
@@ -76,14 +106,84 @@ DialogLayer {
             value: lt.ms(lt.st.pushfpsMs)
             hint: qsTr("画面到达电脑到交给显示器，与延迟显示相同")
         }
+        // Latency test v2: every press split at the network arrival of the frame that showed the answer.
+        VRow {
+            visible: lt.st.state === "done" && lt.st.split === true && Number(lt.st.consoleMs) >= 0
+            objectName: "latency-test-console"
+            label: qsTr("按键到画面到达电脑")
+            value: lt.ms2(lt.st.consoleMs)
+            hint: qsTr("中位数：PS5 的响应、编码和网络")
+        }
+        VRow {
+            visible: lt.st.state === "done" && lt.st.split === true && Number(lt.st.pcMs) >= 0
+            objectName: "latency-test-pc"
+            label: qsTr("画面到达到呈现")
+            value: lt.ms2(lt.st.pcMs)
+            hint: qsTr("中位数：每次按键的同一帧在这台电脑上的处理")
+        }
+        // The smallest detectable difference is unstable with few presses (12 presses: 12-73 ms in the review's
+        // simulation, docs/LATENCY_MEASUREMENT.md): shown only from kDetectableMinPresses answered presses.
+        VRow {
+            visible: lt.st.state === "done" && lt.st.split === true && Number(lt.st.detectableMs) >= 0 && lt.enoughForDetectable
+            objectName: "latency-test-detectable"
+            label: qsTr("可分辨的差异")
+            value: lt.ms2(lt.st.detectableMs)
+            hint: qsTr("两次同样次数的测试，差别至少这么大才能可靠地看出来。次数越多，这个值越小")
+        }
+        VRow {
+            visible: lt.st.state === "done" && lt.st.split === true && Number(lt.st.answered || 0) > 0 && !lt.enoughForDetectable
+            objectName: "latency-test-detectable-few"
+            label: qsTr("可分辨的差异")
+            value: "—"
+            hint: qsTr("按键次数太少，还说不出这个测试能分辨多小的差别")
+        }
+        // Sham presses (no press sent; the bridge reports shams / shamAnswered when it runs them): an answer seen
+        // without a press means the picture changes by itself, so the run is not valid.
+        VRow {
+            visible: lt.st.state === "done" && lt.notValid
+            objectName: "latency-test-not-valid"
+            label: qsTr("结果不可信")
+            hint: qsTr("画面自己在变化，所以这次测试的结果不可信。请换一个静止的菜单画面再试")
+        }
+        // Presses whose answer could not be measured because the picture was moving (picture-change detector of the
+        // OPTIONS and D-pad tests). Key from the bridge's status map; absent = 0.
+        VRow {
+            visible: (lt.st.state === "done" || lt.st.state === "failed") && lt.unmeasurable > 0
+            objectName: "latency-test-unmeasurable"
+            label: qsTr("无法测量")
+            value: String(lt.unmeasurable)
+            hint: qsTr("%1 次按键无法测量，因为画面在运动").arg(lt.unmeasurable)
+        }
         VRow {
             visible: !lt.running
             label: qsTr("次数")
             VSeg {
                 objectName: "latency-test-trials"
-                options: [{ id: "5", label: "5" }, { id: "8", label: "8" }, { id: "12", label: "12" }]
+                options: [{ id: "5", label: "5" }, { id: "8", label: "8" }, { id: "12", label: "12" },
+                          { id: "50", label: "50" }, { id: "200", label: "200" }, { id: "500", label: "500" }]
                 current: String(lt.trials)
                 onPicked: id => lt.trials = Number(id)
+            }
+        }
+        VRow {
+            visible: !lt.running && lt.buttonsAvailable
+            objectName: "latency-test-button-row"
+            label: qsTr("按键")
+            hint: qsTr("方向键和 OPTIONS 键的响应可能比控制中心快，但还没有测量过。这两种按键只能在静止的菜单画面里测试")
+            RowLayout {
+                spacing: 8
+                VSeg {
+                    objectName: "latency-test-button"
+                    options: [{ id: "ps", label: qsTr("PS 键") }, { id: "options", label: qsTr("OPTIONS 键") },
+                              { id: "dpad-right-left", label: qsTr("方向键 右/左") }]
+                    current: lt.button
+                    onPicked: id => lt.button = id
+                }
+                Text {
+                    objectName: "latency-test-button-experimental"
+                    text: qsTr("实验")
+                    color: Theme.t3; font.family: Theme.fontUi; font.pixelSize: 11
+                }
             }
         }
     }
