@@ -4,6 +4,7 @@
 #include "veyra/engine/FrameRateWindow.h"
 #include "veyra/engine/FrameLineage.h"
 #include "veyra/engine/PushBenchmarkProbe.h"
+#include "veyra/engine/PushDelaySplit.h"
 #include <mutex>
 #include <memory>
 #include <cmath>
@@ -50,11 +51,12 @@ class FrameFlowWindow {
     std::shared_ptr<FrameCompletionRates> rates_;
     uint64_t firstTimingEpoch_=0,lastTimingEpoch_=0;
     std::array<uint64_t,8192> readyBatches_{};
-    struct Latency {int64_t time;double ms;};
+    struct Latency {int64_t time;double ms;PushDelayParts parts;};
     std::deque<Latency> latency_;
     mutable int64_t latencyRefresh_=0;
     mutable std::optional<double> latencyMean_,latencyP95_;
     mutable uint64_t latencyCount_=0;
+    mutable PushDelaySplitSums latencySplit_;
     struct StageTiming {int64_t time;double ms;unsigned stage;};
     static constexpr unsigned gpuCount=unsigned(diagnostics::GpuStage::Count),pairBegin=gpuCount+unsigned(diagnostics::CpuStage::Count),enhancementIndex=pairBegin+unsigned(diagnostics::PairTiming::Count),stageCount=enhancementIndex+1;
     std::vector<StageTiming> timing_=std::vector<StageTiming>(8192);size_t timingHead_=0,timingSize_=0;
@@ -130,10 +132,14 @@ public:
         std::lock_guard lock(mutex_);metrics_.counters.xessSdkPresented+=count;metrics_.counters.xessSdkGenerated+=generated;
         rates_->xess(count,now);
     }
-    void latency(int64_t begin,int64_t end){
+    // PushFPS Package 15: readyAfterMs / firstAfterMs (seen ready after `begin`; negative unknown), the real frame's batch
+    // layout and the pair's content interval split the sample (PushDelaySplit.h); without them it is counted unsplit.
+    void latency(int64_t begin,int64_t end,double readyAfterMs=-1.0,double firstAfterMs=-1.0,unsigned generatedBefore=0,unsigned frames=0,double intervalMs=0.0){
         if(begin<=0||end<begin)return;
         pushBenchmarkProbe().latency(double(end-begin)/10000); // PushFPS: Optimise for my PC
-        std::lock_guard lock(mutex_);latency_.push_back({end,double(end-begin)/10000});
+        const double ms=double(end-begin)/10000;
+        const auto parts=pushDelayParts(ms,readyAfterMs,firstAfterMs,generatedBefore,frames,intervalMs);
+        std::lock_guard lock(mutex_);latency_.push_back({end,ms,parts});
         while(latency_.size()>8192||(!latency_.empty()&&latency_.front().time<=end-10000000))latency_.pop_front();
     }
     void presented(bool generated,uint64_t fence,int64_t now,int64_t paceAt=0){
@@ -146,7 +152,8 @@ public:
         std::lock_guard lock(mutex_);auto m=metrics_;rates_->snapshot(m,now);
         if(now>=latencyRefresh_){
             std::vector<double> values;double sum=0;
-            for(const auto& sample:latency_)if(sample.time>now-10000000){values.push_back(sample.ms);sum+=sample.ms;}
+            latencySplit_={};
+            for(const auto& sample:latency_)if(sample.time>now-10000000){values.push_back(sample.ms);sum+=sample.ms;latencySplit_.add(sample.ms,sample.parts);}
             latencyCount_=values.size();latencyMean_.reset();latencyP95_.reset();
             if(!values.empty()){latencyMean_=sum/values.size();const size_t p=(values.size()*95+99)/100-1;std::nth_element(values.begin(),values.begin()+p,values.end());latencyP95_=values[p];}
             latencyRefresh_=now+2500000;
@@ -161,7 +168,13 @@ public:
         for(unsigned i=0;i<unsigned(diagnostics::CpuStage::Count);++i)m.cpuTiming[i]=aggregates_[gpuCount+i];
         for(unsigned i=0;i<unsigned(diagnostics::PairTiming::Count);++i)m.pairTiming[i]=aggregates_[pairBegin+i];
         m.enhancementProcessing=aggregates_[enhancementIndex];
-        m.softwareLatencyMs=latencyMean_;m.softwareLatencyP95Ms=latencyP95_;m.latencySamples=latencyCount_;return m;
+        m.softwareLatencyMs=latencyMean_;m.softwareLatencyP95Ms=latencyP95_;m.latencySamples=latencyCount_;
+        if(latencySplit_.frames){
+            m.latencyPictureMs=latencySplit_.mean(latencySplit_.picture);m.latencyFirstGeneratedMs=latencySplit_.mean(latencySplit_.firstGenerated);
+            m.latencyWaitMs=latencySplit_.mean(latencySplit_.wait);m.latencyMarginMs=latencySplit_.mean(latencySplit_.margin);
+            m.latencySplitShare=latencySplit_.splitShare();
+        }
+        return m;
     }
 };
 }

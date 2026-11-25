@@ -51,6 +51,7 @@ public:
     bool withhold(const AVFrame* frame, int64_t pts100ns, bool packedCarrier);
 
     bool record(ID3D12GraphicsCommandList* list, const Frame& frame) override;
+    bool capturing() const override { return running(); }
     void submitted(ID3D12Fence* fence, uint64_t value) override;
     void discarded() override;
 

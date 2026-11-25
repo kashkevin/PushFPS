@@ -11,3 +11,5 @@ obs-plugin/packaging/*.cmd text eol=crlf
 obs-plugin/packaging/*.ps1 text eol=crlf
 obs-plugin/ci/*.ps1 text eol=crlf
 tests/data/update/** -text
+# Kit scripts sent to testers on their own (stream "s10-stall"): CRLF on every checkout.
+scripts/remoteplay/testkit/*.cmd text eol=crlf
