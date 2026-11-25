@@ -133,4 +133,30 @@ add_custom_command(
  DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/gpu-dis/src/gpu/shaders/dis_perfect_final.hlsl" "${CMAKE_CURRENT_SOURCE_DIR}/third_party/gpu-dis/src/gpu/shaders/dis_cpu_rounding.hlsli"
  VERBATIM)
 list(APPEND dis_outputs "${CMAKE_CURRENT_BINARY_DIR}/shaders/dis/dis_perfect_final.dxil")
+# PushFPS Package 16 ("Lower delay", item 4 d): every recipe again, float-only (-D double=float), into shaders/dis_float.
+# Used by the predicted frame's flow only after its start-up self-check against the strict set (PushPredictPass). A
+# shader DXC refuses becomes an empty file (cmake/VeyraGpuDisFloat.cmake), never a build failure.
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/third_party/gpu-dis/shader-recipes.json" dis_recipes)
+string(JSON dis_recipe_count LENGTH "${dis_recipes}")
+math(EXPR dis_recipe_last "${dis_recipe_count} - 1")
+foreach(dis_i RANGE ${dis_recipe_last})
+  string(JSON dis_src GET "${dis_recipes}" ${dis_i} source)
+  string(JSON dis_out GET "${dis_recipes}" ${dis_i} output)
+  string(JSON dis_argc LENGTH "${dis_recipes}" ${dis_i} arguments)
+  math(EXPR dis_arg_last "${dis_argc} - 1")
+  set(dis_args "")
+  foreach(dis_j RANGE ${dis_arg_last})
+    string(JSON dis_a GET "${dis_recipes}" ${dis_i} arguments ${dis_j})
+    list(APPEND dis_args "${dis_a}")
+  endforeach()
+  string(REPLACE ";" "|" dis_args_joined "${dis_args}")
+  get_filename_component(dis_name "${dis_out}" NAME)
+  set(dis_float_out "${CMAKE_CURRENT_BINARY_DIR}/shaders/dis_float/${dis_name}")
+  add_custom_command(
+   OUTPUT "${dis_float_out}"
+   COMMAND ${CMAKE_COMMAND} "-DDXC=${DIS_DXC}" "-DSRC=${CMAKE_CURRENT_SOURCE_DIR}/third_party/gpu-dis/${dis_src}" "-DOUT=${dis_float_out}" "-DARGS=${dis_args_joined}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/VeyraGpuDisFloat.cmake"
+   DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/gpu-dis/${dis_src}" "${CMAKE_CURRENT_SOURCE_DIR}/third_party/gpu-dis/src/gpu/shaders/dis_cpu_rounding.hlsli" "${CMAKE_CURRENT_SOURCE_DIR}/cmake/VeyraGpuDisFloat.cmake"
+   VERBATIM)
+  list(APPEND dis_outputs "${dis_float_out}")
+endforeach()
 add_custom_target(veyra_shader_gpu_dis DEPENDS ${dis_outputs})

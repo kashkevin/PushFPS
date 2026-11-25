@@ -7,6 +7,10 @@
 // with the original (engine/PushQualityProbe.h): PSNR, pixel errors, HUD boxes, a plain blend of the
 // neighbours, real frames through the same pipeline, and whether generated frames came on time.
 // Optimise for my PC runs the same test for every method.
+// Stream "ownfg" (the owner's comparison at identical settings): each finished test is kept per generator (pref
+// pushQualityByGenerator: score, PSNR, gain over a blend, on-time share, the settings it ran with), and the dialog shows
+// every generator tested in one table, so NVIDIA VFG and PushWarp can be compared by running the test once with each.
+// Nothing runs without his click; the test withholds real frames while it runs.
 import QtQuick
 import QtQuick.Layouts
 
@@ -23,7 +27,18 @@ DialogLayer {
     property real seconds: 6
     readonly property bool running: st.running === true
     function begin() { if (veyra.pushQualityBegin(qt.seconds)) { qt.st = veyra.pushQualityStatus() || {}; poll.start() } }
-    Timer { id: poll; interval: 150; repeat: true; onTriggered: { qt.st = veyra.pushQualityStatus() || {}; if (!qt.st.running) stop() } }
+    Timer { id: poll; interval: 150; repeat: true; onTriggered: { qt.st = veyra.pushQualityStatus() || {}; if (!qt.st.running) { stop(); qt.keepResult() } } }
+    // Stream "ownfg": the result per generator, for the comparison table.
+    readonly property var byGenerator: { try { return JSON.parse(String(veyra.preferences.pushQualityByGenerator || "{}")) } catch (e) { return ({}) } }
+    function keepResult() {
+        if (qt.st.done !== true) return
+        const all = Object.assign({}, qt.byGenerator)
+        all[String(veyra.fgBackendName || "?")] = { score: Number(qt.st.score || 0), psnr: Number(qt.st.psnr || 0), gain: Number(qt.st.gainOverBlend || 0),
+                                                    onTime: Number(qt.st.onTime || 0), multiplier: Number(veyra.fgMultiplier || 0), at: Date.now() }
+        veyra.setPreference("pushQualityByGenerator", JSON.stringify(all))
+    }
+    function generatorLabel(id) { return id === "vfg" ? "NVIDIA VFG" : id === "pushwarp" ? "PushWarp" : id === "pushflow" ? "PushFlow" : String(id).toUpperCase() }
+    readonly property var compared: Object.keys(qt.byGenerator).sort()
     onShownChanged: if (!shown && running) { veyra.pushQualityCancel(); poll.stop() }
 
     actions: running ? [{ label: qsTr("取消") }] : [{ label: qsTr("关闭") }, { label: qsTr("开始测试"), primary: true }]
@@ -88,6 +103,22 @@ DialogLayer {
             label: qsTr("准时的生成帧")
             value: (Number(qt.st.onTime || 0) * 100).toFixed(0) + "%"
             hint: qsTr("与上一帧的间隔偏差不超过半帧")
+        }
+        VRow {
+            objectName: "quality-test-compare"
+            visible: qt.compared.length > 0
+            label: qsTr("按补帧方式比较")
+            hint: qsTr("每种补帧方式最后一次测试的结果（同一游戏、同一设置时才可比较）：分数 · 准确度 · 相比简单混合 · 准时。换一种补帧方式再测一次，就会出现在这里")
+            hintBelow: true
+            Text {
+                objectName: "quality-test-compare-table"
+                text: qt.compared.map(id => {
+                    const r = qt.byGenerator[id]
+                    return qt.generatorLabel(id) + " " + Number(r.multiplier || 0) + "X：" + Number(r.score || 0).toFixed(0) + " · " + qt.db(r.psnr) + " · " +
+                           (Number(r.gain || 0) >= 0 ? "+" : "") + qt.db(r.gain) + " · " + (Number(r.onTime || 0) * 100).toFixed(0) + "%"
+                }).join("\n")
+                color: Theme.t1; font.family: Theme.fontUi; font.pixelSize: Theme.fsHint
+            }
         }
         VRow {
             visible: !qt.running

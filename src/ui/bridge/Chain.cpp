@@ -100,6 +100,7 @@ bool QmlPlayerBridge::setNrLayerParameter(int index,const QString& key,double va
                 impl_->chain.nodes[i].nr.runtime=static_cast<engine::NrRuntime>(int(value));
         const bool accepted=impl_->revalidate(true);
         if(!accepted){const auto error=impl_->validation.message;impl_->chain=before;impl_->revalidate();emit notice(uiText(error),true);}
+        else pushNeuralRuntimePicked();   // PushFPS: a runtime the user picked is never moved by the default (PushNeural.cpp)
         emit settingsChanged();emitChainChanged();return accepted;
     }
     auto& node=impl_->chain.nodes[index];const auto before=node;auto& n=node.nr;const bool wasValid=chainValid();
@@ -181,6 +182,7 @@ QVariantList QmlPlayerBridge::effectCatalog() const {
         if (impl_->chain.mode == engine::ChainMode::Node && info.type == engine::EffectType::FrameGeneration) {
             for(const auto& choice : fgBackendChoices()) {
                 const auto option=choice.toMap();const auto backend=option.value("id").toString();
+                if(backend==QLatin1String("pushwarp"))continue;   // stream "ownfg" (review 2 SHOULD 7): no node yet; chosen in the menu
                 QVariantMap fg;
                 fg["id"]=backend+QStringLiteral("-fg");
                 fg["label"]=option.value("label");
@@ -379,6 +381,7 @@ int QmlPlayerBridge::addEffect(const QString& type) {
        !effectAvailability(type).value("available").toBool()){
         for(const auto& choice:fgBackendChoices()){
             const auto row=choice.toMap();if(row.value("disabled").toBool())continue;
+            if(row.value("experimental").toBool())continue;   // stream "ownfg" (review 2 SHOULD 7): never PushWarp by itself
             return addEffect(row.value("id").toString()+QStringLiteral("-fg"));
         }
     }

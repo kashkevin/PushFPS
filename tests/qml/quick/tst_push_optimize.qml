@@ -85,6 +85,14 @@ Item {
             verify(opt.qualityUnsupported, "an untestable source is remembered")
             compare(opt.best.config.backend, "vfg", "the fixed order decides")
         }
+        // Stream "ownfg" (review 2 MUST 1): PushWarp (an "experimental" choice) is only ever the user's own click: offered and
+        // available, it is neither in the optimiser's plan nor in its "unavailable" list.
+        function test_pushwarp_is_never_planned() {
+            veyra.fgBackendChoices = veyra.fgBackendChoices.concat([{ id: "pushwarp", label: "PushWarp", experimental: true }])
+            verify(opt.backends().indexOf("pushwarp") < 0, "not tested, so never applied")
+            verify(opt.backends().indexOf("vfg") >= 0, "the other methods stay")
+            verify(opt.unavailable().every(u => String(u.label).indexOf("PushWarp") < 0), "not listed as unavailable either")
+        }
         function test_needs_a_picture() {
             veyra.liveStats = ({ running: false })
             opt.start()

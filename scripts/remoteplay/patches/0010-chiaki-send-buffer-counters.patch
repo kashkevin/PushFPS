@@ -1,0 +1,69 @@
+Local change (not an upstream backport): count Takion send buffer overflows
+and record the send buffer size in use. Counters only; nothing sent changes.
+
+Origin: written for this project on top of patches 0004 (the
+CHIAKI_VEYRA_STAT_* counters) and 0009 (VEYRA_EXP_RP_CHIAKI_SEND_BUFFER),
+not taken from chiaki-ng. It gives the A/B of patch 0009's switch a direct
+measure: CHIAKI_VEYRA_STAT_SEND_BUFFER_OVERFLOWS is added once for every
+reliable packet the send buffer had no room for (sent once, never resent:
+the case upstream commit 3e1a24ddb26d2cac7807daa67ad12cd78b784df4 fixes by
+keeping 1024), next to the existing error log line;
+CHIAKI_VEYRA_STAT_SEND_BUFFER_SIZE is set to the size the newest Takion
+connection uses (16, or 1024 with the switch), so a log shows which arm ran.
+CHIAKI_VEYRA_TRANSPORT_SEND_BUFFER_API marks the new counters. The two enum
+members are added before CHIAKI_VEYRA_STAT_COUNT, so every existing index is
+unchanged. Senkusha's Takion connection counts too.
+Licence of the patched files: LicenseRef-AGPL-3.0-only-OpenSSL (AGPL-3.0-only
+with the OpenSSL exception), as in chiaki-ng.
+
+Applies after 0001-0009 to the pin 0e16950165f06e5c3291537c2eeba6e852be7120.
+
+diff --git a/lib/include/chiaki/takion.h b/lib/include/chiaki/takion.h
+index d81c340..5a1da31 100644
+--- a/lib/include/chiaki/takion.h
++++ b/lib/include/chiaki/takion.h
+@@ -336,6 +336,7 @@ CHIAKI_EXPORT void chiaki_takion_format_congestion(uint8_t *buf, ChiakiTakionCon
+ #define CHIAKI_VEYRA_TRANSPORT_FRAME_EVIDENCE_API 1 // CHIAKI_VEYRA_STAT_LATE_FRAMES_FAILED
+ #define CHIAKI_VEYRA_TRANSPORT_CONSOLE_QUALITY_API 1 // CHIAKI_VEYRA_STAT_CQ_*
+ #define CHIAKI_VEYRA_TRANSPORT_OPTIONS_API 1 // chiaki_veyra_transport_set_options
++#define CHIAKI_VEYRA_TRANSPORT_SEND_BUFFER_API 1 // CHIAKI_VEYRA_STAT_SEND_BUFFER_*
+ // Truncate the video reorder queue's 16-bit index sum (seq_num_16_add returns up to
+ // 131070 upstream, and the queue compares indexes with ==): packet 0 is then no
+ // longer dropped when the queue ends exactly at 65535.
+@@ -403,6 +404,12 @@ typedef enum chiaki_veyra_transport_stat_t {
+ 	CHIAKI_VEYRA_STAT_CQ_MEASURED_KBPS,
+ 	CHIAKI_VEYRA_STAT_EARLY_LOSS_CUTS, // gaps given up by the early loss decision (also in REORDER_TIMEOUTS)
+ 	CHIAKI_VEYRA_STAT_EARLY_LOSS_WRONG, // packets of such a gap that arrived afterwards
++	// Reliable Takion send buffer (takionsendbuffer.c). OVERFLOWS is added: reliable packets
++	// it had no room for, which go out once and are never resent. SIZE is set: packets the
++	// newest Takion connection keeps for resending (16, or 1024 with
++	// VEYRA_EXP_RP_CHIAKI_SEND_BUFFER=1). Counters only; nothing sent changes.
++	CHIAKI_VEYRA_STAT_SEND_BUFFER_OVERFLOWS,
++	CHIAKI_VEYRA_STAT_SEND_BUFFER_SIZE,
+ 	CHIAKI_VEYRA_STAT_COUNT
+ } ChiakiVeyraTransportStat;
+ 
+diff --git a/lib/src/takion.c b/lib/src/takion.c
+index 1f0bac7..d876146 100644
+--- a/lib/src/takion.c
++++ b/lib/src/takion.c
+@@ -1411,6 +1411,7 @@ static void *takion_thread_func(void *user)
+ 	// The send buffer size MUST be consistent with the acked seqnums array size in takion_handle_packet_message_data_ack()
+ 	if(chiaki_takion_send_buffer_init(&takion->send_buffer, takion, veyra_takion_send_buffer_size()) != CHIAKI_ERR_SUCCESS)
+ 		goto error_reoder_queue;
++	chiaki_veyra_transport_stat_set(CHIAKI_VEYRA_STAT_SEND_BUFFER_SIZE, (uint64_t)takion->send_buffer.packets_size);
+ 	chiaki_mutex_lock(&takion->send_buffer_active_mutex);
+ 	takion->send_buffer_active = true;
+ 	chiaki_mutex_unlock(&takion->send_buffer_active_mutex);
+diff --git a/lib/src/takionsendbuffer.c b/lib/src/takionsendbuffer.c
+index 0d7f756..1bb90b3 100644
+--- a/lib/src/takionsendbuffer.c
++++ b/lib/src/takionsendbuffer.c
+@@ -90,6 +90,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_send_buffer_push(ChiakiTakionSendBuf
+ 	if(send_buffer->packets_count >= send_buffer->packets_size)
+ 	{
+ 		CHIAKI_LOGE(send_buffer->log, "Takion Send Buffer overflow");
++		chiaki_veyra_transport_stat_add(CHIAKI_VEYRA_STAT_SEND_BUFFER_OVERFLOWS, 1);
+ 		err = CHIAKI_ERR_OVERFLOW;
+ 		goto beach;
+ 	}
