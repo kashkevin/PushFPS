@@ -1,5 +1,6 @@
 // QML bridge: Preferences responsibilities.
 #include "../QmlPlayerBridge_p.h"
+#include "veyra/engine/PushNrRuntime.h"
 #include "veyra/engine/PushStreamOverlay.h"
 #include "veyra/engine/PushAudioMix.h"
 #include "veyra/Brand.h"
@@ -7,6 +8,7 @@
 #include <QJsonDocument>
 #include "veyra/sink/SoundProfile.h"
 #include "veyra/pipeline/NisSettings.h"
+#include "veyra/engine/PushClean.h"
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QJsonParseError>
@@ -241,6 +243,11 @@ bool QmlPlayerBridge::setPreference(const QString& key, const QVariant& value) {
         // PushFPS comparison clip: length in seconds, layout 0 split picture / 1 side by side.
         {"pushCompareSeconds", {5, 120}},
         {"pushCompareLayout", {0, 2}},
+        // PushFPS SmartLink (PushSmartLinkRow.qml): 0 off (default), 1 advise, 2 automatic; VEYRA_EXP_RP_SMARTLINK for the next PS5 connection.
+        {"pushSmartLink", {0, 2}},
+        // PushFPS restoration (engine/PushClean.h): strength of the compression clean-up before the upscaler,
+        // 0 = off (the default); its parts as a sum (1 deband, 2 deblock, 4 dering, 8 grain, 16 static noise).
+        {"pushClean", {0, 100}}, {"pushCleanParts", {0, 31}},
         // Network sources (#48): seconds to collect before the first picture; -1 follows the buffer level.
         {"networkPrebuffer", {-1, 60}},
         // Live recording: the target bitrate for the file, and the frame rate
@@ -293,6 +300,8 @@ bool QmlPlayerBridge::setPreference(const QString& key, const QVariant& value) {
                                    "pushSmoothPacing", "pushSmoothPacing2",
                                    // PushFPS: the quick setup's G-SYNC row was used (driver profile checked, nothing left to set).
                                    "pushGsyncChecked",
+                                   // PushFPS (stream s10-display): a G-SYNC profile repair waits for a restart of PushFPS.
+                                   "pushGsyncRestartPending",
                                    // PushFPS going live: sound and microphone in the stream.
                                    "streamAudio", "streamMic",
                                    // PushFPS streaming mode mixer: mutes and the microphone filters.
@@ -301,8 +310,22 @@ bool QmlPlayerBridge::setPreference(const QString& key, const QVariant& value) {
                                    "mixDesktopOn", "mixDesktopMuted", "mixAuxOn", "mixAuxMuted",
                                    // PushFPS: PushFlow half precision, turned on after PushFlowBench --fp16-probe passed.
                                    "pushFlowHalf",
+                                   // PushFPS performance modes (PushModeRow.qml): the LAN profile for the next PS5
+                                   // connection, Automatic (only shown with VEYRA_EXP_AUTO_MODE=1), the statistics
+                                   // overlay, and the first-launch card dismissed. All unset = off.
+                                   "pushLanProfile", "pushModeAuto", "pushStatsOverlay", "pushWelcomeDone",
+                                   // PushFPS first-launch recommendation (PushModes.js): a mode chosen with this version
+                                   // wants its experiment switches, "Keep my settings", the new-install check done.
+                                   "pushModeSwitches", "pushCalibrationKept", "pushWelcomeChecked",
                                    // PushFPS encoder tuning (NVENC): psycho-visual AQ for recordings and streams.
-                                   "recordPsychoAq", "streamPsychoAq"};
+                                   "recordPsychoAq", "streamPsychoAq",
+                                   // PushFPS restoration: protect HUD, text and fine lines (unset = on).
+                                   "pushCleanHud",
+                                   // Package 15 "Lower delay" (PushLowDelayRow.qml): one predicted frame per real frame
+                                   // on a capture card with VFG at 3X. Unset = off.
+                                   "pushLowDelay",
+                                   // Package 16 review 1 MUST 3: the one-time reset of pushLowDelay was done (engine/PushLowDelay.h).
+                                   "pushLowDelayReset16"};
     QVariant stored;
     if (ranges.contains(key)) {
         bool ok = false; const int n = value.toInt(&ok);
@@ -431,7 +454,45 @@ bool QmlPlayerBridge::setPreference(const QString& key, const QVariant& value) {
         const QJsonDocument doc = QJsonDocument::fromJson(v.toUtf8(), &error);
         if (error.error != QJsonParseError::NoError || !doc.isObject()) return false;
         stored = v;
+    } else if (key == QLatin1String("pushMode")) {
+        // PushFPS performance mode (qml/Veyra/PushModes.js): one of the four concrete modes of
+        // engine/PushPerformanceMode.h by its name there, or empty for the user's own settings.
+        const QString v = value.toString();
+        static const QStringList modes{"", "ultra-low-latency", "competitive", "balanced", "maximum-smoothness"};
+        if (!modes.contains(v)) return false;
+        stored = v;
+    } else if (key == QLatin1String("pushNrHeldOff")) {
+        // PushFPS stream "laghunt": the original-runtime neural layers held off at start until the user switches them
+        // on (engine/PushNrRuntime.h pushNrHoldValid: "0c1-<8 hex layout print>", at most 8 keys; empty = none).
+        const QString v = value.toString();
+        if (v.size() > qsizetype(engine::kPushNrHoldMaxText) || !engine::pushNrHoldValid(v.toStdString())) return false;
+        stored = v;
+    } else if (key == QLatin1String("pushSmoothTarget")) {
+        // PushFPS Smoothness Mode (PushSmoothnessRow.qml, engine/PushSmoothness.h): the displayed rate it holds,
+        // 60, 90, 120 or 180; 0 = off (the default).
+        bool ok = false;
+        const int n = value.toInt(&ok);
+        if (!ok || (n != 0 && n != 60 && n != 90 && n != 120 && n != 180)) return false;
+        stored = n;
+    } else if (key == QLatin1String("pushProfile")) {
+        // PushFPS picture profile (qml/Veyra/PushProfiles.js): one of the five profiles of
+        // engine/PushPerformanceMode.h by its name there, or "none" for the user's own settings (the default).
+        const QString v = value.toString();
+        static const QStringList profiles{"none", "original", "clean-1440", "enhanced-1440", "max-fidelity", "ultra-low-latency"};
+        if (!profiles.contains(v)) return false;
+        stored = v;
+    } else if (key == QLatin1String("pushProfileSettings") || key == QLatin1String("pushProfileRestore")) {
+        // PushFPS picture profiles: what the user changed in each profile (one member per profile), and the
+        // settings from before the first profile, which "none" puts back. JSON objects written by the
+        // interface, size-capped and parsed here like pushProfiles.
+        const QString v = value.toString();
+        if (v.size() > 32768) return false;
+        QJsonParseError error{};
+        const QJsonDocument doc = QJsonDocument::fromJson(v.toUtf8(), &error);
+        if (error.error != QJsonParseError::NoError || !doc.isObject()) return false;
+        stored = v;
     } else if (key == QLatin1String("pushGamePresets") || key == QLatin1String("pushBenchmark") || key == QLatin1String("pushLowestLatency") ||
+               key == QLatin1String("pushModeRestore") || key == QLatin1String("pushCalibrationRestore") || key == QLatin1String("pushCalibrationApplied") ||
                key == QLatin1String("studioScenes") || key == QLatin1String("pushOptimizeRestore") || key == QLatin1String("pushFlowHalfProbe") ||
                key == QLatin1String("pushOptimizeSkip")) {
         // PushFPS: the user's own game presets, the last "Optimise for my PC" result and the settings
@@ -502,6 +563,9 @@ bool QmlPlayerBridge::setPreference(const QString& key, const QVariant& value) {
             }
         }
         stored = v;
+    } else if (key.startsWith(QLatin1String("kbm")) || key == QLatin1String("pushKbmWizardDone")) {
+        // PushFPS Mouse & Keyboard page: kbmEnabled, kbmInputProfile, kbmInputCustom, kbmContextOverride (PushKbm.cpp).
+        if (!pushKbmValidPreference(key, value, stored)) return false;
     } else {
         return false;
     }
@@ -575,8 +639,26 @@ void QmlPlayerBridge::applyPreference(const QString& key) {
         if (n == 0 || std::wstring_view(current) == L"fp16-checked")
             SetEnvironmentVariableW(L"VEYRA_PUSHFLOW_PRECISION", impl_->prefBool("pushFlowHalf", false) ? L"fp16-checked" : nullptr);
     }
+    else if (key == QLatin1String("pushLanProfile")) applyPushLanProfile();
+    else if (key == QLatin1String("pushSmoothTarget")) applyPushSmoothTarget();
+    else if (key == QLatin1String("pushLowDelay")) applyPushLowDelay();
+    else if (key == QLatin1String("pushSmartLink")) applyPushSmartLink();
+    else if (key.startsWith(QLatin1String("kbm"))) applyPushKbm();
     else if (key == QLatin1String("nisSharpness"))
         pipeline::setNisSharpness(float(impl_->prefInt("nisSharpness", int(pipeline::kNisDefaultSharpness * 100))) / 100.0f);
+    else if (key == QLatin1String("pushClean") || key == QLatin1String("pushCleanHud") || key == QLatin1String("pushCleanParts")) {
+        // PushFPS restoration: the graph reads strength, HUD protection and parts on every frame;
+        // EnhancementSettings::clean makes the stage exist (another graph only when it goes on or off).
+        const int strength = std::clamp(impl_->prefInt("pushClean", 0), 0, engine::kPushCleanMaxStrength);
+        engine::setPushCleanLive(strength, impl_->prefBool("pushCleanHud", true),
+                                 static_cast<unsigned>(std::clamp(impl_->prefInt("pushCleanParts", int(engine::kPushCleanDefaultParts)), 0, int(engine::kPushCleanPartsMask))));
+        auto s = settings();
+        if (int(s.clean) != strength) {
+            s.clean = static_cast<uint8_t>(strength);
+            if (!impl_->commit(std::move(s))) veyra::log::warn("clean", "the engine did not accept the restoration strength");
+            else emit settingsChanged();
+        }
+    }
     else if (key == QLatin1String("magewellLowLatency")) source::magewell::setLowLatencyPreference(impl_->prefBool("magewellLowLatency", false));
     else if (key == QLatin1String("blackmagicNativeCapture")) { if(impl_->captureListed)refreshCaptureDevices();emit captureChanged(); }
     else if (key == QLatin1String("language")) {
