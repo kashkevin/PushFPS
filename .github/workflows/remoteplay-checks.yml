@@ -282,7 +282,10 @@ jobs:
             if ./core_plain > run.log 2>&1 && tail -1 run.log | grep -q 'FAIL 0$'; then echo "plain: $(tail -1 run.log)"
             else report 'core test' run.log '^FAIL'; echo "::error::core tests failed under g++: $(grep -E '^TOTAL ' run.log | tail -1)"; failed=1; fi
           else report 'g++' build.log 'error'; echo '::error::core tests did not compile with g++'; failed=1; fi
-          if [ -f run.log ]; then sim="$(grep -F '[hud-guard-sim]' run.log | head -60 | cut -c1-230 | paste -sd '|' - | sed 's/|/%0A/g')"; [ -n "$sim" ] && echo "::notice title=hud-guard-sim::${sim:0:9000}"; fi
+          if [ -f run.log ]; then
+            grep -F '[hud-guard-sim]' run.log | sed 's/^\[hud-guard-sim\] SIMULATED //' | head -40 > sim.log || true
+            n=0; while [ $((n * 5)) -lt "$(wc -l < sim.log)" ]; do n=$((n + 1)); echo "::notice title=hud-guard-sim $n::$(sed -n "$((n * 5 - 4)),$((n * 5))p" sim.log | cut -c1-330 | paste -sd '|' - | sed 's/|/%0A/g')"; done
+          fi
           wait
           if [ "$(cat strict.code)" != 0 ]; then report 'g++ strict' strict.log 'error|warning'; echo '::error::strict warnings pass failed (-Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)'; failed=1; else echo 'strict warnings: ok'; fi
           if [ "$(cat asan.code)" != 0 ]; then report 'g++ asan build' asan-build.log 'error'; failed=1
