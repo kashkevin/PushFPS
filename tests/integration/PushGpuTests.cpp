@@ -44,6 +44,8 @@
 //   veyra_push_gpu_tests --list                  the test names
 #include "veyra/pushflow/PushFlowBackend.h"
 #include "veyra/engine/PushHudSampler.h"
+#include "veyra/engine/PushFrameThumb.h"
+#include "veyra/engine/PushDownscale.h"
 #include "veyra/engine/PushPipelineProbe.h"
 #include "veyra/pipeline/PushHudLock.h"
 #include "veyra/pipeline/PushCleanPass.h"
@@ -888,6 +890,106 @@ void testBlitAheadOrder(Gpu& gpu) {
     UnregisterClassW(wc.lpszClassName, wc.hInstance);
 }
 
+// Stream "s12-pace": "Steadier fine detail", the REAL PresentBlit pixel shader (PresentBlit_vs/ps.dxil) against its CPU reference
+// (engine/PushDownscale.h pushShrinkSample) on his ratios: a 480 x 48 slice of a 4K picture drawn at 320 x 32 (3840 -> 2560, 1.5x)
+// and at 183 x 18 (3840 -> 1462, 2.63x), HDR10 (R10G10B10A2 PQ codes) and SDR (R8G8B8A8 sRGB codes): Area and Area + sharpen
+// at most one code from the reference everywhere; the choice off (flags 0) is Package 16's single hardware bilinear tap.
+void testPresentShrink(Gpu& gpu, bool hdr10) {
+    const std::string tag = hdr10 ? "present-shrink HDR10" : "present-shrink SDR";
+    auto* device = gpu.device.Get();
+    const DXGI_FORMAT format = hdr10 ? DXGI_FORMAT_R10G10B10A2_UNORM : DXGI_FORMAT_R8G8B8A8_UNORM;
+    const double maxCode = hdr10 ? 1023.0 : 255.0;
+    const auto transfer = hdr10 ? engine::PushTransfer::Pq : engine::PushTransfer::Srgb;
+    constexpr uint32_t SW = 480, SH = 48;
+    // The picture: a dark background (1 nit / 1 %), 1-px bright strokes (300 nits / 100 %) in every column phase, a fine grating
+    // and a soft gradient: what the kernel must keep.
+    engine::PushPlane ref{SW, SH, std::vector<double>(size_t(SW) * SH)};
+    const double dark = engine::pushEncode(hdr10 ? 1e-4 : 0.01, transfer), bright = engine::pushEncode(hdr10 ? 0.03 : 1.0, transfer);
+    for (uint32_t y = 0; y < SH; ++y)
+        for (uint32_t x = 0; x < SW; ++x) {
+            double v = dark + (bright - dark) * 0.3 * (0.5 + 0.5 * std::sin(x * 0.07 + y * 0.31));
+            if (x % 11 == 3 || y % 13 == 5) v = bright;                         // thin strokes, all phases of 1.5x and 2.63x
+            if (x > 300 && x < 360) v = (x / 2 + y / 2) % 2 ? bright : dark;    // a 2-px checker beyond the screen's Nyquist limit
+            ref.v[size_t(y) * SW + x] = std::round(v * maxCode) / maxCode;      // the codes the texture really holds
+        }
+    std::vector<uint8_t> pixels(size_t(SW) * SH * 4);
+    for (size_t i = 0; i < ref.v.size(); ++i) {
+        const uint32_t q = uint32_t(std::lround(ref.v[i] * maxCode));
+        if (hdr10) { const uint32_t word = q | (q << 10) | (q << 20) | (3u << 30); std::memcpy(pixels.data() + i * 4, &word, 4); }
+        else { pixels[i * 4] = pixels[i * 4 + 1] = pixels[i * 4 + 2] = uint8_t(q); pixels[i * 4 + 3] = 255; }
+    }
+    Plane src{pipeline::makeTexture(device, SW, SH, format, false), format, SW, SH, 4};
+    std::vector<uint8_t> vs, ps;
+    pipeline::GraphicsPass pass;
+    const bool made = src.texture && pipeline::loadShaderBytes("PresentBlit_vs.dxil", vs) && pipeline::loadShaderBytes("PresentBlit_ps.dxil", ps) &&
+                      pass.create(device, vs, ps, 1, format, 16);
+    check(made, tag + ": PresentBlit loaded");
+    if (!made || !gpu.begin()) return;
+    auto upload = recordFill(gpu, src, pixels, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    check(gpu.submitAndWait(), tag + ": picture uploaded");
+    pipeline::makeSrv(device, src.texture.Get(), format, pass.heap->GetCPUDescriptorHandleForHeapStart());
+    ComPtr<ID3D12DescriptorHeap> rtvHeap;
+    D3D12_DESCRIPTOR_HEAP_DESC hd{}; hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV; hd.NumDescriptors = 1;
+    device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&rtvHeap));
+    const auto draw = [&](uint32_t OW, uint32_t OH, unsigned flags, std::vector<double>& out) {
+        D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+        D3D12_RESOURCE_DESC td{}; td.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D; td.Width = OW; td.Height = OH; td.DepthOrArraySize = 1;
+        td.MipLevels = 1; td.Format = format; td.SampleDesc.Count = 1; td.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+        ComPtr<ID3D12Resource> target;
+        if (FAILED(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &td, D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr, IID_PPV_ARGS(&target)))) return false;
+        const auto rtv = rtvHeap->GetCPUDescriptorHandleForHeapStart();
+        device->CreateRenderTargetView(target.Get(), nullptr, rtv);
+        if (!gpu.begin()) return false;
+        D3D12_VIEWPORT viewport{0, 0, float(OW), float(OH), 0, 1};
+        D3D12_RECT rect{0, 0, LONG(OW), LONG(OH)};
+        gpu.list->RSSetViewports(1, &viewport); gpu.list->RSSetScissorRects(1, &rect);
+        gpu.list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+        ID3D12DescriptorHeap* heaps[] = {pass.heap.Get()};
+        gpu.list->SetDescriptorHeaps(1, heaps); gpu.list->SetGraphicsRootSignature(pass.rootSig.Get()); gpu.list->SetPipelineState(pass.pso.Get());
+        float dims[16] = {float(SW), float(SH), float(flags), 0.0f, float(OW), float(OH), 0.5f, 0.5f};   // zoom 0: the whole target
+        const auto footprint = engine::pushShrinkFootprint(SW, SH, OW, OH, OW, OH, OW, OH, 0);
+        dims[14] = float(footprint.x); dims[15] = float(footprint.y);
+        gpu.list->SetGraphicsRoot32BitConstants(0, 16, dims, 0);
+        gpu.list->SetGraphicsRootDescriptorTable(1, pass.heap->GetGPUDescriptorHandleForHeapStart());
+        gpu.list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST); gpu.list->DrawInstanced(3, 1, 0, 0);
+        Plane plane{target, format, OW, OH, 4};
+        auto rb = recordRead(gpu, plane, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        if (!gpu.submitAndWait()) return false;
+        const auto bytes = mapRead(plane, rb.Get());
+        if (bytes.size() != size_t(OW) * OH * 4) return false;
+        out.resize(size_t(OW) * OH);
+        for (size_t i = 0; i < out.size(); ++i) {
+            uint32_t word; std::memcpy(&word, bytes.data() + i * 4, 4);
+            out[i] = hdr10 ? double(word & 1023u) : double(word & 255u);   // red channel code
+        }
+        return true;
+    };
+    struct Size { uint32_t w, h; const char* name; };
+    for (const Size size : {Size{320, 32, "1.5x"}, Size{183, 18, "2.63x"}}) {
+        for (const auto kernel : {engine::PushShrinkKernel::Area, engine::PushShrinkKernel::AreaSharp, engine::PushShrinkKernel::AreaSharpClamp, engine::PushShrinkKernel::CatmullRom,
+                                  engine::PushShrinkKernel::CatmullRomClamp, engine::PushShrinkKernel::Lanczos2, engine::PushShrinkKernel::Lanczos2Clamp, engine::PushShrinkKernel::Bilinear1}) {
+            std::vector<double> got;
+            const unsigned flags = engine::pushShrinkFlags(kernel, transfer);
+            const std::string what = tag + " " + size.name + " " + engine::pushShrinkKernelName(kernel);
+            const auto start = std::chrono::steady_clock::now();
+            if (!draw(size.w, size.h, flags, got)) { check(false, what + ": drawn"); continue; }
+            const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+            double worst = 0;
+            for (uint32_t y = 0; y < size.h; ++y)
+                for (uint32_t x = 0; x < size.w; ++x) {
+                    const double want = engine::pushShrinkSample(ref, size.w, size.h, x, y, kernel, transfer) * maxCode;
+                    worst = std::max(worst, std::abs(got[size_t(y) * size.w + x] - want));
+                }
+            // The new path: at most one code apart after rounding (float32 transfer maths against double). Package 16: the hardware's bilinear weights are
+            // fixed-point (8 bits of fraction on most GPUs, WARP's own rule here): a few codes.
+            const double allowed = kernel == engine::PushShrinkKernel::Bilinear1 ? (hdr10 ? 6.0 : 3.0) : 1.5;
+            checkValue(worst <= allowed, what + ": the shader equals the CPU reference", worst, std::format("<= {:.0f} code(s)", allowed));
+            std::printf("INFO %s: worst %.2f codes, draw + readback %.1f ms on this device (WARP: CPU time, not a GPU cost)\n", what.c_str(), worst, ms);
+        }
+    }
+    check(!gpu.debugErrors(), tag + ": no D3D12 debug errors");
+}
+
 // PushFPS outputs and canvas (engine/PushCanvas.h, shaders/PushCanvasConvert.hlsl): the presented
 // picture sampled into an output of another size and layout, as the recorder does for each output.
 void testCanvasConvert(Gpu& gpu) {
@@ -1272,6 +1374,99 @@ void testHudSampler(Gpu& gpu) {
     gpu.list->Close();
     const auto failed = sampler.status();
     check(failed.failed && !failed.error.empty() && !failed.running, "hud: an unsupported format fails with a reason");
+}
+// Stream "s12-pace": the frame probe's GPU thumbnail (engine/PushFrameThumb.h, shaders/PushFrameThumb.hlsl) against its CPU
+// reference (pushFrameThumbCpu), in 8-bit and 10-bit, from COMMON back to COMMON; the readback ring never waits, refuses when
+// full, frees a discarded entry, and hands thumbnails back in order. Then the probe maths on a group made on the GPU.
+void testFrameThumb(Gpu& gpu) {
+    constexpr uint32_t W = 640, H = 360;
+    auto* device = gpu.device.Get();
+    engine::PushFrameThumb thumbs;
+    check(thumbs.create(device), "frame-thumb: pass created");
+    const auto pattern = [&](int shift) {
+        std::vector<float> v(size_t(W) * H);
+        for (uint32_t y = 0; y < H; ++y)
+            for (uint32_t x = 0; x < W; ++x) {
+                const int sx = int(x) - shift;
+                uint32_t h = uint32_t(sx / 3) * 374761393u + y / 3 * 668265263u;
+                h = (h ^ (h >> 13)) * 1274126177u;
+                v[size_t(y) * W + x] = std::clamp(0.5f + 0.3f * float(std::sin(sx * 0.05)) + float(h >> 28) / 64.0f - 0.1f, 0.0f, 1.0f);
+            }
+        return v;
+    };
+    for (const DXGI_FORMAT format : {DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R10G10B10A2_UNORM}) {
+        const bool ten = format == DXGI_FORMAT_R10G10B10A2_UNORM;
+        Plane tex{pipeline::makeTexture(device, W, H, format, false), format, W, H, 4};
+        const auto grey = pattern(0);
+        std::vector<uint8_t> px(size_t(W) * H * 4);
+        std::vector<float> stored(size_t(W) * H);   // the value the texture really holds, for the CPU reference
+        for (size_t i = 0; i < grey.size(); ++i) {
+            if (ten) {
+                const uint32_t q = uint32_t(std::lround(grey[i] * 1023.0f));
+                const uint32_t word = q | (q << 10) | (q << 20) | (3u << 30);
+                std::memcpy(px.data() + i * 4, &word, 4);
+                stored[i] = float(q) / 1023.0f;
+            } else {
+                const uint8_t q = uint8_t(std::lround(grey[i] * 255.0f));
+                px[i * 4] = px[i * 4 + 1] = px[i * 4 + 2] = q; px[i * 4 + 3] = 255;
+                stored[i] = float(q) / 255.0f;
+            }
+        }
+        gpu.begin();
+        auto upload = recordFill(gpu, tex, px, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON);
+        check(thumbs.record(device, gpu.list.Get(), tex.texture.Get(), format, 7, false), "frame-thumb: recorded");
+        check(!thumbs.record(device, gpu.list.Get(), tex.texture.Get(), format, 8, false), "frame-thumb: one unsubmitted entry at a time");
+        check(gpu.submit(), "frame-thumb: submitted");
+        thumbs.submitted(gpu.fence.Get(), gpu.value);
+        gpu.wait();
+        std::vector<float> want(engine::PushFrameProbe::kCells);
+        engine::pushFrameThumbCpu(W, H, [&](unsigned x, unsigned y) { const float v = stored[size_t(y) * W + x]; return engine::pushThumbLuma(v, v, v, false); }, want.data());
+        int got = 0;
+        double worst = 0;
+        thumbs.collect([&](uint64_t sequence, bool generated, unsigned, unsigned, const float* t) {
+            ++got;
+            check(sequence == 7 && !generated && t != nullptr, "frame-thumb: the entry's sequence and kind");
+            if (!t) return;
+            for (size_t i = 0; i < want.size(); ++i) worst = std::max(worst, double(std::abs(t[i] - want[i])));
+        });
+        checkValue(got == 1, ten ? "frame-thumb: 10-bit thumbnail collected" : "frame-thumb: 8-bit thumbnail collected", got, 1);
+        checkValue(worst < 1e-4, ten ? "frame-thumb: 10-bit equals the CPU reference" : "frame-thumb: 8-bit equals the CPU reference", worst, "< 1e-4");
+        check(!gpu.debugErrors(), "frame-thumb: no D3D12 debug errors");
+    }
+    // The ring: full after kEntries unread submissions; a discarded recording frees its entry; order kept.
+    Plane tex{pipeline::makeTexture(device, W, H, DXGI_FORMAT_R8G8B8A8_UNORM, false), DXGI_FORMAT_R8G8B8A8_UNORM, W, H, 4};
+    engine::PushFrameProbe probe;
+    engine::PushFrameGroups groups(probe);
+    gpu.begin();
+    check(thumbs.record(device, gpu.list.Get(), tex.texture.Get(), tex.format, 100, false), "frame-thumb: recorded before a discard");
+    thumbs.discarded();
+    gpu.list->Close();
+    // A group A, I1, I2, B of a pan (thirds), uploaded and probed one per submission, read back at the end (8 entries).
+    std::vector<uint64_t> order;
+    for (int f = 0; f < 4; ++f) {
+        const auto grey = pattern(f * 10);
+        std::vector<uint8_t> px(size_t(W) * H * 4);
+        for (size_t i = 0; i < grey.size(); ++i) { const uint8_t q = uint8_t(std::lround(grey[i] * 255.0f)); px[i * 4] = px[i * 4 + 1] = px[i * 4 + 2] = q; px[i * 4 + 3] = 255; }
+        gpu.begin();
+        auto upload = recordFill(gpu, tex, px, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON);
+        check(thumbs.hasRoom(), "frame-thumb: room in the ring");
+        check(thumbs.record(device, gpu.list.Get(), tex.texture.Get(), tex.format, uint64_t(10 + f), f == 1 || f == 2, f == 1 || f == 2 ? unsigned(f) : 0u, 3u),
+              "frame-thumb: group frame recorded");
+        check(gpu.submit(), "frame-thumb: group frame submitted");
+        thumbs.submitted(gpu.fence.Get(), gpu.value);
+        gpu.wait();   // the texture is refilled for the next frame
+    }
+    thumbs.collect([&](uint64_t sequence, bool generated, unsigned subframe, unsigned groupFrames, const float* t) {
+        order.push_back(sequence);
+        groups.frame(sequence, generated, subframe, groupFrames, t);
+    });
+    checkValue(order == std::vector<uint64_t>({10, 11, 12, 13}), "frame-thumb: thumbnails come back in order", order.size(), 4);
+    const auto summary = probe.take();
+    checkValue(summary.groups == 1 && summary.motionGroups == 1 && summary.generated == 2, "frame-thumb: one group of a pan with two generated frames",
+               std::format("groups={} motion={} generated={}", summary.groups, summary.motionGroups, summary.generated), "groups=1 motion=1 generated=2");
+    checkValue(summary.nearDuplicates == 0, "frame-thumb: moved frames are not duplicates", summary.nearDuplicates, 0);
+    std::printf("INFO frame-thumb %s\n", engine::formatPushFrameProbe(summary).substr(0, 200).c_str());
+    check(!gpu.debugErrors(), "frame-thumb: no D3D12 debug errors in the ring test");
 }
 // The pipeline probe (engine/PushPipelineProbe.h, autorun step probe:<seconds>): pairs of consecutive real
 // frames, the output picture and the raw console picture of each, read back and reduced to the picture
@@ -2967,6 +3162,8 @@ int main(int argc, char** argv) {
         {"badges", [](Gpu& g) { testCompareBadges(g, false); }},
         {"badges-hdr", [](Gpu& g) { testCompareBadges(g, true); }},
         {"hud-sampler", [](Gpu& g) { testHudSampler(g); }},
+        {"frame-thumb", [](Gpu& g) { testFrameThumb(g); }},   // stream "s12-pace"
+        {"present-shrink", [](Gpu& g) { testPresentShrink(g, true); testPresentShrink(g, false); }},   // stream "s12-pace"
         {"pipeline-probe", [](Gpu& g) { testPipelineProbe(g); }},
         {"hud-lock", [](Gpu& g) { testHudLock(g); }},
         {"gpu-path-real-wait", [](Gpu& g) { testGpuPathRealWait(g); }},

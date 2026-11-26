@@ -8,6 +8,7 @@
 #include <QJsonDocument>
 #include "veyra/sink/SoundProfile.h"
 #include "veyra/pipeline/NisSettings.h"
+#include "veyra/engine/PushDownscale.h"
 #include "veyra/engine/PushClean.h"
 #include <QJsonArray>
 #include <QJsonObject>
@@ -296,6 +297,10 @@ bool QmlPlayerBridge::setPreference(const QString& key, const QVariant& value) {
                                    "introMusic", "exclusionOverlay",
                                    // PushFPS: on-screen latency readout, fullscreen on connect, window on top.
                                    "pushLatencyOverlay", "pushAutoFullscreen", "pushAlwaysOnTop", "pushSunset",
+                                   // PushFPS (stream s12-pace): the fullscreen-without-focus reminder (unset = on).
+                                   "pushUnfocusedNotice",
+                                   // PushFPS (stream s12-pace): "Steadier fine detail" when the picture shrinks (engine/PushDownscale.h; unset = off).
+                                   "pushSteadyDetail",
                                    // PushFPS: smooth frame pacing (quick setup); set once by the 2.9.7 default.
                                    "pushSmoothPacing", "pushSmoothPacing2",
                                    // PushFPS: the quick setup's G-SYNC row was used (driver profile checked, nothing left to set).
@@ -644,6 +649,7 @@ void QmlPlayerBridge::applyPreference(const QString& key) {
     else if (key == QLatin1String("pushLowDelay")) applyPushLowDelay();
     else if (key == QLatin1String("pushSmartLink")) applyPushSmartLink();
     else if (key.startsWith(QLatin1String("kbm"))) applyPushKbm();
+    else if (key == QLatin1String("pushSteadyDetail")) engine::setPushSteadyDetail(impl_->prefBool("pushSteadyDetail", false));   // stream s12-pace, live
     else if (key == QLatin1String("nisSharpness"))
         pipeline::setNisSharpness(float(impl_->prefInt("nisSharpness", int(pipeline::kNisDefaultSharpness * 100))) / 100.0f);
     else if (key == QLatin1String("pushClean") || key == QLatin1String("pushCleanHud") || key == QLatin1String("pushCleanParts")) {

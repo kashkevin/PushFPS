@@ -10,6 +10,7 @@
 #include "veyra/engine/PushCadence.h"
 #include "veyra/engine/PushVideoOverlay.h"
 #include "veyra/engine/PushDisplayPath.h"
+#include "veyra/engine/PushOnScreenCadence.h"
 #include "veyra/ui/PushInPictureCompose.h"
 #include "veyra/engine/PushLegacyEnv.h"
 #include <map>
@@ -162,6 +163,24 @@ QVariantMap QmlPlayerBridge::pushLiveStats() const {
         m["toScreenP95Ms"] = toScreenKnown ? QVariant(toScreen.p95Ms) : QVariant();
         m["toScreenCoversMonitor"] = toScreen.coversMonitor;
         m["toScreenWindowedHwComposition"] = toScreen.windowedHw;
+    }
+    // Stream "s12-pace" (engine/PushOnScreenCadence.h, [cadence]): the last 10 s window. onScreenPath 0 composed: at least
+    // onScreenEvenPctMin..Max % of frames were held exactly the expected refreshes (DXGI frame statistics, not photons); 1 the driver
+    // reports direct display, 2 the refresh count stood still: then only the Present spacing is known (onScreenSpacingEvenPct),
+    // a measure BEFORE the screen (review 1 MUST 3: never shown under the same words as the composed figure).
+    {
+        const double nowMs = double(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+        const auto on = engine::pushOnScreenBoard().read(nowMs);
+        const bool known = s.running && on.known;
+        m["onScreenKnown"] = known;
+        m["onScreenPath"] = known ? on.path : -1;
+        m["onScreenRefreshes"] = known ? on.expectedRefreshes : 0;
+        // Review 2 MUST 1: both bounds of the composed path's even share; onScreenNarrow when they are at most 10 points apart.
+        m["onScreenEvenPctMin"] = known && on.evenPctMin >= 0 ? QVariant(on.evenPctMin) : QVariant();
+        m["onScreenEvenPctMax"] = known && on.evenPctMax >= 0 ? QVariant(on.evenPctMax) : QVariant();
+        m["onScreenNarrow"] = known && on.narrow;
+        m["onScreenSpacingEvenPct"] = known && on.spacingEvenPct >= 0 ? QVariant(on.spacingEvenPct) : QVariant();
+        m["onScreenDirectSeen"] = on.directSeen;
     }
     m["fgActive"] = s.fgActive;
     // The multiplier the last pair used (adaptive mode, output cap or a reduced group).

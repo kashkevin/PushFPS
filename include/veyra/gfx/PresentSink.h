@@ -139,6 +139,16 @@ public:
     struct RefreshGrid { int64_t lastVblank100ns=0; double period100ns=0,latch100ns=0; };
     RefreshGrid refreshGrid()const;
     double displayRefreshHz()const{return displayRefreshHz_;}
+    // Stream "s12-pace" (engine/PushOnScreenCadence.h): the frame-statistics reading taken before the last Present (valid
+    // when it succeeded and dated a vblank; sync100ns on the host steady clock), and the DXGI present id of the last
+    // successful Present whose scanout can be dated (VSync or Automatic, no tearing, no provider), 0 otherwise. Always kept:
+    // the reading is the one sampleDisplayLatency already makes, so this costs a struct copy per Present.
+    struct StatisticsReading { bool valid=false; UINT presentCount=0,presentRefreshCount=0,syncRefreshCount=0; int64_t sync100ns=0; };
+    const StatisticsReading& lastStatistics()const{return lastStatistics_;}
+    // Stream "s12-pace" (review 2 MUST 1): one more GetFrameStatistics between Presents, on the presenting thread only (DXGI
+    // serialises swap-chain calls; a call from another thread could hold up Present). Touches no other state of the sink.
+    StatisticsReading readStatistics()const;
+    UINT lastDatedPresentId()const{return lastDatedPresentId_;}
     // Slipstream statistics (VEYRA_EXP_RP_STATS=1, read once per swap-chain creation; nothing
     // below is recorded without it). lastPresentId: DXGI present id of the last successful
     // Present whose scanout can be dated, 0 otherwise. datedScanouts: the last presents the frame
@@ -252,6 +262,8 @@ private:
     std::vector<double> displayLatencyMs_;
     bool slipstreamStats_=false;
     UINT lastPresentId_=0;
+    StatisticsReading lastStatistics_{};
+    UINT lastDatedPresentId_=0;
     std::array<DatedScanout,16> datedScanouts_{};
     unsigned datedScanoutNext_=0;
     engine::PushScanoutAudit scanoutAudit_;

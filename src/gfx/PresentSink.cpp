@@ -309,7 +309,7 @@ bool PresentSink::initialize(ID3D12Device* device, ID3D12CommandQueue* queue,
     frameStatisticsBaseValid_=false;
     // New swap chain: present ids restart; VEYRA_TEST_NO_DISPLAY_STATS=1 disables the samples.
     displayLatencyEnabled_=GetEnvironmentVariableW(L"VEYRA_TEST_NO_DISPLAY_STATS",nullptr,0)==0;
-    lastPresentId_=0;datedScanouts_={};datedScanoutNext_=0;compositionMode_=-1;mediaResultLogged_=false;
+    lastPresentId_=0;lastStatistics_={};lastDatedPresentId_=0;datedScanouts_={};datedScanoutNext_=0;compositionMode_=-1;mediaResultLogged_=false;
     pendingPresents_={};lastDisplayedPresent_=0;lastSyncRefresh_=0;lastPresentRefresh_=0;replacedPresents_=0;lastSyncQpc_=0;refreshQpc_=0;displayLatencyMs_.clear();
     scanoutAudit_.reset();
     log::info("display-refresh",std::format("monitor refresh={:.3f} Hz at swapchain creation (0 = unknown); submissions above this rate cannot all be scanned out",displayRefreshHz_));
@@ -390,6 +390,7 @@ bool PresentSink::present(Status& status)
     // frame has no single vblank to date it by.
     const bool trackScanout=displayLatencyEnabled_&&!xess_&&!(flags&DXGI_PRESENT_ALLOW_TEARING);
     if(trackScanout)sampleDisplayLatency();
+    else lastStatistics_.valid=false;   // stream "s12-pace": no reading for a Present that cannot be dated
     LARGE_INTEGER presentQpc{};QueryPerformanceCounter(&presentQpc);
     const HRESULT hr = swapChain_->Present(syncInterval, flags);
     presentTiming_.callMs=split();presentTiming_.result=hr;
@@ -398,6 +399,7 @@ bool PresentSink::present(Status& status)
         pendingPresents_[pendingPresentNext_++%pendingPresents_.size()]={presentId,presentQpc.QuadPart,syncInterval==0};
     if(slipstreamStats_&&presentId)scanoutAudit_.presentIssued(presentId,syncInterval==0);
     lastPresentId_=slipstreamStats_?presentId:0;
+    lastDatedPresentId_=presentId;   // stream "s12-pace": 0 when this Present cannot be dated
     if(presentContractDirty_||attemptedPresentCount_<=3||attemptedPresentCount_%120==0){
         log::info("present-contract",std::format("backend={} sync={} flags=0x{:X} hr=0x{:X}",xess_?"XeSS":"DXGI",syncInterval,flags,unsigned(hr)));
         presentContractDirty_=false;
@@ -496,6 +498,9 @@ void PresentSink::sampleDisplayLatency(){
         if(reading.hasSyncTime){LARGE_INTEGER readQpc{};QueryPerformanceCounter(&readQpc);reading.statsAgeMs=double(readQpc.QuadPart-stats.SyncQPCTime.QuadPart)*1000.0/frequency;}
         scanoutAudit_.sample(reading);
     }
+    // Stream "s12-pace": the reading for the on-screen hold of each frame (PushOnScreenCadence), whatever happens below.
+    lastStatistics_={swapChain_&&SUCCEEDED(statsResult)&&stats.SyncQPCTime.QuadPart!=0,stats.PresentCount,stats.PresentRefreshCount,stats.SyncRefreshCount,
+        stats.SyncQPCTime.QuadPart?int64_t(double(stats.SyncQPCTime.QuadPart)*1e7/frequency):0};
     if(!swapChain_||FAILED(statsResult)||!stats.SyncQPCTime.QuadPart)return;
     // Measured vblank period from successive statistics, else the monitor rate.
     if(lastSyncQpc_&&stats.SyncRefreshCount>lastSyncRefresh_&&stats.SyncQPCTime.QuadPart>lastSyncQpc_)
@@ -538,6 +543,15 @@ void PresentSink::sampleDisplayLatency(){
             datedScanouts_[datedScanoutNext_++%datedScanouts_.size()]={pending.id,int64_t((scanout-double(stats.PresentCount-pending.id)*period)*1e7/frequency)};
         if(ms>=0&&ms<1000&&displayLatencyMs_.size()<4096)displayLatencyMs_.push_back(ms);
     }
+}
+PresentSink::StatisticsReading PresentSink::readStatistics()const{
+    static const double frequency=[]{LARGE_INTEGER f{};QueryPerformanceFrequency(&f);return double(f.QuadPart);}();
+    StatisticsReading r;
+    if(!swapChain_||xess_||!displayLatencyEnabled_)return r;
+    DXGI_FRAME_STATISTICS stats{};
+    if(FAILED(swapChain_->GetFrameStatistics(&stats))||!stats.SyncQPCTime.QuadPart)return r;
+    r={true,stats.PresentCount,stats.PresentRefreshCount,stats.SyncRefreshCount,int64_t(double(stats.SyncQPCTime.QuadPart)*1e7/frequency)};
+    return r;
 }
 PresentSink::RefreshGrid PresentSink::refreshGrid()const{
     static const double frequency=[]{LARGE_INTEGER f{};QueryPerformanceFrequency(&f);return double(f.QuadPart);}();

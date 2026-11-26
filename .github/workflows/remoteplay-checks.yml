@@ -84,7 +84,7 @@ jobs:
           $code = $LASTEXITCODE
           $run | Write-Host
           if ($code -ne 0) {
-            $run | Where-Object { $_ -match '^(FAIL|\[FAIL\]|not ok)' -or $_ -match 'FAILED|Assertion' } | Select-Object -First 9 | ForEach-Object { Write-Host "::error::core test: $_" }
+            $run | Where-Object { $_ -cmatch '^(FAIL|\[FAIL\]|not ok)' -or $_ -cmatch 'FAILED|Assertion' } | Select-Object -First 9 | ForEach-Object { Write-Host "::error::core test: $_" }
             $run | Select-Object -Last 2 | ForEach-Object { Write-Host "::notice::core tests ended with: $_" }
             Write-Host '::error::core tests failed'; exit 1
           }

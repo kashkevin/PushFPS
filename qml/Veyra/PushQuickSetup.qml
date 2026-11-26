@@ -928,6 +928,21 @@ VGroup {
         }
     }
 
+    // Stream s12-pace: "Steadier fine detail" (engine/PushDownscale.h, PresentBlit ShrinkSample): when the 4K picture is shown
+    // smaller, every 4K pixel is weighed exactly instead of one tap per screen pixel. Off = Package 16. Live, no rebuild.
+    VRow {
+        objectName: "pushfps-steady-detail-row"
+        visible: !quick.compact
+        label: qsTr("细节更稳定")
+        help: qsTr("4K 画面缩小显示在 1440p 屏幕或窗口里时，原来每个屏幕像素只取一个点，细线、准星和小字会随位置忽明忽暗。开启后每个 4K 像素都按实际覆盖的面积计算：细线不再闪烁，移动时亮度不再跳动。全屏 1440p 时清晰度和之前相同，小窗口里略柔和；显卡多做一点工作")
+        hint: qsTr("细线和小字不再闪烁；画面不缩小时没有变化")
+        VSwitch {
+            objectName: "pushfps-steady-detail"
+            checked: veyra.preferences.pushSteadyDetail === true
+            onToggled: v => veyra.setPreference("pushSteadyDetail", v)
+        }
+    }
+
     VRow {
         objectName: "pushfps-lowest-latency-row"
         label: qsTr("最低延迟")
@@ -993,6 +1008,7 @@ VGroup {
         visible: !quick.compact
         label: qsTr("连接后自动全屏")
         hint: qsTr("采集卡或串流画面出现时进入全屏；按 F11 或 Esc 退出") + (quick.toScreenText.length > 0 ? "\n" + quick.toScreenText : "")
+              + (quick.onScreenText.length > 0 ? "\n" + quick.onScreenText : "") + (quick.directHint.length > 0 ? "\n" + quick.directHint : "")
         VSwitch {
             objectName: "pushfps-auto-fullscreen"
             checked: veyra.preferences.pushAutoFullscreen === true
@@ -1026,6 +1042,48 @@ VGroup {
            ? qsTr("现在 Present 之后到屏幕刷新：%1 ms（中位数，DXGI 帧统计，软件计时）· %2").arg(Number(quick.displayPath.toScreenP50Ms).toFixed(1)).arg(quick.windowFacts)
            : qsTr("现在 Present 之后到屏幕刷新：%1 ms（中位数，DXGI 帧统计，软件计时）").arg(Number(quick.displayPath.toScreenP50Ms).toFixed(1)))
         : ""
+
+    // Stream "s12-pace" ([cadence], engine/PushOnScreenCadence.h; review 1 MUST 3): two different measurements under two different
+    // wordings. Composed path (0): AT LEAST this share of frames stayed exactly the expected refreshes on the screen (the lower bound,
+    // shown only when 90 % of the frames were covered). Direct path reported by the driver (1) or a refresh count standing still (2):
+    // only the Present spacing is known, a measure before the screen, said as such. Nothing when unmeasured.
+    readonly property string onScreenText: {
+        const p = quick.displayPath
+        if (p.onScreenKnown !== true) return ""
+        const path = Number(p.onScreenPath)
+        const spacing = p.onScreenSpacingEvenPct
+        if ((path === 1 || path === 2) && spacing !== undefined && spacing !== null)
+            return path === 1
+                ? qsTr("直接显示（驱动报告）：%1 % 的帧按均匀的时间交给 Windows（误差 1 ms 以内）；屏幕自己的时间这里没有测量").arg(Math.round(Number(spacing)))
+                : qsTr("%1 % 的帧按均匀的时间交给 Windows（误差 1 ms 以内）；屏幕自己的时间这里没有测量").arg(Math.round(Number(spacing)))
+        const k = Number(p.onScreenRefreshes)
+        // Review 2 MUST 1: a range, and only when it is at most 10 points wide.
+        if (path === 0 && p.onScreenNarrow === true && k > 0 && p.onScreenEvenPctMin !== undefined && p.onScreenEvenPctMax !== undefined) {
+            const lo = Math.floor(Number(p.onScreenEvenPctMin)), hi = Math.ceil(Number(p.onScreenEvenPctMax))
+            const hz = Number(veyra.displayRefreshHz)
+            return hz > 0
+                ? qsTr("屏幕上：%1–%2 % 的帧显示时间均匀（每帧 %3 次刷新，%4 ms）").arg(lo).arg(hi).arg(k).arg((k * 1000 / hz).toFixed(1))
+                : qsTr("屏幕上：%1–%2 % 的帧显示时间均匀（每帧 %3 次刷新）").arg(lo).arg(hi).arg(k)
+        }
+        return ""
+    }
+    // Review 1 SHOULD 1: only when the driver reported independent flip AND fullscreen VRR while PushFPS was in front, in this
+    // session; shown while the picture is composed now.
+    readonly property string directHint: quick.displayPath.onScreenKnown === true && Number(quick.displayPath.onScreenPath) === 0
+        && quick.displayPath.onScreenDirectSeen === true
+        ? qsTr("全屏并让 PushFPS 处于前台时，这台电脑的驱动报告了直接显示和可变刷新：每帧按自己的时间显示") : ""
+    // Stream "s12-pace" (review 1 SHOULD 3): the fullscreen-without-focus reminder can be switched off for good.
+    VRow {
+        objectName: "pushfps-unfocused-notice-row"
+        visible: !quick.compact
+        label: qsTr("全屏时提醒我点一下画面")
+        hint: qsTr("PushFPS 全屏但别的窗口在前台、画面显示不均匀时，提醒一次（最多每 10 分钟一次）")
+        VSwitch {
+            objectName: "pushfps-unfocused-notice"
+            checked: veyra.preferences.pushUnfocusedNotice !== false
+            onToggled: v => veyra.setPreference("pushUnfocusedNotice", v)
+        }
+    }
 
     // Smooth frame pacing: every frame waits for a refresh (V-Sync; variable refresh where the monitor
     // has it) and the output is capped at the refresh rate, so each generated frame is shown once.
