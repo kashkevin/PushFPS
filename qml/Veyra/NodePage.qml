@@ -1674,7 +1674,7 @@ VPage {
                 VRow {
                     label: qsTr("VFG 自动调控")
                     visible: veyra.fgBackendName === "vfg"
-                    enabled: veyra.vfgQuality !== 0 && veyra.fgMultiplier === 2
+                    enabled: veyra.vfgQuality > 0 && veyra.vfgQuality < 3 && veyra.fgMultiplier === 2   // s12 D2 (ProPage.qml list-vfg-auto-regulate)
                     opacity: enabled ? 1 : 0.5
                     hint: qsTr("实时采集 2X 时，当前档来不及赶上屏幕刷新，这一对帧就改用下一档，不丢帧也不加延迟。多占约 2 GB 显存，显存不够时不生效")
                     VSwitch { objectName: "node-vfg-auto-regulate"; checked: veyra.vfgAutoRegulate; onToggled: checked => veyra.vfgAutoRegulate = checked }
