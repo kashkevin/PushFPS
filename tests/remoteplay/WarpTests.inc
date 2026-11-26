@@ -4,6 +4,7 @@
 // WARP tests and the start-up self-check compare the GPU pass with. Pictures are small synthetic ones; values are
 // examples, the expected pictures are exact where the motion is a whole number of pixels.
 #include "veyra/pipeline/PushWarp.h"
+#include "../../tools/pushwarp_eval/FlowModel.h"
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -483,6 +484,191 @@ TEST(warp_long_vector_needs_its_neighbours) {
     const auto cutBig = pushWarpCellOf(big.frame(), big.frame(), false, lone.field(), 10, 8, p);
     const auto keptBig = pushWarpCellOf(big.frame(), big.frame(), false, uniform.field(), 10, 8, p);
     CHECK(keptSmall.gx == -10.0f && cutBig.gx == 0.0f && cutBig.trust == 0.0f && keptBig.gx == -10.0f);
+}
+
+// ---- Resumed 26 Nov 2026: duplicates in generated frames (problem B) and thin moving objects (problem A) -----------------------
+// SIMULATED: synthetic pictures, the CPU reference, and the FidelityFX-like block field model of tools/pushwarp_eval/FlowModel.h
+// (not AMD's code, not game footage, no graphics card). The pictures are 256 x 128 (flow 64 x 32: 4 work px per flow pixel and
+// 8 x 8 flow-pixel blocks = 32 work px, as at 4K). The numbers are printed so that the log of the run keeps them.
+namespace {
+using Scene = std::function<std::uint32_t(int, int, double)>;   // x, y, time in real-frame intervals
+
+// A smooth, detailed picture (a few sinusoids, about 10 grey levels per pixel of gradient): shifted by any fraction of a pixel
+// exactly, so the truth of a generated frame is the scene at that time.
+inline double softAt(double x, double y) {
+    return 128.0 + 46.0 * std::sin(0.21 * x + 0.13 * y) + 38.0 * std::sin(0.07 * x - 0.31 * y + 1.0) + 26.0 * std::sin(0.43 * x + 0.05 * y + 2.0);
+}
+inline std::uint32_t grey8(double v) { return std::uint32_t(std::clamp(std::lround(v), 0L, 255L)); }
+inline std::uint32_t softWord(double x, double y, double gain = 1.0) {
+    return grey8(softAt(x, y) * gain) | (grey8((softAt(x + 17.0, y - 9.0) * 0.9 + 10.0) * gain) << 8) | (grey8(softAt(x - 23.0, y + 31.0) * gain) << 16) | (255u << 24);
+}
+
+// The model field of a pair (B -> A, flow pixels, stored as vector x trust).
+inline Flow ffxField(const Pic& a, const Pic& b) {
+    const auto rgb = [](const Pic& p) {
+        std::vector<std::uint8_t> v(std::size_t(p.w) * p.h * 3);
+        for (std::size_t i = 0; i < std::size_t(p.w) * p.h; ++i)
+            for (std::size_t c = 0; c < 3; ++c) v[i * 3 + c] = std::uint8_t((p.words[i] >> (8 * c)) & 255u);
+        return v;
+    };
+    const auto la = pushwarp_eval::modelLumaQuarter(rgb(a), a.w, a.h), lb = pushwarp_eval::modelLumaQuarter(rgb(b), b.w, b.h);
+    const auto df = pushwarp_eval::modelDensify(pushwarp_eval::modelFlow(lb, la), lb, la);
+    Flow f;
+    f.w = df.w; f.h = df.h; f.sx = df.x; f.sy = df.y; f.tr = df.trust;
+    return f;
+}
+
+inline double meanError(const std::vector<std::uint32_t>& words, const Pic& truth) {
+    double e = 0;
+    for (std::size_t i = 0; i < words.size() && i < truth.words.size(); ++i)
+        for (int c = 0; c < 3; ++c) e += std::abs(double((words[i] >> (8 * c)) & 255u) - double((truth.words[i] >> (8 * c)) & 255u));
+    return e / (3.0 * double(words.size()));
+}
+
+// What the 3X output of `pairs` real-frame pairs shows: per pair I(1/3), I(2/3), B in this order, each compared with the
+// frame shown before it ("distinct": more than 0.5 % of the pixels differ by more than one code), and the mean error of
+// the generated frames against the scene at their time.
+struct SceneRun { unsigned frames = 0, distinct = 0, whole = 0; double error = 0; };
+inline SceneRun runScene(const Scene& scene, unsigned pairs, unsigned rules, std::uint32_t W = 256, std::uint32_t H = 128) {
+    SceneRun out;
+    std::vector<Pic> real;
+    for (unsigned k = 0; k <= pairs; ++k) real.push_back(picture(W, H, [&](int x, int y) { return scene(x, y, double(k)); }));
+    const std::uint64_t threshold = std::uint64_t(W) * H / 200;
+    unsigned generated = 0;
+    for (unsigned k = 0; k < pairs; ++k) {
+        const Flow f = ffxField(real[k], real[k + 1]);
+        std::vector<std::uint32_t> shown = real[k].words;
+        for (int s = 1; s <= 2; ++s) {
+            PushWarpParams p = wide();
+            p.t = float(s) / 3.0f;
+            p.refineRules = rules;
+            const auto r = pushWarpReference(real[k].frame(), real[k + 1].frame(), false, f.field(), p);
+            ++out.frames;
+            if (pushWarpDiffering(r.words, shown, false, 1) > threshold) ++out.distinct;
+            shown = r.words;
+            out.whole += r.wholeFrameNearest ? 1u : 0u;
+            const double when = double(k) + double(p.t);
+            out.error += meanError(r.words, picture(W, H, [&](int x, int y) { return scene(x, y, when); }));
+            ++generated;
+        }
+        ++out.frames;
+        if (pushWarpDiffering(real[k + 1].words, shown, false, 1) > threshold) ++out.distinct;
+    }
+    out.error /= double(generated);
+    return out;
+}
+
+inline Scene panScene(double vx, double vy) {
+    return [=](int x, int y, double time) { return softWord(double(x) - vx * time, double(y) - vy * time); };
+}
+// A dark bar `width` px wide, 96 px tall, moving `speed` px per real frame over a background panning `bg` px per frame.
+constexpr std::uint32_t kBarColour = 0xFF202020u;
+inline Scene barScene(int width, double speed, double bg) {
+    return [=](int x, int y, double time) {
+        const double x0 = 20.0 + speed * time;
+        return (y >= 16 && y < 112 && double(x) >= x0 && double(x) < x0 + double(width)) ? kBarColour : softWord(double(x) - bg * time, double(y));
+    };
+}
+// Share of the bar's own pixels (the truth at `when`, rows 24..103) that a frame shows within 8 codes of the bar's colour.
+inline double barKept(const std::vector<std::uint32_t>& words, double x0, int width, std::uint32_t W) {
+    unsigned kept = 0, n = 0;
+    for (int y = 24; y < 104; ++y)
+        for (int x = int(std::ceil(x0)); double(x) < x0 + double(width); ++x) {
+            if (x < 0 || x >= int(W)) continue;
+            ++n;
+            bool close = true;
+            for (int c = 0; c < 3; ++c) close = close && std::abs(int((words[std::size_t(y) * W + std::size_t(x)] >> (8 * c)) & 255u) - 0x20) <= 8;
+            kept += close ? 1u : 0u;
+        }
+    return n ? double(kept) / double(n) : 0.0;
+}
+}  // namespace
+
+// Problem B: the generated frames of one scene class, with the old rules and with the refinement. The old rules duplicate
+// frames in the slow-pan classes (the flow's zero vector fails the block SAD everywhere and the whole-frame verdict shows
+// the nearer real frame); the refinement does not. Classes that cannot be fixed by a better vector (repeating patterns,
+// a global flash) are reported, not asserted.
+TEST(warp_refine_distinct_frames_per_scene_class) {
+    struct Case { const char* name; Scene scene; bool mustBeDistinct; };
+    const std::vector<Case> cases = {
+        {"pan_1px", panScene(1.0, 0.0), true},
+        {"pan_2px", panScene(2.0, 0.0), true},
+        {"pan_3px_diagonal", panScene(2.0, 2.0), true},
+        {"pan_8px", panScene(8.0, 0.0), true},
+        {"grille_period12_speed5",
+         [](int x, int, double time) {
+             const double u = std::fmod(double(x) - 5.0 * time + 1200.0, 12.0);
+             const std::uint32_t g = u < 6.0 ? 210u : 50u;
+             return g | (g << 8) | ((g / 2u + 20u) << 16) | (255u << 24);
+         }, false},
+        {"flash_pan_4px", [](int x, int y, double time) { return softWord(double(x) - 4.0 * time, double(y), 1.0 + 0.4 * time); }, false},
+        {"thin_bar_4px_30px", barScene(4, 30.0, 8.0), false},
+    };
+    for (const auto& c : cases) {
+        const SceneRun old = runScene(c.scene, 3, 0), now = runScene(c.scene, 3, kPushWarpRefineAll);
+        std::cerr << "[warp-refine] " << c.name << ": distinct of " << old.frames << " shown: old " << old.distinct << " new " << now.distinct
+                  << "; whole-frame holds old " << old.whole << " new " << now.whole << "; mean error old " << old.error << " new " << now.error << std::endl;
+        CHECK(now.distinct >= old.distinct);
+        if (c.mustBeDistinct) CHECK(now.distinct == now.frames);
+    }
+}
+
+// Problem A: thin bars (2, 4, 8 px) moving 20, 40 and 60 px per frame over a background moving 8 px per frame. The share of the
+// bar's pixels a generated frame shows (barKept) with the old rules and with the refinement, at t = 1/3 and 2/3.
+TEST(warp_refine_thin_moving_objects) {
+    double oldSum = 0, newSum = 0;
+    unsigned rows = 0;
+    for (int width : {2, 4, 8})
+        for (double speed : {20.0, 40.0, 60.0}) {
+            const Scene scene = barScene(width, speed, 8.0);
+            const std::uint32_t W = 256, H = 128;
+            const Pic a = picture(W, H, [&](int x, int y) { return scene(x, y, 1.0); }), b = picture(W, H, [&](int x, int y) { return scene(x, y, 2.0); });
+            const Flow f = ffxField(a, b);
+            for (int s = 1; s <= 2; ++s) {
+                double kept[2] = {0, 0};
+                for (int mode = 0; mode < 2; ++mode) {
+                    PushWarpParams p = wide();
+                    p.t = float(s) / 3.0f;
+                    p.refineRules = mode ? kPushWarpRefineAll : 0u;
+                    const auto r = pushWarpReference(a.frame(), b.frame(), false, f.field(), p);
+                    kept[mode] = barKept(r.words, 20.0 + speed * (1.0 + double(p.t)), width, W);
+                }
+                std::cerr << "[warp-refine] bar " << width << " px, " << speed << " px/frame, t=" << s << "/3: bar pixels kept old " << kept[0] << " new " << kept[1] << std::endl;
+                oldSum += kept[0]; newSum += kept[1]; ++rows;
+            }
+        }
+    CHECK(rows == 18);
+    CHECK(newSum >= oldSum);   // never a net loss over the table
+}
+
+// The refinement bits are independent and off by default: refineRules 0 gives the frame of before.
+TEST(warp_refine_off_by_default_and_bits) {
+    const PushWarpParams p;
+    CHECK(p.refineRules == 0);
+    CHECK(kPushWarpRefineAll == (kPushWarpRefineAgreeingHoles | kPushWarpRefineCells | kPushWarpRefinePixels));
+    constexpr std::uint32_t W = 64, H = 32;
+    const auto a = picture(W, H, [](int x, int y) { return texel(x, y, false); });
+    const auto b = picture(W, H, [](int x, int y) { return texel(x - 12, y, false); });
+    const auto f = flowOf(16, 8, [](int, int, float& vx, float& vy, float& t) { vx = -3; vy = 0; t = 1; });
+    const auto base = pushWarpReference(a.frame(), b.frame(), false, f.field(), wide());
+    PushWarpParams q = wide();
+    q.refineRules = 0;
+    CHECK(pushWarpReference(a.frame(), b.frame(), false, f.field(), q).words == base.words);
+    // an exact field is not changed by the refinement (every cell is already under sadLow)
+    q.refineRules = kPushWarpRefineAll;
+    CHECK(pushWarpReference(a.frame(), b.frame(), false, f.field(), q).words == base.words);
+}
+
+// Cut: unrelated pictures still hold the nearer real frame with every refinement bit on.
+TEST(warp_refine_keeps_the_cut_verdict) {
+    constexpr std::uint32_t W = 64, H = 32;
+    const auto a = picture(W, H, [](int x, int y) { return texel(x, y, false); });
+    const auto b = picture(W, H, [](int x, int y) { return texel(y * 7 + 3, x * 3 + 1, false); });
+    const auto f = flowOf(16, 8, [](int, int, float& vx, float& vy, float& t) { vx = 0; vy = 0; t = 1; });
+    PushWarpParams p = wide();
+    p.refineRules = kPushWarpRefineAll;
+    const auto r = pushWarpReference(a.frame(), b.frame(), false, f.field(), p);
+    CHECK(r.wholeFrameNearest && r.words == b.words);
 }
 
 }  // namespace warp_tests

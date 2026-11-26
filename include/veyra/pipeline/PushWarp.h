@@ -71,6 +71,10 @@ struct PushWarpParams {
     // exclusion. 0: off (the frame as before). Interpolated frames only (t <= 1); a predicted frame ignores it.
     unsigned overlayRules = 0;
     float accelShare = 0.0f;   // the acceleration only where it is at least this share of the larger speed (0: always); set below once measured
+    // Resumed 26 Nov 2026 (docs/drafts/OWN_FG_DESIGN.md "Resumed 26 Nov 2026"): the refinement rules, a bit set of
+    // kPushWarpRefine*. 0: the frame exactly as before. Interpolated and predicted frames alike for the cells (bit 2); the
+    // verdict count (bit 1) and the per-pixel choice (bit 4) are for interpolated frames.
+    unsigned refineRules = 0;
 };
 inline bool pushWarpPredicting(const PushWarpParams& p) { return p.t > 1.0f; }
 
@@ -369,6 +373,108 @@ inline bool pushWarpLongCorroborated(const PushWarpField& f, std::uint32_t cx, s
     return agree * 4 >= around * 3;
 }
 
+// ---- Refinement (resumed 26 Nov 2026; problems A and B of the design document) ---------------------------------------------
+// The flow gives one integer vector per 8 x 8 flow-pixel block (32 work px at 4K). Two defects follow from that, both found
+// in the CPU reference with the FidelityFX-like field model (WarpTests.inc `warp_refine_*`):
+//   B (duplicates)   a slow pan (1-3 work px per real frame = under one flow pixel) gets the zero vector; the block SAD at zero
+//                    motion of a detailed picture is above sadHigh, so every cell is untrusted, every moving pixel is a hole,
+//                    and the whole-frame verdict shows the nearer real frame: I(1/3) = A, I(2/3) = B, two duplicates in three.
+//   A (thin objects) an object narrower than a block never gets its own vector; the pixels of its cells have the block's
+//                    (the background's), so it vanishes from the generated frame.
+// Bit 2, cells (W3): a cell whose block SAD at the field's vector is above sadLow looks for a better whole-pixel offset:
+//   seeds (zero, the trusted neighbours' vectors), then +-2 and +-1 around the best; when still above sadHigh and the cell's
+//   surround matches (at least 5 of 8 neighbours under sadHigh at their own vectors: an object in a moving picture, not a
+//   cut), a coarse search of +-kPushWarpRefineWideRadius work px in steps of kPushWarpRefineWideStep around the field's
+//   vector and the same refinement. A found offset gets a parabolic sub-pixel step (+-0.5 px) from the SAD at its four
+//   axis neighbours. A candidate must beat the current best by kPushWarpRefineMargin. Cost per flagged cell: up to 16 taps x
+//   (1 + 9 + 16 + 4) = 480; with the wide search 169 + 16 more candidates (about 3 000 taps). Cells under sadLow cost nothing
+//   extra (their SAD was computed anyway).
+// Bit 4, pixels (R3): where the two samples of an interpolated pixel (not a still one) disagree by more than
+//   kPushWarpCandidateTrigger, the four flow cells whose vectors the bilinear field blends are tried one by one (the
+//   bilinear blend of a thin object's cell and the background's is a vector of neither) and the one whose two samples agree
+//   best is used. At most 8 extra bilinear taps, only at the triggered pixels.
+// Bit 1, verdict: a hole pixel (nothing trusted landed there) whose two samples at the filled motion agree is an honest
+//   interpolation and counts as a blend: the whole-frame hold is for pictures that do not agree (a cut, a failed flow), not
+//   for a region the flow gave up on but the two real frames still match in.
+constexpr unsigned kPushWarpRefineAgreeingHoles = 1u, kPushWarpRefineCells = 2u, kPushWarpRefinePixels = 4u, kPushWarpRefineAll = 7u;
+constexpr int kPushWarpRefineWideRadius = 24, kPushWarpRefineWideStep = 4;
+constexpr float kPushWarpRefineMargin = 1.0f / 255.0f;
+constexpr float kPushWarpCandidateTrigger = 12.0f / 255.0f;
+// The block SAD of cell (cx, cy) with A read at (x + ox, y + oy) (whole work px): the mean over the cell's 4 x 4 samples of the
+// largest channel difference.
+inline float pushWarpCellMad(const PushWarpFrame& a, const PushWarpFrame& b, bool tenBit, std::uint32_t cx, std::uint32_t cy,
+                             std::uint32_t gw, std::uint32_t gh, int ox, int oy) {
+    float sum = 0;
+    for (std::uint32_t j = 0; j < 4; ++j)
+        for (std::uint32_t k = 0; k < 4; ++k) {
+            const int x = int(pushWarpFootprint(cx, k, b.width, gw)), y = int(pushWarpFootprint(cy, j, b.height, gh));
+            sum += pushWarpMaxDelta(pushWarpUnpack(b.at(x, y), tenBit), pushWarpUnpack(a.at(x + ox, y + oy), tenBit));
+        }
+    return sum / 16.0f;
+}
+// The refinement of one cell (see above). (ox0, oy0, mad0): the field's offset and its SAD. Returns true with the new vector in
+// work px (outX, outY: B -> A, may be fractional) and its SAD at the whole-pixel offset when something better was found.
+inline bool pushWarpRefineVector(const PushWarpFrame& a, const PushWarpFrame& b, bool tenBit, const PushWarpField& field, std::uint32_t cx, std::uint32_t cy,
+                                 const PushWarpParams& p, int ox0, int oy0, float mad0, float& outX, float& outY, float& outMad) {
+    const std::uint32_t gw = field.width, gh = field.height;
+    const float sx = float(b.width) / float(gw), sy = float(b.height) / float(gh);
+    int bx = ox0, by = oy0;
+    float bm = mad0;
+    const auto madAt = [&](int ox, int oy) { return pushWarpCellMad(a, b, tenBit, cx, cy, gw, gh, ox, oy); };
+    const auto tryAt = [&](int ox, int oy) {
+        if (ox == bx && oy == by) return;
+        const float m = madAt(ox, oy);
+        if (m + kPushWarpRefineMargin < bm) { bx = ox; by = oy; bm = m; }
+    };
+    tryAt(0, 0);
+    for (int j = -1; j <= 1; ++j)
+        for (int i = -1; i <= 1; ++i) {
+            if (i == 0 && j == 0) continue;
+            float vx = 0, vy = 0;
+            if (!pushWarpVectorAt(field, int(cx) + i, int(cy) + j, p.minConfidence, vx, vy)) continue;
+            tryAt(pushWarpRound(vx * sx), pushWarpRound(vy * sy));
+        }
+    const auto ring = [&]() {
+        for (int step = 2; step >= 1; --step) {
+            const int qx = bx, qy = by;
+            for (int j = -1; j <= 1; ++j)
+                for (int i = -1; i <= 1; ++i)
+                    if (i != 0 || j != 0) tryAt(qx + step * i, qy + step * j);
+        }
+    };
+    ring();
+    if (bm > p.sadHigh) {
+        int ok = 0, around = 0;
+        for (int j = -1; j <= 1; ++j)
+            for (int i = -1; i <= 1; ++i) {
+                const int x = int(cx) + i, y = int(cy) + j;
+                if ((i == 0 && j == 0) || x < 0 || y < 0 || x >= int(gw) || y >= int(gh)) continue;
+                ++around;
+                float vx = 0, vy = 0;
+                if (!pushWarpVectorAt(field, x, y, p.minConfidence, vx, vy)) continue;
+                if (pushWarpCellMad(a, b, tenBit, std::uint32_t(x), std::uint32_t(y), gw, gh, pushWarpRound(vx * sx), pushWarpRound(vy * sy)) <= p.sadHigh) ++ok;
+            }
+        if (around > 0 && ok * 8 >= around * 5) {
+            const float before = bm;
+            const int n = kPushWarpRefineWideRadius / kPushWarpRefineWideStep;
+            for (int j = -n; j <= n; ++j)
+                for (int i = -n; i <= n; ++i)
+                    if (i != 0 || j != 0) tryAt(ox0 + i * kPushWarpRefineWideStep, oy0 + j * kPushWarpRefineWideStep);
+            if (bm < before) ring();
+        }
+    }
+    if (bx == ox0 && by == oy0) return false;
+    const float xm = madAt(bx - 1, by), xp = madAt(bx + 1, by), ym = madAt(bx, by - 1), yp = madAt(bx, by + 1);
+    const auto parabola = [&](float lo, float hi) {
+        const float denom = lo + hi - 2.0f * bm;
+        return denom > 1e-6f ? std::clamp(0.5f * (lo - hi) / denom, -0.5f, 0.5f) : 0.0f;
+    };
+    outX = float(bx) + parabola(xm, xp);
+    outY = float(by) + parabola(ym, yp);
+    outMad = bm;
+    return true;
+}
+
 // W3: one cell.
 inline PushWarpCell pushWarpCellOf(const PushWarpFrame& a, const PushWarpFrame& b, bool tenBit, const PushWarpField& field,
                                    std::uint32_t cx, std::uint32_t cy, const PushWarpParams& p, const PushWarpField* previous = nullptr) {
@@ -377,19 +483,20 @@ inline PushWarpCell pushWarpCellOf(const PushWarpFrame& a, const PushWarpFrame& 
     const float conf = field.trust[i];
     if (!(conf > 1e-6f)) return c;
     c.gx = field.storedX[i] / conf; c.gy = field.storedY[i] / conf;
-    const float length = std::sqrt(c.gx * c.gx + c.gy * c.gy);
+    float length = std::sqrt(c.gx * c.gx + c.gy * c.gy);
     if (!(conf >= p.minConfidence) || !(length <= p.maxMotionShare * float(field.width)) ||
         (length > kPushWarpLongShare * float(field.width) && length * float(b.width) / float(field.width) > kPushWarpLongMinWork &&
          !pushWarpLongCorroborated(field, cx, cy, c.gx, c.gy, p.minConfidence))) { c.gx = c.gy = 0; return c; }
     const float sx = float(b.width) / float(field.width), sy = float(b.height) / float(field.height);
     const int ox = pushWarpRound(c.gx * sx), oy = pushWarpRound(c.gy * sy);
-    float sum = 0;
-    for (std::uint32_t j = 0; j < 4; ++j)
-        for (std::uint32_t k = 0; k < 4; ++k) {
-            const int x = int(pushWarpFootprint(cx, k, b.width, field.width)), y = int(pushWarpFootprint(cy, j, b.height, field.height));
-            sum += pushWarpMaxDelta(pushWarpUnpack(b.at(x, y), tenBit), pushWarpUnpack(a.at(x + ox, y + oy), tenBit));
+    float mad = pushWarpCellMad(a, b, tenBit, cx, cy, field.width, field.height, ox, oy);
+    if ((p.refineRules & kPushWarpRefineCells) != 0 && mad > p.sadLow) {   // refinement: problems A and B (see above)
+        float rx = 0, ry = 0, rmad = 0;
+        if (pushWarpRefineVector(a, b, tenBit, field, cx, cy, p, ox, oy, mad, rx, ry, rmad)) {
+            const float nx = rx / sx, ny = ry / sy, nlen = std::sqrt(nx * nx + ny * ny);
+            if (nlen <= p.maxMotionShare * float(field.width)) { c.gx = nx; c.gy = ny; length = nlen; mad = rmad; }
         }
-    const float mad = sum / 16.0f;
+    }
     c.trust = conf * (1.0f - pushWarpSmoothstep(p.sadLow, p.sadHigh, mad));
     c.importance = pushWarpImportance(length, p.beta);
     if (pushWarpPredicting(p) && p.acceleration && previous) {
@@ -455,6 +562,28 @@ inline void pushWarpCellsAt(const std::vector<PushWarpCell>& cells, std::uint32_
     const float topY = c00.gy + (c10.gy - c00.gy) * tx, bottomY = c01.gy + (c11.gy - c01.gy) * tx;
     gx = (topX + (bottomX - topX) * ty) * (float(W) / float(gw));
     gy = (topY + (bottomY - topY) * ty) * (float(H) / float(gh));
+}
+// Refinement bit 4 (see "Refinement" above): at work pixel (x, y) try the vectors of the four flow cells the bilinear field
+// blends (their filled vectors, in work px) one by one and keep the one whose two samples (A at p + t g, B at p - (1 - t) g)
+// agree best; strictly better than the blended vector's pair only. Edge cells repeat (the same cell may be tried twice).
+inline void pushWarpCandidates(const std::vector<PushWarpLevelCell>& field, std::uint32_t gw, std::uint32_t gh, std::uint32_t W, std::uint32_t H,
+                               std::uint32_t x, std::uint32_t y, float t, const PushWarpFrame& a, const PushWarpFrame& b, bool tenBit,
+                               float& gx, float& gy, PushWarpColor& s0, PushWarpColor& s1) {
+    const float sx = float(gw) / float(W), sy = float(gh) / float(H);
+    const float scaleX = float(W) / float(gw), scaleY = float(H) / float(gh);
+    const float qx = std::max((float(x) + 0.5f) * sx - 0.5f, 0.0f), qy = std::max((float(y) + 0.5f) * sy - 0.5f, 0.0f);
+    const std::uint32_t x0 = std::min(std::uint32_t(std::floor(qx)), gw - 1), y0 = std::min(std::uint32_t(std::floor(qy)), gh - 1);
+    const std::uint32_t x1 = std::min(x0 + 1, gw - 1), y1 = std::min(y0 + 1, gh - 1);
+    const std::uint32_t xs[4] = {x0, x1, x0, x1}, ys[4] = {y0, y0, y1, y1};
+    float best = pushWarpMaxDelta(s0, s1);
+    for (int k = 0; k < 4; ++k) {
+        const auto& c = field[std::size_t(ys[k]) * gw + xs[k]];
+        const float cgx = c.ex * scaleX, cgy = c.ey * scaleY;
+        const auto c0 = pushWarpBilinear(a, tenBit, float(x) + t * cgx, float(y) + t * cgy);
+        const auto c1 = pushWarpBilinear(b, tenBit, float(x) - (1.0f - t) * cgx, float(y) - (1.0f - t) * cgy);
+        const float d = pushWarpMaxDelta(c0, c1);
+        if (d < best) { best = d; gx = cgx; gy = cgy; s0 = c0; s1 = c1; }
+    }
 }
 // The overlay's view of the pair's motion per flow cell: the trust-weighted mean of the trusted cell vectors within
 // kPushWarpOverlaySpread cells (an overlay pulls its own cells' trust down: their neighbours say how the picture moves
@@ -758,8 +887,10 @@ inline PushWarpResult pushWarpReference(const PushWarpFrame& a, const PushWarpFr
                 continue;
             }
             if (hole) vis = 1.0f;
-            const auto s0 = pushWarpBilinear(a, tenBit, float(x) + p.t * gx, float(y) + p.t * gy);
-            const auto s1 = pushWarpBilinear(b, tenBit, float(x) - (1.0f - p.t) * gx, float(y) - (1.0f - p.t) * gy);
+            auto s0 = pushWarpBilinear(a, tenBit, float(x) + p.t * gx, float(y) + p.t * gy);
+            auto s1 = pushWarpBilinear(b, tenBit, float(x) - (1.0f - p.t) * gx, float(y) - (1.0f - p.t) * gy);
+            if (!still && (p.refineRules & kPushWarpRefinePixels) != 0 && pushWarpMaxDelta(s0, s1) > kPushWarpCandidateTrigger * pushWarpOverlayScale(tenBit))
+                pushWarpCandidates(r.field, gw, gh, W, H, x, y, p.t, a, b, tenBit, gx, gy, s0, s1);   // refinement bit 4
             float w0 = (1.0f - p.t) * vis, w1 = p.t * vis;
             PushWarpColor out;
             bool conflict = pushWarpMaxDelta(s0, s1) > p.conflictDelta;
@@ -782,7 +913,9 @@ inline PushWarpResult pushWarpReference(const PushWarpFrame& a, const PushWarpFr
             r.words[std::size_t(y) * W + x] = pushWarpPack(out, tenBit);
             // a still pixel moved by pushWarpStillHolds stays "still" in the counters, so the whole-frame verdict (more holes
             // than moving pixels) is decided by the moving pixels alone, as without the rules
-            if (still) ++r.counters.still; else if (hole) ++r.counters.hole; else if (conflict) ++r.counters.conflict; else ++r.counters.blend;
+            // refinement bit 1: a hole whose two samples agree is an honest interpolation (a blend), not a reason to hold the frame
+            const bool holeKind = hole && !((p.refineRules & kPushWarpRefineAgreeingHoles) != 0 && !conflict);
+            if (still) ++r.counters.still; else if (holeKind) ++r.counters.hole; else if (conflict) ++r.counters.conflict; else ++r.counters.blend;
         }
     r.wholeFrameNearest = pushWarpWholeFrameNearest(r.counters);
     if (r.wholeFrameNearest) {
