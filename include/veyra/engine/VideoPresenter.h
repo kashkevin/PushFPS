@@ -40,7 +40,12 @@ public:
     void setCapture(PresentCapture* capture){capture_=capture;}
     // Shared refresh/VRR states (the engine's); must outlive the presenter.
     void setDisplayStates(DisplayStateService* states){displayStates_=states;}
-    ~VideoPresenter(){close();}
+    // Stream "s12-pace": defined in VideoPresenter.cpp, where PushFrameThumb is complete (thumbs_ is a unique_ptr to it; an
+    // inline constructor or destructor would instantiate its deleter in every file that only sees the forward declaration).
+    VideoPresenter();
+    ~VideoPresenter();
+    VideoPresenter(const VideoPresenter&)=delete;
+    VideoPresenter& operator=(const VideoPresenter&)=delete;
     // mediaClockPaced: the owner already waits on a media clock before each
     // source (file playback). Retained for diagnostics; XeLL low latency must
     // stay enabled or the provider refuses generation (result -15).

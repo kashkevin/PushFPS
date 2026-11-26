@@ -23,6 +23,9 @@ static_assert(unsigned(veyra::diagnostics::GpuStage::Color)==0&&unsigned(veyra::
               unsigned(veyra::diagnostics::GpuStage::BaseTail)==35&&unsigned(veyra::diagnostics::GpuStage::VfgCapture)==36&&
               unsigned(veyra::diagnostics::GpuStage::RealCompose)==37,"PushFgHealth.h kPushHealthStages");
 namespace veyra::engine {
+VideoPresenter::VideoPresenter()=default;
+VideoPresenter::~VideoPresenter(){close();}
+
 bool VideoPresenter::beginSourceInput(uint64_t stallUs){
     if(!reflexInputFrame_&&reflex_.active())reflexInputFrame_=reflex_.begin(stallUs);
     auto* xess=sink_.xess();if(!xess)return true;
