@@ -1,12 +1,12 @@
 Vendored COPIES (read-only references; never edited here). Re-take with tools/quality_bench/vendor/retake.sh.
-Copied 2026-11-25.
-exp/s12-pace 5871cec4516b57c344ac3050ec6ec1eaddd003d5
-  include/veyra/engine/PushDownscale.h      -> PushDownscale.h   (area filter CPU reference; being reworked upstream: re-take on request)
+Copied 2026-11-26.
+pace origin/ck/s12-pace e4d2067e8738d684725f9a9f8be710be18a649df
+  include/veyra/engine/PushDownscale.h      -> PushDownscale.h   (downscale kernels CPU reference: Area, AreaSharp, Catmull-Rom, Mitchell, Lanczos-2)
   include/veyra/engine/PushFrameProbe.h     -> PushFrameProbe.h  (near-duplicate / evenness / blend-likeness maths)
   include/veyra/engine/PushOnScreenCadence.h -> PushOnScreenCadence.h (on-screen hold maths; definitions of even / judderPct)
-exp/s12-hud 799a23ba (re-taken 26 Nov on the orchestrator's request; first copy was 6618dbd1)
+hud origin/ck/s12-hud 547dfa1c00515956a8a0194f0256f7f934df5e68
   include/veyra/pipeline/PushHudGuard.h     -> PushHudGuard.h    (HUD Guard rules + CPU reference)
-exp/s11-ownfg 9cccc93c74c2c5a7a81a303c2b6063bef1915d19
+ownfg origin/ck/ownfg 83209dd64702e56152bcfe753b67ea29db9b556f
   include/veyra/pipeline/PushWarp.h         -> PushWarp.h        (PushWarp CPU reference)
   tools/pushwarp_eval/pushwarp_cli.cpp      -> pushwarp_cli.cpp  (its offline CLI; built against PushWarp.h here)
   tools/pushwarp_eval/ffx_check_sim.py      -> ffx_check_sim.py  (the FidelityFX-like block-search MODEL of the flow; not AMD's code)

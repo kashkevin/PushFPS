@@ -57,7 +57,7 @@ def validation(md, raw):
     # downscale reproductions (S12_PACE_REVIEW2 tables)
     lines = E.q2_lines(E.HDR, 300.0, 10.0)
     for r in lines:
-        if r["width"] == 1:
+        if r["width"] == 1 and r["filter"] in ("p16", "area", "exact"):
             exp = {"p16": "1.10 / 1.35 / 112", "area": "0.42 / 0.75 / 99", "exact": "0.000 / 0.555 / 131"}[r["filter"]]
             rows.append({"case": f"moving 1-px line 10->300 nits, quarter-pixel steps, {r['filter']}: energy pulse / peak pulse / mean peak",
                          "expected": exp + " (reviewer)", "got": f"{r['energy_pulse']:.2f} / {r['peak_pulse']:.2f} / {r['peak_mean']:.0f}"})
@@ -120,27 +120,44 @@ def main():
         print(f"[Q1] {time.time() - t0:.0f} s", flush=True)
     if "Q2" in only:
         md.append("## Q2. Current vs improved downscaling (HDR10)\n\n### Q2a. Thin lines 300 nits on 10 nits, all quarter-pixel phases\n")
-        md.append(table(E.q2_lines(), [("4K width", "width"), ("filter", "filter"), ("peak mean nits", "peak_mean"), ("peak worst", "peak_worst"),
+        q2l = E.q2_lines(); raw["q2_lines"] = q2l
+        md.append(table(q2l, [("4K width", "width"), ("filter", "filter"), ("peak mean nits", "peak_mean"), ("peak worst", "peak_worst"),
                                          ("energy error %", "energy_err_pct"), ("energy pulse", "energy_pulse"), ("peak pulse", "peak_pulse"),
                                          ("FWHM px", "fwhm_mean"), ("FWHM range", "fwhm_range")], {"peak_mean": ".0f", "peak_worst": ".0f", "energy_err_pct": ".0f"}))
         md.append("\n### Q2b. Pixel-aligned HUD strokes 300 nits on black (column phases)\n")
-        md.append(table(E.q2_strokes(), [("4K width", "width"), ("filter", "filter"), ("peak mean nits", "peak_mean"), ("worst column", "peak_worst")], {"peak_mean": ".0f", "peak_worst": ".1f"}))
+        q2s = E.q2_strokes(); raw["q2_strokes"] = q2s
+        md.append(table(q2s, [("4K width", "width"), ("filter", "filter"), ("peak mean nits", "peak_mean"), ("worst column", "peak_worst")], {"peak_mean": ".0f", "peak_worst": ".1f"}))
         md.append("\n### Q2c. Small text (strokes 2 px at 4K), static and drifting a quarter pixel a frame\n")
-        md.append(table(E.q2_text(quick=a.quick), [("filter", "filter"), ("stroke contrast static, mean of 3 phases (nits)", "stroke_peak_static_mean"), ("static, worst phase", "stroke_peak_static_worst"),
+        q2t = E.q2_text(quick=a.quick); raw["q2_text"] = q2t
+        md.append(table(q2t, [("filter", "filter"), ("stroke contrast static, mean of 3 phases (nits)", "stroke_peak_static_mean"), ("static, worst phase", "stroke_peak_static_worst"),
                                                    ("energy vs exact %", "energy_vs_exact_pct"), ("energy pulse moving", "energy_pulse_moving"), ("stroke contrast pulse moving", "peak_pulse_moving")],
                         {"stroke_peak_static_mean": ".0f", "stroke_peak_static_worst": ".0f", "energy_vs_exact_pct": ".0f"}))
         md.append("\n### Q2d. Moire, shimmer and the price in sharpness (contrast kept at a period of N output px)\n")
-        md.append(table(E.q2_moire_and_sharpness(), [("filter", "filter"), ("moire RMS % of amplitude", "moire_rms_pct"), ("shimmer % (moving)", "shimmer_pct"),
+        q2m = E.q2_moire_and_sharpness(); raw["q2_moire"] = q2m
+        md.append(table(q2m, [("filter", "filter"), ("moire RMS % of amplitude", "moire_rms_pct"), ("shimmer % (moving)", "shimmer_pct"),
                                                      ("0.1 c/px", "contrast_0.1"), ("0.2", "contrast_0.2"), ("0.25 (4 px)", "contrast_0.25"),
                                                      ("0.333 (3 px)", "contrast_0.333"), ("0.4 (2.5 px)", "contrast_0.4")],
                         {"moire_rms_pct": ".1f", "shimmer_pct": ".1f", "contrast_0.1": ".3f", "contrast_0.2": ".3f", "contrast_0.25": ".3f", "contrast_0.333": ".3f", "contrast_0.4": ".3f"}))
         hl, big = E.q2_highlights()
+        raw["q2_highlights"] = {"lines": hl, "patch": big}
         md.append("\n### Q2e. HDR highlights: thin 1000-nit lines on 50 nits (all phases) and a large 1000-nit patch\n")
         md.append(table(hl, [("4K width", "width"), ("filter", "filter"), ("peak mean nits", "peak_mean"), ("energy error %", "energy_err_pct"), ("energy pulse", "energy_pulse")], {"peak_mean": ".0f", "energy_err_pct": ".0f"}))
         md.append("")
         md.append(table(big, [("filter", "filter"), ("1000-nit patch shown as nits", "patch_nits"), ("PQ code error (of 1023)", "patch_pq_err_codes")], {"patch_nits": ".1f"}))
+        ov = E.q2_overshoot()
+        md.append("\n### Q2g. Ringing at a hard edge: a 1000-nit patch beside a 50-nit and a 0.1-nit field (worst of 12 phases)\n")
+        md.append(table(ov, [("filter", "filter"), ("overshoot nits (on 50)", "over_nits_50"), ("overshoot % of 1000", "over_pct_50"), ("overshoot PQ codes", "over_codes_50"),
+                             ("undershoot nits (on 50)", "under_nits_50"), ("undershoot PQ codes (on 50)", "under_codes_50"),
+                             ("overshoot nits (on 0.1)", "over_nits_01"), ("undershoot PQ codes (on 0.1)", "under_codes_01")],
+                        {"over_nits_50": ".1f", "over_pct_50": ".1f", "over_codes_50": ".1f", "under_nits_50": ".1f", "under_codes_50": ".1f", "over_nits_01": ".1f", "under_codes_01": ".1f"}))
+        cs = E.q2_cost()
+        md.append("\n### Q2h. Cost proxy at 1.5x (per output pixel; arithmetic on the kernel's footprint, NOT a GPU timing)\n")
+        md.append(table(cs, [("filter", "filter"), ("texel reads, direct 2-D", "texels_2d"), ("texel reads, two 1-D passes", "texels_sep"), ("bilinear fetches", "fetches"), ("what", "note")], {"texels_2d": ".1f", "texels_sep": ".1f", "fetches": ".1f"}))
+        raw["q2_overshoot"] = ov
+        raw["q2_cost"] = cs
         md.append("\n### Q2f. Hue at saturated edges (1000-nit BT.2020 red stroke on a 100-nit green field)\n")
-        md.append(table(E.hue_test(), [("4K width", "width"), ("filter", "filter"), ("dE ITP mean", "dEITP_mean"), ("dE ITP worst", "dEITP_worst"), ("hue shift worst deg", "hue_shift_deg_worst")], {"dEITP_mean": ".1f", "dEITP_worst": ".1f", "hue_shift_deg_worst": ".1f"}))
+        q2f = E.hue_test(); raw["q2_hue"] = q2f
+        md.append(table(q2f, [("4K width", "width"), ("filter", "filter"), ("dE ITP mean", "dEITP_mean"), ("dE ITP worst", "dEITP_worst"), ("hue shift worst deg", "hue_shift_deg_worst")], {"dEITP_mean": ".1f", "dEITP_worst": ".1f", "hue_shift_deg_worst": ".1f"}))
         md.append("")
         print(f"[Q2] {time.time() - t0:.0f} s", flush=True)
     if "Q3" in only:
@@ -155,7 +172,7 @@ def main():
         for name, kw in cases:
             for M in (2, 3):
                 for guard in (False, True):
-                    for filt in ds.FILTERS:
+                    for filt in ds.HUD_FILTERS:
                         r = E.hud_case(M, guard, filt, **kw)
                         r["case"] = name
                         q3.append(r)

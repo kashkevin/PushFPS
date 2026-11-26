@@ -71,7 +71,7 @@ static std::vector<std::uint32_t> recompose(const PushWarpFrame& a, const PushWa
     for (std::uint32_t y = 0; y < H; ++y)
         for (std::uint32_t x = 0; x < W; ++x) {
             const std::uint32_t aw = a.at(int(x), int(y)), bw = b.at(int(x), int(y));
-            if (pushWarpMaxDelta(pushWarpUnpack(aw, true), pushWarpUnpack(bw, true)) <= p.stillDelta) { out[std::size_t(y) * W + x] = aw; continue; }
+            if (pushWarpMaxDelta(pushWarpUnpack(aw, true), pushWarpUnpack(bw, true)) <= p.stillDelta * pushWarpOverlayScale(true)) { out[std::size_t(y) * W + x] = aw; continue; }
             const float qx = std::max((float(x) + 0.5f) * sx - 0.5f, 0.0f), qy = std::max((float(y) + 0.5f) * sy - 0.5f, 0.0f);
             const float fx = std::floor(qx), fy = std::floor(qy), tx = qx - fx, ty = qy - fy;
             const std::uint32_t x0 = std::min(std::uint32_t(fx), gw - 1), y0 = std::min(std::uint32_t(fy), gh - 1);

@@ -18,7 +18,9 @@
 //      not every channel: the capture card's 4:2:0 chroma mixes a thin overlay's colour with the moving picture.
 //   2. state per pixel (R32_UINT, pushHudGuardPackCell): `run` = real frames in a row still (change <= still);
 //      `nearby` = frames of that run with a moving pixel (change > move) within `reach` px along one of 4 axes while at least
-//      surroundShare of the 80 x 80 px around moved (a camera turn, not one object passing a still scene); `thin` =
+//      surroundShare of the 80 x 80 px around changed by more than `still` (a camera turn, not one object passing a still
+//      scene; counted above `still`, not `move`, review 2 SHOULD 2: protection then starts over texture of range 0.10
+//      too); `thin` =
 //      frames with moving pixels on BOTH sides along one axis (an element at most 2 x reach - 1 px thick); `edge` =
 //      frames of the run with contrast >= edge (a still STRUCTURE, not a flat patch); `held` = frames in a row a protected
 //      pixel changed by more than `still` but at most `hold` (at most holdFrames, then released); `recent` = frames since
@@ -33,7 +35,9 @@
 //      (fillReach px), so the generator never sees the overlay and draws no copies of it.
 //   5. compose (each generated frame at time t): a protected pixel, and a pixel within `grow` px of one whose own change
 //      is at most `move` (review SHOULD 4: no growth into moving picture, which made a double-image ring), is
-//      A + t (B - A) of the real frames: the console's own pixels, in place in every frame.
+//      A + t (B - A) of the real frames: the console's own pixels, in place in every frame; except a pixel of the cleaned
+//      area whose real value matches the cleaned copy within backgroundMatch (review 2 SHOULD 1: background next to the
+//      overlay, left to the generator).
 // An overlay that appears is protected from its stillFrames-th real frame (200 ms at 30 FPS) once something has moved
 // around it in nearFrames of them; when nothing moves (a still camera) nothing new is protected, which is harmless.
 // Not protected: overlays that change with the picture (translucent below about 0.9 opacity), elements shown for less
@@ -54,6 +58,10 @@ struct PushHudGuardParams {
     float hold = 0.04f;            // a protected pixel may change up to this for holdFrames frames in a row
     float move = 0.03f;            // a change above this is motion (evidence for the surround)
     float edge = 0.05f;            // contrast to a 4-neighbour of a still structure
+    // Compose (review 2 SHOULD 1): a pixel of the cleaned area whose real value is within this of the cleaned copy is
+    // background beside the overlay (the cleaned copy is the background estimate): it keeps the generator's output, so a
+    // thin object passing behind the crosshair is not painted over and an anti-aliased edge is left to the generator.
+    float backgroundMatch = 0.03f;
     float pqScale = 0.6f;
     // Real frames in a row a pixel must stay still before it can be protected. 6 (200 ms at 30 FPS): on the synthetic
     // pans of tools/hud_guard_eval, 3 frames protected about 25 background pixels a frame whose luma happened to stay
@@ -82,7 +90,7 @@ inline constexpr std::uint32_t kPushHudGuardAim = 128;   // the aim window: 128 
 
 // The thresholds the passes use for an output mode (0 sRGB, 1 scRGB, 2 HDR10 PQ).
 inline PushHudGuardParams pushHudGuardModeParams(PushHudGuardParams p, unsigned outputMode) {
-    if (outputMode == 2) { p.still *= p.pqScale; p.hold *= p.pqScale; p.move *= p.pqScale; p.edge *= p.pqScale; }
+    if (outputMode == 2) { p.still *= p.pqScale; p.hold *= p.pqScale; p.move *= p.pqScale; p.edge *= p.pqScale; p.backgroundMatch *= p.pqScale; }
     return p;
 }
 
@@ -220,12 +228,13 @@ public:
                 }
                 contrast_[i] = pushHudGuardQuantize(c);
             }
-        // Moving pixels per 16 x 16 tile (the GPU's change pass counts the same per thread group).
+        // Changed pixels (> still) per 16 x 16 tile (the GPU's change pass counts the same per thread group); the axis scan
+        // and the early-out need moving pixels (> move), which are a subset, so a tile without changed pixels has none.
         const std::uint32_t tx = (w_ + kPushHudGuardTile - 1) / kPushHudGuardTile, ty = (h_ + kPushHudGuardTile - 1) / kPushHudGuardTile;
         std::vector<std::uint32_t> tiles(std::size_t(tx) * ty, 0);
         for (std::uint32_t y = 0; y < h_; ++y)
             for (std::uint32_t x = 0; x < w_; ++x)
-                if (change_[std::size_t(y) * w_ + x] > p_.move) ++tiles[std::size_t(y / kPushHudGuardTile) * tx + x / kPushHudGuardTile];
+                if (change_[std::size_t(y) * w_ + x] > p_.still) ++tiles[std::size_t(y / kPushHudGuardTile) * tx + x / kPushHudGuardTile];
         for (std::uint32_t y = 0; y < h_; ++y)
             for (std::uint32_t x = 0; x < w_; ++x) {
                 const std::size_t i = std::size_t(y) * w_ + x;
@@ -285,12 +294,16 @@ public:
             }
         return out;
     }
-    // Compose of a generated frame at time t (0 = A, 1 = B): protectMask pixels from the real frames.
-    void compose(std::vector<std::uint32_t>& generated, const std::vector<std::uint32_t>& a, const std::vector<std::uint32_t>& b, float t, bool tenBit) const {
+    // Compose of a generated frame at time t (0 = A, 1 = B): protectMask pixels from the real frames. bClean: this pair's
+    // cleaned copy of B (null when it was not cleaned): background beside the overlay keeps the generator's output.
+    void compose(std::vector<std::uint32_t>& generated, const std::vector<std::uint32_t>& a, const std::vector<std::uint32_t>& b, float t, bool tenBit,
+                 const std::vector<std::uint32_t>* bClean = nullptr) const {
         for (std::uint32_t y = 0; y < h_; ++y)
             for (std::uint32_t x = 0; x < w_; ++x) {
                 if (!protectMask(int(x), int(y))) continue;
                 const std::size_t i = std::size_t(y) * w_ + x;
+                if (bClean && cleanMask(int(x), int(y)) &&
+                    std::fabs(pushHudGuardWordLuma(b[i], tenBit) - pushHudGuardWordLuma((*bClean)[i], tenBit)) <= p_.backgroundMatch) continue;
                 const auto ca = pushHudGuardUnpack(a[i], tenBit), cb = pushHudGuardUnpack(b[i], tenBit);
                 generated[i] = pushHudGuardPack({ca.r + t * (cb.r - ca.r), ca.g + t * (cb.g - ca.g), ca.b + t * (cb.b - ca.b), ca.a + t * (cb.a - ca.a)}, tenBit);
             }

@@ -14,6 +14,9 @@ from . import generators as gens
 from . import native
 
 
+BACKGROUND_MATCH = 0.03   # PushHudGuardParams::backgroundMatch
+
+
 def real_frames(scene, signal, n_src, hud=True):
     return [signal.encode(scene.render(float(j), hud=hud)) for j in range(n_src)]
 
@@ -54,6 +57,10 @@ def sequence(scene, signal, multiplier, kind, n_src, guard=False, reals=None, hu
                 g = gens.generate(kk, scene, signal, ga, gb, float(j), t, field=field, beta=beta)
                 if masks is not None:
                     m = (masks[j + 1] & 1) > 0
+                    # PushHudGuard.h compose, review 2 SHOULD 1: in the cleaned area a pixel whose real B matches the cleaned copy
+                    # within backgroundMatch (0.03, x 0.6 in PQ) is background beside the overlay: the generator's output stays
+                    # (the rasters are grey, so the code is the luma).
+                    m &= ~(((masks[j + 1] & 2) > 0) & (np.abs(B - gb) <= BACKGROUND_MATCH * (0.6 if signal.hdr else 1.0)))
                     g = g.copy()
                     g[m] = signal.quant((A + t * (B - A))[m])
             frames.append(g); times.append(j + t); info.append((True, t))

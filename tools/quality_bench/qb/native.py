@@ -101,13 +101,14 @@ def pushwarp(A, B, multiplier, ten_bit, overlay=True):
     return outs, infos
 
 
-def downscale_ref(plane, out_w, out_h, area, pq):
+def downscale_ref(plane, out_w, out_h, kernel, transfer):
+    """vendor/PushDownscale.h pushShrinkSample: kernel = PushShrinkKernel id, transfer = PushTransfer id (0 linear, 1 PQ, 2 sRGB)."""
     exe = build("downscale_ref")
     H, W = plane.shape
     with tempfile.TemporaryDirectory(dir=BUILD) as tmp:
         inp, out = Path(tmp) / "in.bin", Path(tmp) / "out.bin"
         with open(inp, "wb") as f:
-            f.write(np.array([W, H, out_w, out_h, int(area), int(pq)], np.uint32).tobytes())
+            f.write(np.array([W, H, out_w, out_h, int(kernel), int(transfer)], np.uint32).tobytes())
             f.write(np.ascontiguousarray(plane, np.float64).tobytes())
         subprocess.run([str(exe), str(inp), str(out)], check=True)
         return np.fromfile(out, np.float64).reshape(out_h, out_w)

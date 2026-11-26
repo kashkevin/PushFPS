@@ -12,14 +12,40 @@ needs_gxx = pytest.mark.skipif(shutil.which("g++") is None, reason="g++ not avai
 
 
 @needs_gxx
-@pytest.mark.parametrize("filt,area", [("p16", False), ("area", True)])
-def test_port_equals_vendored_header(filt, area):
+@pytest.mark.parametrize("filt", sorted(ds.HEADER_KERNELS))
+def test_port_equals_vendored_header(filt):
     rng = np.random.default_rng(0)
     sig = tf.Signal(True)
     img = sig.encode(rng.uniform(1, 1000, (48, 96)))
     mine = ds.downscale(img, sig, filt, quant=False)
-    ref = native.downscale_ref(img, 64, 32, area, True)
-    assert np.abs(mine - ref)[3:-3, 3:-3].max() < 1e-9   # interior: the reference clamps, the bench wraps
+    ref = native.downscale_ref(img, 64, 32, ds.HEADER_KERNELS[filt], 1)
+    assert np.abs(mine - ref)[4:-4, 4:-4].max() < 1e-9   # interior: the reference clamps, the bench wraps
+
+
+def test_every_kernel_runs_and_keeps_flat_fields_and_clamp_bounds():
+    sig = tf.Signal(True)
+    flat = sig.encode(np.full((6, 48), 1000.0))
+    rng = np.random.default_rng(1)
+    img = sig.encode(rng.uniform(1, 1000, (12, 48)))
+    for f in ds.Q2_FILTERS:
+        assert np.allclose(sig.decode(ds.downscale(flat, sig, f)), sig.decode(flat[:4, :32]), rtol=2e-3), f
+    for f in ("catmull_rom_ar", "lanczos2_ar", "area_sharp_ar"):
+        lin = sig.decode(img)
+        out = sig.decode(ds.downscale(img, sig, f, quant=False))
+        assert out.max() <= lin.max() + 1e-6 and out.min() >= lin.min() - 1e-6
+
+
+def test_anti_ringing_removes_overshoot_but_plain_kernel_rings():
+    sig = tf.Signal(True)
+    sc = scenes.Scene(48, 6, scenes.lines(50.0, [(14.25, 14, 1000.0)]), scenes.still(), qy=1)
+    c = sig.encode(sc.render(0.0))
+    plain = sig.decode(ds.downscale(c, sig, "catmull_rom", quant=False))[2].max()
+    clamped = sig.decode(ds.downscale(c, sig, "catmull_rom_ar", quant=False))[2].max()
+    assert plain > 1000.5 and clamped <= 1000.0 + 1e-6
+
+
+def test_cost_proxy_orders_filters():
+    assert ds.cost("p16")["fetches"] < ds.cost("exact")["texels_2d"] < ds.cost("catmull_rom")["texels_2d"]
 
 
 def test_exact_area_conserves_light_and_flat_fields():

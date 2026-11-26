@@ -115,7 +115,7 @@ def _strip_out(world, signal, filt, w=48, h=6, quant=True):
 def q2_lines(signal=HDR, nits=300.0, bg=10.0):
     rows = []
     for width in (1, 2, 3):
-        for filt in ds.FILTERS:
+        for filt in ds.Q2_FILTERS:
             pk, en, wd = [], [], []
             for k in range(12):      # quarter-pixel phases over 3 4K px (one whole period of the 1.5x grid)
                 o = _strip_out(scenes.lines(bg, [(20 + k / 4, width, nits)]), signal, filt)[2]
@@ -132,7 +132,7 @@ def q2_strokes(signal=HDR):
     """Pixel-aligned HUD strokes (300 nits on 0 nits), the reviewer's table: peak mean / worst over the 3 column phases."""
     rows = []
     for width in (1, 2):
-        for filt in ds.FILTERS:
+        for filt in ds.Q2_FILTERS:
             pk = [float(_strip_out(scenes.lines(0.0, [(21 + k, width, 300.0)]), signal, filt)[2].max()) for k in range(3)]
             rows.append({"width": width, "filter": filt, "peak_mean": float(np.mean(pk)), "peak_worst": float(min(pk))})
     return rows
@@ -143,7 +143,7 @@ def q2_text(signal=HDR, quick=True):
     phases (a HUD's fixed phase) and drifting by a quarter pixel a frame (world text): stroke contrast and its pulse."""
     rows = []
     W, H = 240, 48
-    for filt in ds.FILTERS:
+    for filt in ds.Q2_FILTERS:
         energies, peaks = [], []
         for k in range(12):
             a = scenes.hud_alpha(W, H, "text", 120 + k / 4, 24, width=2)
@@ -164,7 +164,7 @@ def q2_text(signal=HDR, quick=True):
 
 def q2_moire_and_sharpness(signal=HDR):
     rows = []
-    for filt in ds.FILTERS:
+    for filt in ds.Q2_FILTERS:
         r = {"filter": filt}
         # beyond the output's Nyquist: a 2.5-px 4K grating (1.67 output px); ideal = flat at the mean
         frames = []
@@ -191,7 +191,7 @@ def q2_moire_and_sharpness(signal=HDR):
 def q2_highlights(signal=HDR):
     rows = []
     for width in (1, 2):
-        for filt in ds.FILTERS:
+        for filt in ds.Q2_FILTERS:
             pk, en = [], []
             for k in range(12):
                 o = _strip_out(scenes.lines(50.0, [(20 + k / 4, width, 1000.0)]), signal, filt)[2]
@@ -201,10 +201,39 @@ def q2_highlights(signal=HDR):
             rows.append({"width": width, "filter": filt, "peak_mean": float(np.mean(pk)), "energy_err_pct": 100 * (np.mean(en) / truth - 1),
                          "energy_pulse": mt.pulse(en)})
     big = []
-    for filt in ds.FILTERS:   # a large 1000-nit patch: every filter must keep it
+    for filt in ds.Q2_FILTERS:   # a large 1000-nit patch: every filter must keep it
         o = _strip_out(scenes.lines(50.0, [(12, 24, 1000.0)]), signal, filt)[2]
         big.append({"filter": filt, "patch_nits": float(o[12]), "patch_pq_err_codes": float((tf.pq_encode(o[12]) - tf.pq_encode(1000.0)) * 1023)})
     return rows, big
+
+
+def q2_overshoot(signal=HDR):
+    """Ringing at a hard edge: a 1000-nit patch next to a 50-nit (and a 0.1-nit) field, all 12 quarter-pixel phases of the
+    edge, both edges of the patch. Overshoot = highest output above 1000 nits, undershoot = lowest output below the field's
+    level (nits and PQ codes of 1023); a step the exact area filter makes has none."""
+    rows = []
+    for filt in ds.Q2_FILTERS:
+        r = {"filter": filt}
+        for bg in (50.0, 0.1):
+            over, under, over_c, under_c = [], [], [], []
+            for k in range(12):
+                o = _strip_out(scenes.lines(bg, [(14 + k / 4, 14, 1000.0)]), signal, filt)[2]
+                over.append(float(o.max() - 1000.0)); under.append(float(bg - o.min()))
+                over_c.append(float((tf.pq_encode(o.max()) - tf.pq_encode(1000.0)) * 1023))
+                under_c.append(float((tf.pq_encode(bg) - tf.pq_encode(o.min())) * 1023))
+            tag = "50" if bg == 50.0 else "01"
+            r[f"over_nits_{tag}"] = max(0.0, max(over)); r[f"over_pct_{tag}"] = 100 * max(0.0, max(over)) / 1000.0
+            r[f"under_nits_{tag}"] = max(0.0, max(under)); r[f"over_codes_{tag}"] = max(0.0, max(over_c)); r[f"under_codes_{tag}"] = max(0.0, max(under_c))
+        rows.append(r)
+    return rows
+
+
+def q2_cost():
+    rows = []
+    for f in ds.Q2_FILTERS:
+        c = ds.cost(f)
+        rows.append({"filter": f, "note": ds.KERNELS[f].note, "texels_2d": c["texels_2d"], "texels_sep": c["texels_sep"], "fetches": c["fetches"]})
+    return rows
 
 
 def hue_test():
@@ -214,7 +243,7 @@ def hue_test():
     rows = []
     red, green = np.array([1000.0, 0.0, 0.0]), np.array([0.0, 100.0, 0.0])
     for width in (1, 2):
-        for filt in ("p16", "area", "exact"):
+        for filt in ds.Q2_FILTERS:
             de, dh = [], []
             for k in range(3):
                 outs = {}

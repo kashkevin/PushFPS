@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 DosukaSOL and the PushFPS contributors. Part of PushFPS, a modified version of Veyra.
 // Quality bench test helper: the vendored s12-pace downscale reference (vendor/PushDownscale.h pushBlitSample) on a plane.
-//   downscale_ref <in.bin> <out.bin>; in: u32 W, H, outW, outH, area, pq; W*H f64. out: outW*outH f64.
+//   downscale_ref <in.bin> <out.bin>; in: u32 W, H, outW, outH, kernel (PushShrinkKernel id), transfer (PushTransfer id); W*H f64. out: outW*outH f64.
 #include "PushDownscale.h"
 #include <cstdio>
 using namespace veyra::engine;
@@ -19,7 +19,7 @@ int main(int argc, char** argv) {
     std::FILE* o = std::fopen(argv[2], "wb");
     for (unsigned y = 0; y < h[3]; ++y)
         for (unsigned x = 0; x < h[2]; ++x) {
-            const double v = pushBlitSample(p, h[2], h[3], x, y, h[4] != 0, h[5] != 0);
+            const double v = pushShrinkSample(p, h[2], h[3], x, y, PushShrinkKernel(h[4]), PushTransfer(h[5]));
             std::fwrite(&v, 8, 1, o);
         }
     std::fclose(o);

@@ -283,8 +283,9 @@ struct PushWarpLevelCell { float vx = 0, vy = 0, known = 0, visibility = 0, ex =
 //                period is still, but its own motion explains it), and the moving cells within kPushWarpOverlaySpread agree
 //                (pushWarpOverlayAgrees: where the flow aliased a repeating texture its vectors jump) and their mean does
 //                not explain it either
-// HDR10: the thresholds are in PQ code values, where the SDR range covers about 58 % of the codes: still, contrast, rim and
-// structure are scaled by kPushWarpOverlayPqScale so that they mean about the same picture change as in SDR.
+// HDR10: the thresholds are in PQ code values, where the SDR range covers about 58 % of the codes: still, rim and structure
+// (and the compose's own still test, PushWarpParams::stillDelta) are scaled by kPushWarpOverlayPqScale so that they mean
+// about the same picture change as in SDR; the contrast ("unexplained") is not (review 3 SHOULD 7).
 constexpr float kPushWarpOverlayStill = 3.0f / 255.0f;
 constexpr float kPushWarpOverlayRim = 24.0f / 255.0f;
 constexpr float kPushWarpOverlayMinMove = 1.5f;
@@ -301,12 +302,20 @@ inline float pushWarpOverlayScale(bool tenBit) { return tenBit ? kPushWarpOverla
 // agree (otherwise A): the block field gives a thin object's vector to the background around it too, and that vector
 // fetches the object into the background (a copy) where the two samples disagree.
 constexpr float kPushWarpStillField = 0.5f;
-inline bool pushWarpStillHolds(float gx, float gy, bool overlayPixel) {
-    return overlayPixel || gx * gx + gy * gy < kPushWarpStillField * kPushWarpStillField;
+// Only where the picture around stands still (moving share of the cells within kPushWarpOverlayReach below
+// kPushWarpStillSurround): the case of an object crossing a still background. In a pan or turn a still pixel is a flat
+// area that happens to match, and moving it with a field mixed from its neighbours made more pixels worse than better
+// (trunks over a sky, hud_eval.py --damage): there it stays A.
+constexpr float kPushWarpStillSurround = 0.5f;
+// ... and only where the two moved samples agree within this (tighter than conflictDelta: on texture two unrelated samples
+// agree within 24/255 often enough to make pixels worse).
+constexpr float kPushWarpStillAgree = 12.0f / 255.0f;
+inline bool pushWarpStillHolds(float gx, float gy, bool overlayPixel, float surroundShare) {
+    return overlayPixel || gx * gx + gy * gy < kPushWarpStillField * kPushWarpStillField || surroundShare >= kPushWarpStillSurround;
 }
 inline bool pushWarpOverlayCore(float delta, float gx, float gy, float unexplained, float scale = 1.0f) {
     return delta <= kPushWarpOverlayStill * scale && gx * gx + gy * gy >= kPushWarpOverlayMinMove * kPushWarpOverlayMinMove &&
-           unexplained > kPushWarpOverlayContrast * scale;
+           unexplained > kPushWarpOverlayContrast;
 }
 // A mask given from outside (W x H bytes, pushWarpOverlayMask's bits) in place of PushWarp's own: the ideal mask of a
 // synthetic scene, or later a history-based mask (HUD Guard) combined with this one. Null: PushWarp's own mask.
@@ -337,6 +346,29 @@ inline PushWarpColor pushWarpBilinear(const PushWarpFrame& f, bool tenBit, float
     return r;
 }
 
+// Review 3 SHOULD 5: a vector longer than kPushWarpLongShare of the field's width (480 px at 4K, the old cut-off) and than
+// kPushWarpLongMinWork work px is trusted only when at least three quarters of its neighbour cells (6 of 8 inside the
+// field) carry a trusted vector within kPushWarpLongTolerance flow px of it: the block SAD alone accepts a long wrong
+// vector on repeating content (a tear of up to 960 px).
+constexpr float kPushWarpLongShare = 0.125f;
+constexpr float kPushWarpLongMinWork = 64.0f;
+constexpr float kPushWarpLongTolerance = 2.0f;
+inline bool pushWarpLongCorroborated(const PushWarpField& f, std::uint32_t cx, std::uint32_t cy, float gx, float gy, float minConfidence) {
+    int agree = 0, around = 0;
+    for (int j = -1; j <= 1; ++j)
+        for (int i = -1; i <= 1; ++i) {
+            if (i == 0 && j == 0) continue;
+            const int x = int(cx) + i, y = int(cy) + j;
+            if (x < 0 || y < 0 || x >= int(f.width) || y >= int(f.height)) continue;
+            ++around;
+            float vx = 0, vy = 0;
+            if (!pushWarpVectorAt(f, x, y, minConfidence, vx, vy)) continue;
+            const float dx = vx - gx, dy = vy - gy;
+            agree += dx * dx + dy * dy <= kPushWarpLongTolerance * kPushWarpLongTolerance ? 1 : 0;
+        }
+    return agree * 4 >= around * 3;
+}
+
 // W3: one cell.
 inline PushWarpCell pushWarpCellOf(const PushWarpFrame& a, const PushWarpFrame& b, bool tenBit, const PushWarpField& field,
                                    std::uint32_t cx, std::uint32_t cy, const PushWarpParams& p, const PushWarpField* previous = nullptr) {
@@ -346,7 +378,9 @@ inline PushWarpCell pushWarpCellOf(const PushWarpFrame& a, const PushWarpFrame& 
     if (!(conf > 1e-6f)) return c;
     c.gx = field.storedX[i] / conf; c.gy = field.storedY[i] / conf;
     const float length = std::sqrt(c.gx * c.gx + c.gy * c.gy);
-    if (!(conf >= p.minConfidence) || !(length <= p.maxMotionShare * float(field.width))) { c.gx = c.gy = 0; return c; }
+    if (!(conf >= p.minConfidence) || !(length <= p.maxMotionShare * float(field.width)) ||
+        (length > kPushWarpLongShare * float(field.width) && length * float(b.width) / float(field.width) > kPushWarpLongMinWork &&
+         !pushWarpLongCorroborated(field, cx, cy, c.gx, c.gy, p.minConfidence))) { c.gx = c.gy = 0; return c; }
     const float sx = float(b.width) / float(field.width), sy = float(b.height) / float(field.height);
     const int ox = pushWarpRound(c.gx * sx), oy = pushWarpRound(c.gy * sy);
     float sum = 0;
@@ -468,10 +502,10 @@ inline bool pushWarpOverlayAgrees(const std::vector<PushWarpCell>& cells, std::u
 // Per flow cell (flow px): spread = the trust-weighted mean of every cell within kPushWarpOverlaySpread (where the pixel's
 // content came from); moving = the mean of the moving trusted cells there (gx, gy) and the surround's moving share (trust;
 // 0 where those cells disagree).
-struct PushWarpOverlayCells { std::vector<PushWarpCell> spread, moving; };
+struct PushWarpOverlayCells { std::vector<PushWarpCell> spread, moving; std::vector<float> share; };   // share: the moving share, whether or not the cells agree
 inline PushWarpOverlayCells pushWarpOverlayCells(const std::vector<PushWarpCell>& cells, std::uint32_t gw, std::uint32_t gh, std::uint32_t W) {
     const float moveFlow = kPushWarpOverlayMinMove * float(gw) / float(W), moveFlow2 = moveFlow * moveFlow;
-    PushWarpOverlayCells result{std::vector<PushWarpCell>(cells.size()), std::vector<PushWarpCell>(cells.size())};
+    PushWarpOverlayCells result{std::vector<PushWarpCell>(cells.size()), std::vector<PushWarpCell>(cells.size()), std::vector<float>(cells.size())};
     auto& out = result.spread;
     for (int y = 0; y < int(gh); ++y)
         for (int x = 0; x < int(gw); ++x) {
@@ -486,7 +520,9 @@ inline PushWarpOverlayCells pushWarpOverlayCells(const std::vector<PushWarpCell>
             auto& o = out[std::size_t(y) * gw + std::size_t(x)];
             if (sw > 1e-6f) { o.gx = sx / sw; o.gy = sy / sw; o.trust = 1.0f; }
             auto& m = result.moving[std::size_t(y) * gw + std::size_t(x)];
-            m.trust = pushWarpOverlayAgrees(cells, gw, gh, x, y, moveFlow2, m.gx, m.gy) ? pushWarpOverlayMovingShare(cells, gw, gh, x, y, moveFlow2) : 0.0f;
+            const float share = pushWarpOverlayMovingShare(cells, gw, gh, x, y, moveFlow2);
+            result.share[std::size_t(y) * gw + std::size_t(x)] = share;
+            m.trust = pushWarpOverlayAgrees(cells, gw, gh, x, y, moveFlow2, m.gx, m.gy) ? share : 0.0f;
         }
     return result;
 }
@@ -513,7 +549,7 @@ inline std::vector<std::uint8_t> pushWarpOverlayMask(const PushWarpFrame& a, con
         const auto explains = [&](float vx, float vy) {
             const float back = pushWarpMaxDelta(cb, pushWarpBilinear(a, tenBit, float(x) + vx, float(y) + vy));
             const float fwd = pushWarpMaxDelta(ca, pushWarpBilinear(b, tenBit, float(x) - vx, float(y) - vy));
-            return std::min(back, fwd) <= kPushWarpOverlayContrast * scale;
+            return std::min(back, fwd) <= kPushWarpOverlayContrast;
         };
         if (explains(moving.gx * float(W) / float(gw), moving.gy * float(H) / float(gh))) return false;
         for (int j = -1; j <= 1; ++j)
@@ -540,7 +576,7 @@ inline std::vector<std::uint8_t> pushWarpOverlayMask(const PushWarpFrame& a, con
             const float back = pushWarpMaxDelta(cb, pushWarpBilinear(a, tenBit, float(x) + gx, float(y) + gy));
             const float fwd = pushWarpMaxDelta(ca, pushWarpBilinear(b, tenBit, float(x) - gx, float(y) - gy));
             const float u = std::min(back, fwd);
-            unexplained[i] = u > kPushWarpOverlayContrast * scale ? 1 : 0;
+            unexplained[i] = u > kPushWarpOverlayContrast ? 1 : 0;
             core[i] = pushWarpOverlayCore(delta[i], gx, gy, u, scale) && gated(x, y, ca, cb) ? 1 : 0;
             // an overlay segment that lies along the motion and is longer than it is "explained" by the motion (A(x + g)
             // is the segment too): still where the field moves, it may extend a core run (below)
@@ -688,6 +724,12 @@ inline PushWarpResult pushWarpReference(const PushWarpFrame& a, const PushWarpFr
     const bool overlayOn = rules != 0;
     if (overlayOn) r.overlayMask = overlay && overlay->given ? std::vector<std::uint8_t>(overlay->given, overlay->given + std::size_t(W) * H)
                                                              : pushWarpOverlayMask(a, b, tenBit, r.cells, gw, gh);
+    // the surround's moving share at the pixel's flow cell (pushWarpStillHolds)
+    const auto overlayCells = overlayOn ? pushWarpOverlayCells(r.cells, gw, gh, W) : PushWarpOverlayCells{};
+    const auto surroundAt = [&](std::uint32_t x, std::uint32_t y) {
+        const std::uint32_t cx = std::min(gw - 1, std::uint32_t(float(x) * float(gw) / float(W))), cy = std::min(gh - 1, std::uint32_t(float(y) * float(gh) / float(H)));
+        return overlayCells.share[std::size_t(cy) * gw + cx];
+    };
     const auto maskAt = [&](int x, int y, std::uint8_t bit) {
         const int cx = std::clamp(x, 0, int(W) - 1), cy = std::clamp(y, 0, int(H) - 1);
         return (r.overlayMask[std::size_t(cy) * W + std::size_t(cx)] & bit) != 0;
@@ -700,8 +742,8 @@ inline PushWarpResult pushWarpReference(const PushWarpFrame& a, const PushWarpFr
             pushWarpFieldAt(r.field, gw, gh, W, H, x, y, gx, gy, vis);
             // A still pixel is A exactly, except (with the overlay rules) where the field moves and the mask does not call it
             // an overlay: a still background that a fast thin object crossed between A and B (pushWarpStillHolds).
-            const bool still = pushWarpMaxDelta(ca, cb) <= p.stillDelta;
-            if (still && (!overlayOn || pushWarpStillHolds(gx, gy, maskAt(int(x), int(y), 1)))) { r.words[std::size_t(y) * W + x] = predicting ? bw : aw; ++r.counters.still; continue; }
+            const bool still = pushWarpMaxDelta(ca, cb) <= p.stillDelta * pushWarpOverlayScale(tenBit);   // HDR10: in PQ codes (review 3 SHOULD 7)
+            if (still && (!overlayOn || pushWarpStillHolds(gx, gy, maskAt(int(x), int(y), 1), surroundAt(x, y)))) { r.words[std::size_t(y) * W + x] = predicting ? bw : aw; ++r.counters.still; continue; }
             if (overlayOn && (rules & 1u) && maskAt(int(x), int(y), 1)) {   // static override
                 const PushWarpColor o = predicting ? cb : PushWarpColor{ca.r + p.t * (cb.r - ca.r), ca.g + p.t * (cb.g - ca.g), ca.b + p.t * (cb.b - ca.b), ca.a + p.t * (cb.a - ca.a)};
                 r.words[std::size_t(y) * W + x] = pushWarpPack(o, tenBit);
@@ -724,7 +766,7 @@ inline PushWarpResult pushWarpReference(const PushWarpFrame& a, const PushWarpFr
             // a still pixel under a moving field (pushWarpStillHolds): the moved samples are used only when they agree (the
             // object passes here at t); when they disagree the field's vector is not this pixel's (a block vector of a thin
             // object beside it): the still pixel stays A
-            if (still && conflict) { r.words[std::size_t(y) * W + x] = aw; ++r.counters.still; continue; }
+            if (still && pushWarpMaxDelta(s0, s1) > kPushWarpStillAgree * pushWarpOverlayScale(tenBit)) { r.words[std::size_t(y) * W + x] = aw; ++r.counters.still; continue; }
             if (overlayOn && (rules & 2u)) {   // source exclusion: a tap on the overlay is not used
                 const int x0 = pushWarpRound(float(x) + p.t * gx), y0 = pushWarpRound(float(y) + p.t * gy);
                 const int x1 = pushWarpRound(float(x) - (1.0f - p.t) * gx), y1 = pushWarpRound(float(y) - (1.0f - p.t) * gy);
@@ -738,7 +780,9 @@ inline PushWarpResult pushWarpReference(const PushWarpFrame& a, const PushWarpFr
                 out = {(s0.r * w0 + s1.r * w1) / d, (s0.g * w0 + s1.g * w1) / d, (s0.b * w0 + s1.b * w1) / d, (s0.a * w0 + s1.a * w1) / d};
             }
             r.words[std::size_t(y) * W + x] = pushWarpPack(out, tenBit);
-            if (hole) ++r.counters.hole; else if (conflict) ++r.counters.conflict; else ++r.counters.blend;
+            // a still pixel moved by pushWarpStillHolds stays "still" in the counters, so the whole-frame verdict (more holes
+            // than moving pixels) is decided by the moving pixels alone, as without the rules
+            if (still) ++r.counters.still; else if (hole) ++r.counters.hole; else if (conflict) ++r.counters.conflict; else ++r.counters.blend;
         }
     r.wholeFrameNearest = pushWarpWholeFrameNearest(r.counters);
     if (r.wholeFrameNearest) {
@@ -804,8 +848,11 @@ inline std::uint64_t pushWarpOverlayMaskBytes(std::uint32_t w, std::uint32_t h) 
     const auto bytes = [](std::uint32_t x, std::uint32_t y) { return std::uint64_t((x + 3u) / 4u) * 4u * y; };
     return std::max(bytes(w, h), bytes(kPushWarpCheckWidth, kPushWarpCheckHeight));
 }
-inline std::uint64_t pushWarpOverlayCellBytes(std::uint32_t flowW, std::uint32_t flowH) {
-    return std::max(std::uint64_t(flowW) * flowH, std::uint64_t(kPushWarpCheckFlowWidth) * kPushWarpCheckFlowHeight) * 24u;
+inline std::uint64_t pushWarpOverlayCellBytes(std::uint32_t flowW, std::uint32_t flowH, std::uint32_t w, std::uint32_t h) {
+    // the cells (24 bytes each), then one word per 16 x 16 tile (whether it holds a core pixel: the run passes' gate)
+    const auto tiles = [](std::uint32_t x, std::uint32_t y) { return std::uint64_t((x + 15u) / 16u) * ((y + 15u) / 16u); };
+    return std::max(std::uint64_t(flowW) * flowH, std::uint64_t(kPushWarpCheckFlowWidth) * kPushWarpCheckFlowHeight) * 24u +
+           std::max(tiles(w, h), tiles(kPushWarpCheckWidth, kPushWarpCheckHeight)) * 4u;
 }
 // Whether pixel (x, y) is in the middle eighth of the width and height (the crosshair's place; PushWarpOverlay.hlsl).
 inline bool pushWarpOverlayCentre(std::uint32_t x, std::uint32_t y, std::uint32_t w, std::uint32_t h) {
