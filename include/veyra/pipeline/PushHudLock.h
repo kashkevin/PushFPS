@@ -42,8 +42,18 @@ public:
     // After real frame `parity` is final: learn from real[1-parity] -> real[parity].
     // reset: no valid previous frame (start, seek, settings change): start over.
     bool update(ID3D12GraphicsCommandList* list, StateTracker& tracker, unsigned parity, bool reset);
-    // Locked pixels of generated[slot] come from the held real frame real[heldParity].
+    // Locked pixels of generated[slot] come from the held real frame real[heldParity]. heldParity kPredictedHeld (2):
+    // from predictedHeld(), a copy of the real frame the predicted frame follows (Package 16, "Lower delay"), so the
+    // predicted frame's compose never touches the real frame's own texture while it is being presented.
     bool compose(ID3D12GraphicsCommandList* list, StateTracker& tracker, unsigned slot, unsigned heldParity);
+    static constexpr unsigned kPredictedHeld = 2;
+    // Package 16: creates the copy texture (working size and format, about 33 MB at 3840x2160 in 32-bit formats). Call
+    // before createViews; only the graph's predicted-frame pass asks for it. The caller copies B into it (COMMON before
+    // and after) before compose(..., kPredictedHeld).
+    bool enablePredictedHeld(ID3D12Device* device);
+    ID3D12Resource* predictedHeld() const { return heldCopy_.Get(); }
+    ID3D12Resource* state() const { return state_.Get(); }
+    unsigned outputMode() const { return outputMode_; }
     std::string describe() const;
 
 private:
@@ -51,8 +61,8 @@ private:
     unsigned outputMode_ = 0, generatedCount_ = 0;
     DXGI_FORMAT format_ = DXGI_FORMAT_UNKNOWN;
     ComputePass update_, compose_;
-    ComPtr<ID3D12Resource> state_, scratch_;
-    ID3D12Resource* real_[2]{};
+    ComPtr<ID3D12Resource> state_, scratch_, heldCopy_;
+    ID3D12Resource* real_[3]{};   // [2]: heldCopy_ (Package 16)
     ID3D12Resource* generated_[kMaxGenerated]{};
 };
 }
