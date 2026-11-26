@@ -21,6 +21,106 @@ the Slipstream workflow on top.
 > **UPDATE 23 November 2026, ~18:00 UTC (orchestrating session, resumed at the owner's request): development is no longer
 > paused.** Read section 0 first; sections 1-9 below are the record up to Package 12.
 
+> **UPDATE 26 November 2026 (Claude Code Console session, second takeover): read section 0-A first.** The orchestrating
+> (Claude Desktop) session ended at its usage limit after Package 16 with five streams in work. Section 0-A is the
+> recovered state and the way work is organised now; section 0 and below are the record up to Package 16.
+
+## 0-A. After Package 16: recovery on 26 November 2026 and Package 17 (Console session)
+
+### 0-A.1 What was recovered, and from where
+
+- **Nothing was running.** Last push 26 Nov 03:41 UTC (`ck/s12-hud`); no workflow run in progress or queued; no pull
+  requests; no agents alive. Recovery read every remote branch (117), the Actions run list since Package 16 and the
+  failing job logs.
+- **The private `exp/*` branches and the private review / research documents are NOT available** (they lived on the
+  orchestrating session's machine; no bundle is on the owner's PC). Not recoverable: `S12_HUD_REVIEW1`,
+  `S12_PACE_REVIEW2`, `S11_OWNFG_REVIEW2`, `SETTINGS_AUDIT`, `P16_REAL_LOG_ANALYSIS`, `OBJECTIVE_COMPARISON`,
+  `HUD_GHOSTING`. The public `ck/*` snapshots (squashed code, one commit on `main`) are the only source. Outstanding
+  review items were reconstructed from code, drafts, tests and CI, not from those documents.
+- **Common base of every stream below: the tree of `ck/rel16` `a126d619`** (= Package 16's code before its package
+  text). The snapshots share no git history, so merge with an explicit base:
+  `git merge-tree --write-tree --merge-base=origin/ck/rel16 <a> <b>` (26 Nov: settings + pace conflict only in the three
+  kit log allow-lists, `collect-diagnostics.ps1`, `run-tests.ps1`, `report.py`, where each stream appends its log tag).
+
+| Stream | Newest public state at recovery | Its CI at recovery | Last full Windows build |
+|---|---|---|---|
+| s12-settings (requested / applied / executing readout, settings audit) | `ck/s12-settings` `d3c29fd0` | checks, remoteplay-checks, gpu-quick green | `slipstream/dev5` `727de002` (older state), run 45746321588: everything passed up to the last step ("Lower delay" end-to-end on WARP, the same step Package 16 shipped with failing) |
+| s12-pace (on-screen cadence, frame-content probe, 4K -> 1440p downscale, 2X duplicate fix) | `ck/s12-pace` `e4d2067e` **plus** the `VideoPresenter` out-of-line constructor / destructor that existed only on `slipstream/dev6` `8781755b` | checks, remoteplay-checks, gpu-quick green | `slipstream/dev6`, run 45746477289: compiled; **two QML tests failed** in `tst_push_quick_setup.qml` (`test_steady_detail_is_off_by_default_and_a_preference`, `test_unfocused_notice_switch_is_a_preference`: actual `undefined`) |
+| s12-hud (HUD Guard: crosshair / HUD kept out of frame generation; opt-in inside Live HUD Lock) | `ck/s12-hud` `547dfa1c` (the last commit before the cut-off: the aim-point fix) | checks, remoteplay-checks, gpu-quick green; e2e-quick green on `ck/e2e-s12-hud` `8dd08a69` (older state) | none of its own |
+| ownfg (own generator "PushWarp"; separate from Package 17) | `ck/ownfg` `83209dd6` | checks, remoteplay-checks green; gpu-quick green on `ck/gpu-ownfg` `0c3bdfea` | `slipstream/dev4` `b05832fd` (older state), run 45740796232: failed only at the same last end-to-end step |
+| bench (offline quality bench, `tools/quality_bench/`) | `ck/bench` `7e413012` | checks, remoteplay-checks green (the bench itself never ran in CI) | not applicable (tools only) |
+| ffxcheck (the FidelityFX start-up self-check's test picture) | `ck/ffxcheck` `8f96aa92` | green; gpu-quick green on `ck/gpu-ffxcheck` | none |
+| First Package 17 integration attempt (settings + pace + hud, older states) | `slipstream/dev3` `592a90f0` | - | run 45745028541: **did not compile** (`std::unique_ptr<PushFrameThumb>` deleted where the type is incomplete, in `EngineController.cpp` / `EngineControllerImage.cpp`; fixed afterwards on dev6 only) |
+
+- `ck/gpu-*` and `slipstream/dev*` lanes fail the `checks` workflow's "Translations complete" step by construction
+  (those lanes carry the catalogue without the streams' new strings); the plain `ck/<stream>` lanes pass it.
+- A push / CI timeline of every lane since Package 16 can be rebuilt from the Actions API (`/actions/runs`).
+
+### 0-A.2 How work is organised now (owner's PC)
+
+- The owner's instruction of 26 Nov: work independently, specialist teams in separate worktrees with independent
+  reviewers, continue Package 17 from the existing work, keep the own generator off Package 17's critical path, never
+  touch his installed application or interrupt his play, no hardware claims from simulations or CI.
+- His priorities, in order: frame-generation quality and motion clarity; crosshair / HUD ghosting; smooth, even
+  displayed frames; functional, truthful settings; 90 FPS visibly better than 60; downscaling without needless detail
+  loss; 2-3 ms less delay only where it costs none of the above (Package 16 reads about 30-33 ms at 3X; aggressive
+  delay reduction is no longer the first objective). Setup: 3840x2160 HDR10 capture of a 30 FPS game, 2X and 3X,
+  2560x1440 180 Hz OLED.
+- **His PC has no C++ compiler, cmake, pytest, numpy or `gh`.** C++ compiles and runs only in GitHub Actions. Python 3.14
+  (standard library) is there. It is his gaming PC: nothing heavy runs locally.
+- Local layout (beside the main clone, whose branch is left alone): one git worktree per stream in a `PushFPS-wt`
+  folder next to the clone, on local branches `work/s12-settings`, `work/s12-pace`, `work/s12-hud`, `work/ownfg`,
+  `work/bench`, and `work/handoff-p17` for this file. Each work branch sits on top of its `ck/<stream>` head, so a
+  check is a fast-forward push `git push origin HEAD:ck/<stream>`; `ck/gpu-<stream>` (WARP GPU tests) and
+  `ck/e2e-<stream>` take forced pushes (scratch lanes). Full builds: the integration owner pushes to a
+  `slipstream/dev*` lane with the lane-only CI commit (take `.github/workflows/build-windows.yml` from an existing
+  dev lane: it adds the `slipstream/**` trigger).
+- Lanes: `slipstream/dev3` = Package 17 integration, `dev5` = settings, `dev6` = pace, `dev4` = own generator.
+- Team briefs, the CI helper and downloaded logs are private orchestration files outside the repository; they are
+  not needed to resume (this section and each stream's `docs/drafts/*.md` are).
+
+### 0-A.3 Team assignments started 26 November 2026 (state: IN WORK unless a line below says otherwise)
+
+1. **Settings** (`work/s12-settings`): every "executing" value from a runtime measurement, never from configuration
+   (else "not measured"); audit table in `docs/drafts/SETTINGS_EFFECT.md`; missing controls; G-SYNC and NVIDIA low
+   latency wording limited to what the program observes; skipped-pair reporting restored; QML tests; the install test
+   made to load the new screens.
+2. **HUD Guard** (`work/s12-hud`, draft `docs/drafts/HUD_GUARD.md`): confirm the aim-point fix; protection over
+   less-textured backgrounds without erasing moving objects; soft crosshair edges; HDR10 / changing crosshair / fast
+   camera / dark background / subtitles / thin objects scenes; opt-in inside Live HUD Lock; the console's own crosshair
+   pixels kept; the graphics-queue wait of the guard's update + pre-clean reviewed (alternatives only if provably not
+   later).
+3. **Pace and downscale** (`work/s12-pace`, draft `docs/drafts/PACE_DOWNSCALE.md`): the two QML failures; an unbiased
+   on-screen pacing measure for 2X against 3X; the accepted 2X duplicate fix kept under test; the linear-light (HDR
+   correct) 3840 -> 2560 filter and sharper variants compared; `[frame-probe]` without false alarms in slow camera
+   movement; window-occlusion checks off the presentation thread.
+4. **Own generator** (`work/ownfg`, drafts `OWN_FG_DESIGN.md`, `OWN_FG_OWNER_DRAFT.md`): NOT part of Package 17. Never
+   selected automatically; NVIDIA VFG and PushWarp both selectable. Root causes of "67 distinct frames of 90" and of
+   the 32-px motion block limit; HUD Guard interface; repeating patterns; HDR10; slow camera movement.
+5. **Bench** (`work/bench`, drafts `QUALITY_BENCH.md`, `OBJECTIVE_COMPARISON.md`): the bench run in CI (a Linux
+   workflow on `ck/bench*`); 30 / 60 / 90, old against new downscale, PushWarp against the block-motion MODEL (NVIDIA's
+   generator cannot run offline); results in four classes that are never mixed: simulation, software-renderer tests,
+   real GPU measurements (only the owner's logs), display measurements (none exist).
+
+### 0-A.4 Package 17: what it is to contain and what remains before packaging
+
+Planned content: the settings readout, the on-screen (`[cadence]`) and frame-content (`[frame-probe]`) checks, the
+accepted 2X fix, the improved downscale, crosshair protection (HUD Guard, opt-in), the motion-check correction. Not in
+it: the own generator.
+
+Steps (none done at the time of writing; update this list as they complete):
+1. Each stream: fixes, CI green on its `ck/` lanes, an independent review by a reviewer who did not write it, fixes,
+   second look.
+2. Integration branch `work/rel-17` = `ck/rel16` tree + settings + pace + hud with the explicit merge base; verify per
+   file that every line each side added is present once; translations (`extract.py --check` 0 / 0).
+3. Full strict Windows build on `slipstream/dev3` (MSVC /W4 /WX, unit, WARP GPU, QML, install test). The end-to-end
+   "Lower delay" step's known timing failures on WARP must be compared with Package 16's build #92 (564 passed / 5
+   failed) and stated, not hidden.
+4. Package text `packaging/slipstream/labels/17.txt`, `CHECKED.txt`, `docs/SLIPSTREAM_STATUS.md` section, default label
+   in `slipstream-package.yml`; integration review; `archive/package-16` = `4f802db1` before `slipstream/package`
+   moves; package run as in section 6.
+5. Nothing is hardware-verified until the owner's own log and eyes say so.
+
 ## 0. Since Package 12: Package 12A and the "delay90" stream
 
 **Package 16 (delivered 25 Nov 2026, ~14:30 UTC, by the orchestrating session; verified from GitHub):**
