@@ -82,7 +82,13 @@ struct PushHudGuardParams {
     // structure is also protected after anchorFrames still frames (1 s at 30 FPS) without any motion evidence, unless a
     // lone object moves within `reach` px that frame (`iso`: moving pixels near, but the picture around does not move:
     // something passing through, which must never be painted over). 0 switches the anchor off (Package 16 + review rules).
-    std::uint32_t anchorFrames = 30;
+    // Scope (second revision, 26 Nov 2026, after the first run showed the anchor protected nearly a whole TEXTURED still
+    // picture): the anchor applies only where the surround is flat, i.e. at most anchorFlatMax of the 17 x 17 px around the
+    // pixel are a still structure (a crosshair's own arms are about 120; texture or text is far more), and never in a frame in
+    // which anything in the 128 x 128 aim window plus anchorMargin px on each side changed (a lone mover, however far it
+    // jumps within that area, drops the anchor for that pair; `iso`, state bit 28).
+    std::uint32_t anchorFlatMax = 144;
+    std::uint32_t anchorMargin = 64;
     std::uint32_t holdFrames = 2;      // review MUST 1 c: the hold ends on the 3rd changed frame in a row
     std::uint32_t recentFrames = 60;   // about 2 s at 30 FPS (6 bits in the state)
     std::uint32_t reach = 8;           // px searched along each axis for moving pixels
@@ -246,13 +252,24 @@ public:
         for (std::uint32_t y = 0; y < h_; ++y)
             for (std::uint32_t x = 0; x < w_; ++x)
                 if (change_[std::size_t(y) * w_ + x] > p_.still) ++tiles[std::size_t(y / kPushHudGuardTile) * tx + x / kPushHudGuardTile];
+        // The aim anchor's busy test: a changed pixel in the tiles that overlap the aim window grown by anchorMargin px.
+        bool aimBusy = false;
+        {
+            const std::int64_t cx = std::int64_t(w_ / 2), cy = std::int64_t(h_ / 2), half = std::int64_t(kPushHudGuardAim / 2) + std::int64_t(p_.anchorMargin);
+            const std::int64_t x0 = std::max<std::int64_t>(0, cx - half) / kPushHudGuardTile, x1 = std::min<std::int64_t>(std::int64_t(w_) - 1, cx + half - 1) / kPushHudGuardTile;
+            const std::int64_t y0 = std::max<std::int64_t>(0, cy - half) / kPushHudGuardTile, y1 = std::min<std::int64_t>(std::int64_t(h_) - 1, cy + half - 1) / kPushHudGuardTile;
+            for (std::int64_t qy = y0; qy <= y1; ++qy)
+                for (std::int64_t qx = x0; qx <= x1; ++qx)
+                    if (tiles[std::size_t(qy) * tx + std::size_t(qx)] > 0) aimBusy = true;
+        }
         for (std::uint32_t y = 0; y < h_; ++y)
             for (std::uint32_t x = 0; x < w_; ++x) {
                 const std::size_t i = std::size_t(y) * w_ + x;
-                bool nearMoving = false, thinMoving = false, isolated = false;
+                bool nearMoving = false, thinMoving = false;
                 scan(x, y, nearMoving, thinMoving);
-                if (nearMoving && !surroundMoving(tiles, tx, ty, x / kPushHudGuardTile, y / kPushHudGuardTile)) { isolated = true; nearMoving = thinMoving = false; }
-                cells_[i] = pushHudGuardStep(cells_[i], change_[i], contrast_[i], nearMoving, thinMoving, (mask_[i] & 1u) != 0, p_, isolated);
+                if (nearMoving && !surroundMoving(tiles, tx, ty, x / kPushHudGuardTile, y / kPushHudGuardTile)) nearMoving = thinMoving = false;   // a lone mover
+                cells_[i] = pushHudGuardStep(cells_[i], change_[i], contrast_[i], nearMoving, thinMoving, (mask_[i] & 1u) != 0, p_,
+                                             aimBusy && pushHudGuardAim(x, y, w_, h_));
             }
         for (std::uint32_t y = 0; y < h_; ++y)
             for (std::uint32_t x = 0; x < w_; ++x) {
@@ -260,7 +277,7 @@ public:
                 const bool aim = pushHudGuardAim(x, y, w_, h_);
                 if (aim) counts.aimRunMax = std::max(counts.aimRunMax, c.run);
                 std::uint8_t m = 0;
-                if ((pushHudGuardArmed(c, p_) || pushHudGuardAnchored(c, p_, aim)) && structureNear(int(x), int(y))) {
+                if ((pushHudGuardArmed(c, p_) || (pushHudGuardAnchored(c, p_, aim) && flatSurround(int(x), int(y)))) && structureNear(int(x), int(y))) {
                     m = c.thin >= 1 ? 3 : 1;
                     ++counts.protect;
                     const bool centre = pushHudGuardCentre(x, y, w_, h_);
@@ -348,6 +365,17 @@ private:
                 pixels += std::uint64_t(pw) * ph;
             }
         return pushHudGuardSurroundMoving(moved, pixels, p_);
+    }
+    // The aim anchor's flat surround: at most anchorFlatMax pixels of the 17 x 17 around (x, y) are a still structure.
+    bool flatSurround(int x, int y) const {
+        std::uint32_t n = 0;
+        for (int dy = -8; dy <= 8; ++dy)
+            for (int dx = -8; dx <= 8; ++dx) {
+                const int qx = x + dx, qy = y + dy;
+                if (qx < 0 || qy < 0 || qx >= int(w_) || qy >= int(h_)) continue;
+                if (pushHudGuardStructure(cells_[std::size_t(qy) * w_ + std::size_t(qx)], p_) && ++n > p_.anchorFlatMax) return false;
+            }
+        return true;
     }
     bool structureNear(int x, int y) const {
         const int g = int(p_.gate);

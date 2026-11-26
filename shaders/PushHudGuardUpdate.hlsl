@@ -13,8 +13,23 @@ cbuffer Constants : register(b0) {
     uint width, height, reset, tilesX;
     uint tilesY, reach, shareMille, holdFrames;
     float still, hold, move, edge;
-    uint recentFrames, pad0, pad1, pad2;
+    uint recentFrames, anchorMargin, pad1, pad2;
 };
+// The aim anchor's busy test (PushHudGuardReference::update): a changed pixel in the tiles that overlap the 128 x 128 aim
+// window grown by anchorMargin px.
+bool aimBusy() {
+    const int cx = int(width / 2), cy = int(height / 2), half = 64 + int(anchorMargin);
+    const int x0 = max(0, cx - half) / 16, x1 = min(int(width) - 1, cx + half - 1) / 16;
+    const int y0 = max(0, cy - half) / 16, y1 = min(int(height) - 1, cy + half - 1) / 16;
+    [loop] for (int qy = y0; qy <= y1; ++qy)
+        [loop] for (int qx = x0; qx <= x1; ++qx)
+            if (tileTex[int2(qx, qy)] > 0) return true;
+    return false;
+}
+bool inAim(uint2 p) {
+    const int cx = int(width / 2), cy = int(height / 2);
+    return int(p.x) >= cx - 64 && int(p.x) < cx + 64 && int(p.y) >= cy - 64 && int(p.y) < cy + 64;
+}
 bool movingAt(int2 q) {
     if (q.x < 0 || q.y < 0 || q.x >= int(width) || q.y >= int(height)) return false;
     return changeTex[q].x > move;
@@ -66,8 +81,9 @@ void main(uint3 id : SV_DispatchThreadID, uint3 gid : SV_GroupID) {
             nearMoving = nearMoving || plus || minus;
             thinMoving = thinMoving || (plus && minus);
         }
-        if (nearMoving && !surroundMoving(int2(gid.xy))) { iso = true; nearMoving = false; thinMoving = false; }   // a lone mover near (aim anchor off)
+        if (nearMoving && !surroundMoving(int2(gid.xy))) { nearMoving = false; thinMoving = false; }   // a lone mover
     }
+    if (inAim(id.xy)) iso = aimBusy();   // anything changed around the aim window this frame: the aim anchor is off for it
     if (nearMoving) nearby = min(nearby + 1u, 15u);
     if (thinMoving) thin = min(thin + 1u, 15u);
     if (ck.y >= edge) edges = min(edges + 1u, 15u);

@@ -150,7 +150,7 @@ bool PushHudGuardPass::update(ID3D12GraphicsCommandList* list, StateTracker& tra
         c[4] = bitsOf(tilesY_); c[5] = bitsOf(params_.reach);
         c[6] = bitsOf(uint32_t(std::floor(double(params_.surroundShare) * 1000.0 + 0.5))); c[7] = bitsOf(params_.holdFrames);
         c[8] = params_.still; c[9] = params_.hold; c[10] = params_.move; c[11] = params_.edge;
-        c[12] = bitsOf(params_.recentFrames);
+        c[12] = bitsOf(params_.recentFrames); c[13] = bitsOf(params_.anchorMargin);
         update_pass_.bind(list, c, gpuHandleOf(update_pass_, 0).ptr, gpuHandleOf(update_pass_, 3).ptr);
         list->Dispatch(tilesX_, tilesY_, 1);   // group = tile: the early-out reads the group's own tile and its neighbours
     }
@@ -160,7 +160,7 @@ bool PushHudGuardPass::update(ID3D12GraphicsCommandList* list, StateTracker& tra
     {   // 3: the mask and the evidence counters.
         float c[kConstants]{};
         c[0] = bitsOf(width_); c[1] = bitsOf(height_); c[2] = bitsOf(params_.stillFrames); c[3] = bitsOf(params_.rearmFrames);
-        c[4] = bitsOf(params_.nearFrames); c[5] = bitsOf(params_.edgeFrames); c[6] = bitsOf(params_.gate); c[7] = bitsOf(params_.anchorFrames);
+        c[4] = bitsOf(params_.nearFrames); c[5] = bitsOf(params_.edgeFrames); c[6] = bitsOf(params_.gate); c[7] = bitsOf(params_.anchorFrames); c[8] = bitsOf(params_.anchorFlatMax);
         mask_pass_.bind(list, c, gpuHandleOf(mask_pass_, 0).ptr, gpuHandleOf(mask_pass_, 1).ptr);
         list->Dispatch(tilesX_, tilesY_, 1);
     }

@@ -83,6 +83,7 @@ struct Mover {
     bool on = false;
     float speed = 12.0f, width = 6.0f, height = 60.0f, value = 0.92f;
     float topFrac = 0.25f;   // top edge as a share of the picture's height
+    float startAt = 0.0f;    // real frame the bar enters from the left (absent before; the bar's own clock starts there)
 };
 
 inline constexpr float kHdrSpan = 0.58f;   // SDR's 0-203 nits in PQ codes (about 58 % of the range)
@@ -152,8 +153,8 @@ public:
     }
     // Whether the moving bar covers a pixel at (fractional) time k.
     bool moverAt(int x, int y, float k) const {
-        if (!mover_.on) return false;
-        const float left = 6.0f + mover_.speed * k, span = float(w_) + 40.0f;
+        if (!mover_.on || k < mover_.startAt) return false;
+        const float left = 6.0f + mover_.speed * (k - mover_.startAt), span = float(w_) + 40.0f;
         const float l = left - span * std::floor(left / span) - 20.0f;
         const float top = float(h_) * mover_.topFrac;
         return float(x) >= l && float(x) < l + mover_.width && float(y) >= top && float(y) < top + mover_.height;

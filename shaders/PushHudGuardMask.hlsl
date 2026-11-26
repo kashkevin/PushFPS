@@ -11,13 +11,24 @@ RWByteAddressBuffer counters : register(u1);
 cbuffer Constants : register(b0) {
     uint width, height, stillFrames, rearmFrames;
     uint nearFrames, edgeFrames, gate, anchorFrames;
-    uint pad1, pad2, pad3, pad4;
+    uint anchorFlatMax, pad2, pad3, pad4;
 };
 groupshared uint gCount[7];
 uint armFrames(uint w) { return ((w >> 22) & 63u) > 0 ? rearmFrames : stillFrames; }
 bool structureAt(int2 q) {
     const uint w = stateTex[q];
     return (w & 255u) >= armFrames(w) && ((w >> 16) & 15u) >= edgeFrames;
+}
+// The aim anchor's flat surround: at most anchorFlatMax pixels of the 17 x 17 around p are a still structure.
+bool flatSurround(int2 p) {
+    uint n = 0;
+    [loop] for (int dy = -8; dy <= 8; ++dy)
+        [loop] for (int dx = -8; dx <= 8; ++dx) {
+            const int2 q = p + int2(dx, dy);
+            if (q.x < 0 || q.y < 0 || q.x >= int(width) || q.y >= int(height)) continue;
+            if (structureAt(q)) ++n;
+        }
+    return n <= anchorFlatMax;
 }
 bool centre(uint2 p) {
     const int dx = abs(2 * int(p.x) + 1 - int(width)), dy = abs(2 * int(p.y) + 1 - int(height));
@@ -39,7 +50,7 @@ void main(uint3 id : SV_DispatchThreadID, uint gi : SV_GroupIndex) {
         if (inAim) InterlockedMax(gCount[6], run);
         uint m = 0;
         const bool anchored = inAim && anchorFrames > 0 && run >= anchorFrames && ((w >> 28) & 1u) == 0;
-        if ((run >= armFrames(w) && ((w >> 8) & 15u) >= nearFrames) || anchored) {
+        if ((run >= armFrames(w) && ((w >> 8) & 15u) >= nearFrames) || (anchored && flatSurround(int2(id.xy)))) {
             bool structure = false;
             [loop] for (int dy = -int(gate); dy <= int(gate) && !structure; ++dy)
                 [loop] for (int dx = -int(gate); dx <= int(gate) && !structure; ++dx) {

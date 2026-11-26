@@ -361,9 +361,10 @@ TEST(hud_guard_aim_anchor_protects_the_crosshair_over_a_flat_picture) {
     for (int k = 1; k < 30; ++k) CHECK(per[std::size_t(k)] == 0);
     CHECK(per[30] > 0 && per[39] > 0);
     // Outside the aim window nothing is anchored (the window is the 128 x 128 px at the exact centre). A 320 x 200
-    // picture with the text box 40 px left of the centre: protected inside the window only.
+    // flat picture with a crosshair: protected inside the window only. (Text over flat sky is NOT anchored: 17 x 17 px
+    // around its strokes are mostly structure; see the printed number below.)
     {
-        const Scene big(320, 200, {Overlay::Kind::Text, 2, 14, 1.0f}, {false, 20}, {World::Kind::Sky});
+        const Scene big(320, 200, kCross2, {false, 20}, {World::Kind::Sky});
         PushHudGuardReference g(320, 200);
         auto prev = big.frame(0, true);
         g.update(prev, prev, false, true);
@@ -377,6 +378,11 @@ TEST(hud_guard_aim_anchor_protects_the_crosshair_over_a_flat_picture) {
             for (std::uint32_t x = 0; x < 320; ++x)
                 if (g.isProtected(x, y)) (pushHudGuardAim(x, y, 320, 200) ? inside : outside) += 1;
         CHECK(inside > 0 && outside == 0);
+    }
+    {
+        const Scene txt(160, 112, {Overlay::Kind::Text, 2, 14, 1.0f}, {false, 20}, {World::Kind::Sky});
+        std::printf("[hud-guard-sim] SIMULATED text over flat sky, pan 20, anchor: protected px at real frame 39 = %llu (informational)\n",
+                    static_cast<unsigned long long>(protectedPerFrame(txt, 40)[39]));
     }
 }
 
@@ -402,6 +408,22 @@ TEST(hud_guard_aim_anchor_never_erases_a_moving_object_over_a_still_picture) {
         CHECK(before.mean.wrongPixels == 0);   // as shipped before: one object in a still picture: nothing protected, nothing wrong
         CHECK(after.mean.wrongFar == 0 && after.mean.wrongPixels == 0 && after.mean.overlayExact == after.mean.overlayPixels);
     }
+    // The same over a FLAT picture (sky), where the anchor really is reached: the crosshair has been still for 30+ frames when
+    // the object enters at frame 40 (startAt), also by a jump of 40-60 px per frame (no changed pixel within `reach` of the
+    // still pixels it jumps over): anything that changed around the aim window drops the anchor for that pair.
+    const Case flat[] = {
+        {"flat sky: square 8x8 through the centre, 40 px/frame", {true, 40.0f, 8.0f, 8.0f, 0.92f, 52.0f / 112.0f, 40.0f}, 3},
+        {"flat sky: tracer 24x2 through the centre rows, 60 px/frame", {true, 60.0f, 24.0f, 2.0f, 0.92f, 55.0f / 112.0f, 40.0f}, 3},
+        {"flat sky: bar 6x60 at 20 px/frame", {true, 20.0f, 6.0f, 60.0f, 0.92f, 0.25f, 40.0f}, 3},
+        {"flat sky: square 8x8 at 40 px/frame, 2X", {true, 40.0f, 8.0f, 8.0f, 0.92f, 52.0f / 112.0f, 40.0f}, 2},
+    };
+    for (const auto& c : flat) {
+        const Scene s(160, 112, kCross2, {false, 0}, {World::Kind::Sky}, c.mover);
+        const auto raw = run(s, c.multiplier, Mode::Raw, 64, 36, Generator::Perfect), after = run(s, c.multiplier, Mode::CleanAndCompose, 64, 36, Generator::Perfect);
+        printLine(c.name, "perfect", c.multiplier, raw, after);
+        CHECK(raw.mean.wrongPixels == 0);
+        CHECK(after.mean.wrongFar == 0 && after.mean.wrongPixels == 0 && after.mean.overlayExact == after.mean.overlayPixels);
+    }
 }
 
 TEST(hud_guard_subtitles_appear_and_disappear_without_being_frozen) {
@@ -419,10 +441,11 @@ TEST(hud_guard_subtitles_appear_and_disappear_without_being_frozen) {
     const auto both = run(s, 3, Mode::CleanAndCompose, 48, 8, Generator::Perfect), raw = run(s, 3, Mode::Raw, 48, 8, Generator::Perfect);
     printLine("subtitle 16..35 over a circular pan 20", "perfect", 3, raw, both);
     CHECK(both.mean.wrongFar == 0);
-    // Over a still camera (the anchor): shown long enough to be anchored, then gone: protection ends on the frame it goes.
-    Overlay text2{Overlay::Kind::Text, 2, 14, 1.0f};
+    // Over a still camera and a flat picture (the anchor; text and texture are too dense a surround for it, a crosshair is
+    // not): shown long enough to be anchored, then gone: protection ends on the frame it goes.
+    Overlay text2{Overlay::Kind::Crosshair, 2, 14, 1.0f};
     text2.appearAt = 5; text2.goneAt = 45;
-    const Scene still(160, 112, text2, {false, 0});
+    const Scene still(160, 112, text2, {false, 0}, {World::Kind::Sky});
     const auto per2 = protectedPerFrame(still, 52);
     CHECK(per2[40] > 0 && per2[44] > 0);
     CHECK(per2[45] * 10 <= per2[44] && per2[46] * 10 <= per2[44]);
