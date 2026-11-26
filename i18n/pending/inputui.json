@@ -1,0 +1,1227 @@
+{
+ "%1 不再做任何事": {
+  "en": "%1 no longer does anything",
+  "ja": "%1 は何もしなくなりました",
+  "zh-TW": "%1 不再做任何事"
+ },
+ "%1 已经用于“%2”，没有更改。一个键只能做一件事。": {
+  "en": "%1 is already used for “%2”; nothing was changed. One key does one thing.",
+  "ja": "%1 はすでに「%2」に使われています。変更していません。1 つのキーにできることは 1 つです。",
+  "zh-TW": "%1 已經用於「%2」，沒有變更。一個鍵只能做一件事。"
+ },
+ "%1 微秒": {
+  "en": "%1 µs",
+  "ja": "%1 µs",
+  "zh-TW": "%1 微秒"
+ },
+ "%1 毫秒": {
+  "en": "%1 ms",
+  "ja": "%1 ms",
+  "zh-TW": "%1 毫秒"
+ },
+ "%1 现在用于“%2”": {
+  "en": "%1 is now used for “%2”",
+  "ja": "%1 を「%2」に割り当てました",
+  "zh-TW": "%1 現在用於「%2」"
+ },
+ "%1 的校准值": {
+  "en": "Calibrated value for %1",
+  "ja": "%1 の校正値",
+  "zh-TW": "%1 的校正值"
+ },
+ "%1 计数/秒": {
+  "en": "%1 counts/s",
+  "ja": "%1 カウント/秒",
+  "zh-TW": "%1 計數/秒"
+ },
+ "%1：按 Delete 取消这个键": {
+  "en": "%1: press Delete to remove this key",
+  "ja": "%1：Delete キーでこのキーを外します",
+  "zh-TW": "%1：按 Delete 取消這個鍵"
+ },
+ "0 = 关闭。平滑把鼠标移动平均到这段时间里，因此会增加延迟": {
+  "en": "0 = off. Smoothing averages mouse movement over this time, so it adds delay",
+  "ja": "0 = オフ。スムージングはマウスの動きをこの時間で平均するため、遅延が増えます",
+  "zh-TW": "0 = 關閉。平滑會把滑鼠移動平均到這段時間裡，因此會增加延遲"
+ },
+ "1. 选择按键布局": {
+  "en": "1. Pick the key layout",
+  "ja": "1. キー配置を選ぶ",
+  "zh-TW": "1. 選擇按鍵配置"
+ },
+ "2. 死区和灵敏度校准": {
+  "en": "2. Dead zone and sensitivity calibration",
+  "ja": "2. デッドゾーンと感度のキャリブレーション",
+  "zh-TW": "2. 死區和靈敏度校正"
+ },
+ "3. 最大转向速度": {
+  "en": "3. Maximum turning speed",
+  "ja": "3. 最大旋回速度",
+  "zh-TW": "3. 最大轉向速度"
+ },
+ "L3（按下左摇杆）": {
+  "en": "L3 (left stick click)",
+  "ja": "L3（左スティック押し込み）",
+  "zh-TW": "L3（按下左搖桿）"
+ },
+ "PS5 串流运行并开启键盘和鼠标后，这里显示电脑内部的处理时间。": {
+  "en": "While a PS5 stream runs with mouse and keyboard on, the processing times inside the PC are shown here.",
+  "ja": "PS5 のストリーミング中にマウスとキーボードがオンのとき、PC 内部の処理時間をここに表示します。",
+  "zh-TW": "PS5 串流執行並開啟鍵盤和滑鼠後，這裡會顯示電腦內部的處理時間。"
+ },
+ "R3（按下右摇杆）": {
+  "en": "R3 (right stick click)",
+  "ja": "R3（右スティック押し込み）",
+  "zh-TW": "R3（按下右搖桿）"
+ },
+ "“和以前一样”的数值在按键方案文件里，这里不显示。选择其他方案后可以查看每个情境的数值。": {
+  "en": "“As before” keeps its numbers in the profile file; they are not shown here. Choose another profile to see the numbers of each context.",
+  "ja": "「これまでどおり」の数値はプロファイル ファイルにあり、ここには表示しません。ほかのプロファイルを選ぶと、状況ごとの数値を確認できます。",
+  "zh-TW": "「和以前一樣」的數值在按鍵方案檔案裡，這裡不顯示。選擇其他方案後可以查看每個情境的數值。"
+ },
+ "□ 键": {
+  "en": "Square",
+  "ja": "□ ボタン",
+  "zh-TW": "□ 鍵"
+ },
+ "△ 键": {
+  "en": "Triangle",
+  "ja": "△ ボタン",
+  "zh-TW": "△ 鍵"
+ },
+ "○ 键": {
+  "en": "Circle",
+  "ja": "○ ボタン",
+  "zh-TW": "○ 鍵"
+ },
+ "✕ 键": {
+  "en": "Cross",
+  "ja": "✕ ボタン",
+  "zh-TW": "✕ 鍵"
+ },
+ "上一步": {
+  "en": "Back",
+  "ja": "戻る",
+  "zh-TW": "上一步"
+ },
+ "下一步": {
+  "en": "Next",
+  "ja": "次へ",
+  "zh-TW": "下一步"
+ },
+ "两者": {
+  "en": "Both",
+  "ja": "両方",
+  "zh-TW": "兩者"
+ },
+ "主机只认识摇杆：摇杆推到底时游戏转多快，镜头最快就转多快，鼠标甩得再快也不会更快。": {
+  "en": "The console only knows a stick: the camera can never turn faster than the game turns at full stick, however fast the mouse moves.",
+  "ja": "本体が認識するのはスティックだけです。スティックを倒しきったときのゲームの旋回速度がカメラの上限で、マウスをどれだけ速く動かしてもそれ以上にはなりません。",
+  "zh-TW": "主機只認得搖桿：搖桿推到底時遊戲轉多快，鏡頭最快就轉多快，滑鼠甩得再快也不會更快。"
+ },
+ "主机看到的是模拟摇杆：鼠标移动被换算成摇杆倾斜，永远不是真正的鼠标输入。": {
+  "en": "The console sees an analog stick: mouse movement is converted into stick tilt and is never true mouse input.",
+  "ja": "本体から見えるのはアナログ スティックです。マウスの動きはスティックの傾きに変換され、本物のマウス入力にはなりません。",
+  "zh-TW": "主機看到的是類比搖桿：滑鼠移動會被換算成搖桿傾斜，永遠不是真正的滑鼠輸入。"
+ },
+ "事件到发送 P95": {
+  "en": "Event to send P95",
+  "ja": "イベントから送信まで P95",
+  "zh-TW": "事件到傳送 P95"
+ },
+ "从列表选择": {
+  "en": "Pick from the list",
+  "ja": "一覧から選ぶ",
+  "zh-TW": "從清單選擇"
+ },
+ "以后可以在“按键设置”里逐个修改。": {
+  "en": "You can change single keys later in “Key bindings”.",
+  "ja": "あとで「キー設定」から 1 つずつ変更できます。",
+  "zh-TW": "以後可以在「按鍵設定」裡逐一修改。"
+ },
+ "以当前方案为起点自定义": {
+  "en": "Customise from this profile",
+  "ja": "このプロファイルを元にカスタマイズ",
+  "zh-TW": "以目前方案為起點自訂"
+ },
+ "会改用“自定义”输入方案；不打开就不更改灵敏度": {
+  "en": "Switches to the “Custom” input profile; left off, sensitivity is not changed",
+  "ja": "入力プロファイルが「カスタム」に切り替わります。オフのままなら感度は変更しません",
+  "zh-TW": "會改用「自訂」輸入方案；不開啟就不變更靈敏度"
+ },
+ "你自己的手感曲线：大于 1 慢速更细腻，小于 1 慢速更快。要手动抵消按“倾斜的 c 次方”转向的游戏，取 1/c": {
+  "en": "Your own shaping of hand speed: above 1 is finer at low speed, below 1 faster. To cancel by hand a game that turns with tilt to the power c, use 1/c",
+  "ja": "自分の手の速さの味付け：1 より大きいと低速が細かく、1 より小さいと低速が速くなります。傾きの c 乗で旋回するゲームを手動で打ち消すには 1/c にします",
+  "zh-TW": "你自己的手感曲線：大於 1 慢速更細膩，小於 1 慢速更快。要手動抵銷依「傾斜的 c 次方」轉向的遊戲，取 1/c"
+ },
+ "使用游戏校准的数值": {
+  "en": "Use the game calibration's numbers",
+  "ja": "ゲーム キャリブレーションの数値を使う",
+  "zh-TW": "使用遊戲校正的數值"
+ },
+ "保存在设置文件夹里（slipstream-kbm-名称.txt），旧文件保留为 .bak；下次连接 PS5 时使用这里选的方案": {
+  "en": "Saved in the settings folder (slipstream-kbm-name.txt), the old file is kept as .bak; the profile chosen here is used at the next PS5 connection",
+  "ja": "設定フォルダーに保存します（slipstream-kbm-名前.txt）。古いファイルは .bak として残ります。ここで選んだプロファイルは次回の PS5 接続から使われます",
+  "zh-TW": "儲存在設定資料夾裡（slipstream-kbm-名稱.txt），舊檔案保留為 .bak；下次連接 PS5 時使用這裡選的方案"
+ },
+ "保持原样": {
+  "en": "Keep it as it is",
+  "ja": "そのままにする",
+  "zh-TW": "保持原樣"
+ },
+ "保持现在的按键": {
+  "en": "Keep the current keys",
+  "ja": "現在のキーのままにする",
+  "zh-TW": "保持現在的按鍵"
+ },
+ "全速转一圈": {
+  "en": "Full turn at full speed",
+  "ja": "全速で 1 回転",
+  "zh-TW": "全速轉一圈"
+ },
+ "关闭，且不可更改：平滑就是延迟": {
+  "en": "Off and not editable: smoothing is delay",
+  "ja": "オフ（変更不可）：スムージングは遅延そのものです",
+  "zh-TW": "關閉，且無法變更：平滑就是延遲"
+ },
+ "关闭：这个方案不加时间缓冲": {
+  "en": "Off: this profile adds no temporal buffering",
+  "ja": "オフ：このプロファイルは時間方向のバッファリングを加えません",
+  "zh-TW": "關閉：這個方案不加時間緩衝"
+ },
+ "内置布局": {
+  "en": "Built-in layout",
+  "ja": "内蔵の配置",
+  "zh-TW": "內建配置"
+ },
+ "内置的 GTA 风格布局": {
+  "en": "Built-in GTA-style layout",
+  "ja": "内蔵の GTA 風キー配置",
+  "zh-TW": "內建的 GTA 風格配置"
+ },
+ "再校准一次": {
+  "en": "Calibrate again",
+  "ja": "もう一度キャリブレーション",
+  "zh-TW": "再校正一次"
+ },
+ "再点一次确认": {
+  "en": "Click again to confirm",
+  "ja": "もう一度クリックで確定",
+  "zh-TW": "再按一次確認"
+ },
+ "准备": {
+  "en": "Ready",
+  "ja": "準備",
+  "zh-TW": "準備"
+ },
+ "切换步行 / 驾驶": {
+  "en": "Switch walking / driving",
+  "ja": "歩行 / 運転の切り替え",
+  "zh-TW": "切換步行 / 駕駛"
+ },
+ "创建键": {
+  "en": "Create button",
+  "ja": "クリエイト ボタン",
+  "zh-TW": "建立鍵"
+ },
+ "原始输入立即换算：没有平滑，也不等后面的采样；发送节奏用已验证的那一套": {
+  "en": "Raw input converted at once: no smoothing and no waiting for later samples; the proven sending schedule",
+  "ja": "生の入力をすぐに変換：スムージングなし、後続のサンプルも待ちません。送信の間隔は実績のある方式です",
+  "zh-TW": "原始輸入立即換算：沒有平滑，也不等後面的取樣；傳送節奏使用已驗證的那一套"
+ },
+ "发送方式": {
+  "en": "Sending",
+  "ja": "送信方式",
+  "zh-TW": "傳送方式"
+ },
+ "发送相关的三个数值只在统计开关 VEYRA_EXP_RP_STATS=1 打开时测量": {
+  "en": "The three sending times are measured only with the statistics switch VEYRA_EXP_RP_STATS=1",
+  "ja": "送信に関する 3 つの値は、統計スイッチ VEYRA_EXP_RP_STATS=1 がオンのときだけ測定されます",
+  "zh-TW": "傳送相關的三個數值只在統計開關 VEYRA_EXP_RP_STATS=1 開啟時測量"
+ },
+ "发送间隔 P95": {
+  "en": "Send interval P95",
+  "ja": "送信間隔 P95",
+  "zh-TW": "傳送間隔 P95"
+ },
+ "变化即发": {
+  "en": "On change",
+  "ja": "変化時に送信",
+  "zh-TW": "變化即傳"
+ },
+ "各情境的灵敏度和曲线": {
+  "en": "Sensitivity and curve per context",
+  "ja": "状況ごとの感度とカーブ",
+  "zh-TW": "各情境的靈敏度和曲線"
+ },
+ "同时连接手柄": {
+  "en": "With a controller connected",
+  "ja": "コントローラーも接続している場合",
+  "zh-TW": "同時連接手把"
+ },
+ "同样的摆动，向上的幅度逐渐变小：看起来和向右一样大时按空格。": {
+  "en": "The same swings with the up swing shrinking: tap Space when it looks as large as the right swing.",
+  "ja": "同じ振りで、上への振り幅がだんだん小さくなります。右への振りと同じ大きさに見えたらスペースを押してください。",
+  "zh-TW": "同樣的擺動，向上的幅度逐漸變小：看起來和向右一樣大時按空白鍵。"
+ },
+ "和上一步一样，但摇杆只推一部分：参照物每次经过画面中心就按空格。": {
+  "en": "As in the previous step, but with a partial tilt: tap Space each time the landmark passes the centre of the picture.",
+  "ja": "前の手順と同じですが、スティックは途中まで倒します。目印が画面の中央を通るたびにスペースを押してください。",
+  "zh-TW": "和上一步一樣，但搖桿只推一部分：參照物每次經過畫面中心就按空白鍵。"
+ },
+ "和以前一样": {
+  "en": "As before",
+  "ja": "これまでどおり",
+  "zh-TW": "和以前一樣"
+ },
+ "响应曲线": {
+  "en": "Response curve",
+  "ja": "応答カーブ",
+  "zh-TW": "回應曲線"
+ },
+ "回到串流窗口时再次接管键盘和鼠标": {
+  "en": "Take keyboard and mouse again when you return to the stream window",
+  "ja": "ストリーミング ウィンドウに戻ったときに、キーボードとマウスを再び取り込みます",
+  "zh-TW": "回到串流視窗時再次接管鍵盤和滑鼠"
+ },
+ "在游戏里测量游戏怎样响应右摇杆：电脑只推动右摇杆，你看着画面按键记下。没有任何东西读取画面。": {
+  "en": "Measures in the game how it answers the right stick: the PC only moves the right stick and you tap while watching the picture. Nothing reads the picture.",
+  "ja": "ゲームが右スティックにどう反応するかをゲーム内で測ります。PC は右スティックを動かすだけで、画面を見ながらあなたがキーを押して記録します。画面を読み取るものは何もありません。",
+  "zh-TW": "在遊戲裡測量遊戲怎樣回應右搖桿：電腦只推動右搖桿，你看著畫面按鍵記下。沒有任何東西讀取畫面。"
+ },
+ "垂直 / 水平比例": {
+  "en": "Vertical / horizontal ratio",
+  "ja": "垂直 / 水平の比率",
+  "zh-TW": "垂直 / 水平比例"
+ },
+ "垂直灵敏度": {
+  "en": "Vertical sensitivity",
+  "ja": "垂直感度",
+  "zh-TW": "垂直靈敏度"
+ },
+ "奔跑": {
+  "en": "Sprinting",
+  "ja": "ダッシュ",
+  "zh-TW": "奔跑"
+ },
+ "完成并应用": {
+  "en": "Finish and apply",
+  "ja": "完了して適用",
+  "zh-TW": "完成並套用"
+ },
+ "完成时使用这些数值": {
+  "en": "Use these numbers when finishing",
+  "ja": "完了時にこの数値を使う",
+  "zh-TW": "完成時使用這些數值"
+ },
+ "实时读数": {
+  "en": "Live readout",
+  "ja": "リアルタイムの値",
+  "zh-TW": "即時讀數"
+ },
+ "左摇杆 上": {
+  "en": "Left stick up",
+  "ja": "左スティック 上",
+  "zh-TW": "左搖桿 上"
+ },
+ "左摇杆 下": {
+  "en": "Left stick down",
+  "ja": "左スティック 下",
+  "zh-TW": "左搖桿 下"
+ },
+ "左摇杆 右": {
+  "en": "Left stick right",
+  "ja": "左スティック 右",
+  "zh-TW": "左搖桿 右"
+ },
+ "左摇杆 左": {
+  "en": "Left stick left",
+  "ja": "左スティック 左",
+  "zh-TW": "左搖桿 左"
+ },
+ "已保存为“%1”，下次连接 PS5 时使用": {
+  "en": "Saved as “%1”; used at the next PS5 connection",
+  "ja": "「%1」として保存しました。次回の PS5 接続から使われます",
+  "zh-TW": "已儲存為「%1」，下次連接 PS5 時使用"
+ },
+ "已开启：回到串流画面时会接管键盘和鼠标": {
+  "en": "On: keyboard and mouse are taken when you return to the stream picture",
+  "ja": "オン：ストリーミング画面に戻るとキーボードとマウスを取り込みます",
+  "zh-TW": "已開啟：回到串流畫面時會接管鍵盤和滑鼠"
+ },
+ "已开启：连接 PS5 串流后生效": {
+  "en": "On: takes effect once a PS5 stream is connected",
+  "ja": "オン：PS5 のストリーミングに接続すると有効になります",
+  "zh-TW": "已開啟：連接 PS5 串流後生效"
+ },
+ "已恢复内置布局": {
+  "en": "The built-in layout was restored",
+  "ja": "内蔵の配置に戻しました",
+  "zh-TW": "已還原內建配置"
+ },
+ "已自动退回超低延迟输入：%1": {
+  "en": "Switched back to Ultra Low Latency input by itself: %1",
+  "ja": "自動的に超低遅延入力に戻しました：%1",
+  "zh-TW": "已自動退回超低延遲輸入：%1"
+ },
+ "已载入方案“%1”": {
+  "en": "Profile “%1” loaded",
+  "ja": "プロファイル「%1」を読み込みました",
+  "zh-TW": "已載入方案「%1」"
+ },
+ "已释放：离开再回到串流窗口后重新接管": {
+  "en": "Released: taken again after you leave the stream window and come back",
+  "ja": "解放済み：ストリーミング ウィンドウを離れて戻ると再び取り込みます",
+  "zh-TW": "已釋放：離開再回到串流視窗後重新接管"
+ },
+ "已验证": {
+  "en": "Proven",
+  "ja": "実績あり",
+  "zh-TW": "已驗證"
+ },
+ "已验证：按现在的固定节奏发送手柄状态。变化即发：输入一变就发送，实验性，可能让主机收到更多数据包": {
+  "en": "Proven: controller states are sent at today's fixed schedule. On change: sent as soon as input changes; experimental, and the console may receive more packets",
+  "ja": "実績あり：これまでと同じ一定間隔でコントローラーの状態を送ります。変化時に送信：入力が変わるとすぐ送ります。実験的で、本体が受け取るパケットが増えることがあります",
+  "zh-TW": "已驗證：依現在的固定節奏傳送手把狀態。變化即傳：輸入一變就傳送，實驗性，可能讓主機收到更多封包"
+ },
+ "幂次": {
+  "en": "Power",
+  "ja": "べき乗",
+  "zh-TW": "冪次"
+ },
+ "平滑": {
+  "en": "Smoothing",
+  "ja": "スムージング",
+  "zh-TW": "平滑"
+ },
+ "开始校准": {
+  "en": "Start calibration",
+  "ja": "キャリブレーションを開始",
+  "zh-TW": "開始校正"
+ },
+ "引擎已写入并正在使用这些数值；点“完成并应用”后整个方案也会保存，下次连接 PS5 时继续使用": {
+  "en": "The engine wrote these numbers and is using them; “Finish and apply” also saves the whole profile, used again at the next PS5 connection.",
+  "ja": "エンジンがこれらの数値を書き込み、使用中です。「完了して適用」でプロファイル全体も保存され、次に PS5 に接続したときも使われます",
+  "zh-TW": "引擎已寫入並正在使用這些數值；點「完成並套用」後整個方案也會儲存，下次連線 PS5 時繼續使用"
+ },
+ "当前串流实际使用：%1": {
+  "en": "In use in the running stream: %1",
+  "ja": "現在のストリーミングで実際に使用中：%1",
+  "zh-TW": "目前串流實際使用：%1"
+ },
+ "当前串流正在使用“变化即发”（实验）：按键一按下就发送，其余仍按固定节奏": {
+  "en": "The running stream is using “On change” (experimental): a button press is sent as soon as it is pressed, everything else keeps the fixed schedule",
+  "ja": "現在のストリーミングは「変化時に送信」（実験的）を使用中です。ボタンは押した瞬間に送信し、それ以外は一定間隔のままです",
+  "zh-TW": "目前串流正在使用「變化即傳」（實驗）：按鍵一按下就傳送，其餘仍依固定節奏"
+ },
+ "当前情境": {
+  "en": "Current context",
+  "ja": "現在の状況",
+  "zh-TW": "目前情境"
+ },
+ "恢复内置布局": {
+  "en": "Restore the built-in layout",
+  "ja": "内蔵の配置に戻す",
+  "zh-TW": "還原內建配置"
+ },
+ "恢复内置的 GTA 风格布局（来自公开的按键表，未调校，未在游戏里验证）": {
+  "en": "Restores the built-in GTA-style layout (from press tables, untuned, unverified in the game)",
+  "ja": "内蔵の GTA 風キー配置に戻します（公開されたキー表に基づくもので、未調整・ゲーム内で未確認）",
+  "zh-TW": "還原內建的 GTA 風格配置（來自公開的按鍵表，未調校，未在遊戲裡驗證）"
+ },
+ "情境": {
+  "en": "Context",
+  "ja": "状況",
+  "zh-TW": "情境"
+ },
+ "情境切换": {
+  "en": "Context switching",
+  "ja": "状況の切り替え",
+  "zh-TW": "情境切換"
+ },
+ "慢走（摇杆推一半）": {
+  "en": "Walk (half tilt)",
+  "ja": "歩く（スティック半倒し）",
+  "zh-TW": "慢走（搖桿推一半）"
+ },
+ "手柄可以一直连着：按键相加，扳机取更深的一边，摇杆听最后动的那个设备": {
+  "en": "A controller can stay connected: buttons add up, a trigger takes the deeper value, and each stick follows the device that moved last",
+  "ja": "コントローラーは接続したままで構いません。ボタンは合算、トリガーは深いほうの値、スティックは最後に動かしたデバイスに従います",
+  "zh-TW": "手把可以一直連著：按鍵相加，扳機取較深的一邊，搖桿聽最後動的那個裝置"
+ },
+ "按键和校准": {
+  "en": "Keys and calibration",
+  "ja": "キーとキャリブレーション",
+  "zh-TW": "按鍵和校正"
+ },
+ "按键换算 P95": {
+  "en": "Translation P95",
+  "ja": "変換 P95",
+  "zh-TW": "按鍵換算 P95"
+ },
+ "按键方案文件": {
+  "en": "Profile file",
+  "ja": "プロファイル ファイル",
+  "zh-TW": "按鍵方案檔案"
+ },
+ "按键方案没有保存": {
+  "en": "The profile was not saved",
+  "ja": "プロファイルを保存できませんでした",
+  "zh-TW": "按鍵方案沒有儲存"
+ },
+ "按键设置": {
+  "en": "Key bindings",
+  "ja": "キー設定",
+  "zh-TW": "按鍵設定"
+ },
+ "按键：保持不变": {
+  "en": "Keys: unchanged",
+  "ja": "キー：変更なし",
+  "zh-TW": "按鍵：保持不變"
+ },
+ "按键：恢复内置的 GTA 风格布局": {
+  "en": "Keys: the built-in GTA-style layout is restored",
+  "ja": "キー：内蔵の GTA 風キー配置に戻す",
+  "zh-TW": "按鍵：還原內建的 GTA 風格配置"
+ },
+ "按键：载入方案“%1”": {
+  "en": "Keys: profile “%1” is loaded",
+  "ja": "キー：プロファイル「%1」を読み込む",
+  "zh-TW": "按鍵：載入方案「%1」"
+ },
+ "摇杆打满的比例": {
+  "en": "Share of polls at full stick",
+  "ja": "スティックが最大だった割合",
+  "zh-TW": "搖桿打滿的比例"
+ },
+ "摇杆推到底向右转：选一个参照物，每次它经过画面中心就按空格，共三次。": {
+  "en": "The stick is held fully right: pick a landmark and tap Space each time it passes the centre of the picture, three times.",
+  "ja": "スティックを右いっぱいに倒して旋回します。目印を 1 つ決め、それが画面の中央を通るたびにスペースを押してください（3 回）。",
+  "zh-TW": "搖桿推到底向右轉：選一個參照物，每次它經過畫面中心就按空白鍵，共三次。"
+ },
+ "摇杆推到底时的鼠标速度": {
+  "en": "Mouse speed that gives full stick",
+  "ja": "スティック最大に相当するマウス速度",
+  "zh-TW": "搖桿推到底時的滑鼠速度"
+ },
+ "摇杆推到底：%1 计数/秒": {
+  "en": "Full stick: %1 counts/s",
+  "ja": "スティック最大：%1 カウント/秒",
+  "zh-TW": "搖桿推到底：%1 計數/秒"
+ },
+ "摇杆最多推到这个比例；1 = 不限制": {
+  "en": "The stick is never tilted further than this share; 1 = no cap",
+  "ja": "スティックをこの割合より大きく倒しません。1 = 制限なし",
+  "zh-TW": "搖桿最多推到這個比例；1 = 不限制"
+ },
+ "摇杆正在从中心慢慢推出：镜头一开始移动就按空格。": {
+  "en": "The stick is tilting slowly from the centre: tap Space as soon as the camera starts to move.",
+  "ja": "スティックを中央からゆっくり倒しています。カメラが動き始めたらすぐスペースを押してください。",
+  "zh-TW": "搖桿正在從中心慢慢推出：鏡頭一開始移動就按空白鍵。"
+ },
+ "摇杆正在慢慢收回：镜头一停下就按空格。": {
+  "en": "The stick is tilting back slowly: tap Space as soon as the camera stops.",
+  "ja": "スティックをゆっくり戻しています。カメラが止まったらすぐスペースを押してください。",
+  "zh-TW": "搖桿正在慢慢收回：鏡頭一停下就按空白鍵。"
+ },
+ "摇杆输出（纵轴）随鼠标速度（横轴）的变化": {
+  "en": "Stick output (vertical) against mouse speed (horizontal)",
+  "ja": "マウス速度（横軸）に対するスティック出力（縦軸）",
+  "zh-TW": "搖桿輸出（縱軸）隨滑鼠速度（橫軸）的變化"
+ },
+ "摇杆输出（纵轴）随鼠标速度（横轴）的变化；游戏校准的死区和响应另外处理，不在图里": {
+  "en": "Stick output (vertical) against mouse speed (horizontal); the game calibration's dead zone and response are applied separately and are not in the plot",
+  "ja": "マウス速度（横軸）に対するスティック出力（縦軸）。ゲーム キャリブレーションのデッドゾーンと応答は別に適用され、このグラフには含まれません",
+  "zh-TW": "搖桿輸出（縱軸）隨滑鼠速度（橫軸）的變化；遊戲校正的死區和回應另外處理，不在圖裡"
+ },
+ "改为用于“%1”": {
+  "en": "Use it for “%1” instead",
+  "ja": "「%1」に割り当て直す",
+  "zh-TW": "改為用於「%1」"
+ },
+ "新方案还没有在真机上验证，属于实验功能；“和以前一样”保持默认。": {
+  "en": "The new profiles have not been validated on real hardware and are experimental; “As before” stays the default.",
+  "ja": "新しいプロファイルは実機でまだ検証されておらず、実験的な機能です。既定は「これまでどおり」のままです。",
+  "zh-TW": "新方案還沒有在實機上驗證，屬於實驗功能；「和以前一樣」保持預設。"
+ },
+ "方向键 上": {
+  "en": "D-pad up",
+  "ja": "方向キー 上",
+  "zh-TW": "方向鍵 上"
+ },
+ "方向键 下": {
+  "en": "D-pad down",
+  "ja": "方向キー 下",
+  "zh-TW": "方向鍵 下"
+ },
+ "方向键 右": {
+  "en": "D-pad right",
+  "ja": "方向キー 右",
+  "zh-TW": "方向鍵 右"
+ },
+ "方向键 左": {
+  "en": "D-pad left",
+  "ja": "方向キー 左",
+  "zh-TW": "方向鍵 左"
+ },
+ "方案名称": {
+  "en": "Profile name",
+  "ja": "プロファイル名",
+  "zh-TW": "方案名稱"
+ },
+ "方案文件：%1": {
+  "en": "Profile file: %1",
+  "ja": "プロファイル ファイル：%1",
+  "zh-TW": "方案檔案：%1"
+ },
+ "曲线指数": {
+  "en": "Curve exponent",
+  "ja": "カーブの指数",
+  "zh-TW": "曲線指數"
+ },
+ "最大倾斜": {
+  "en": "Maximum tilt",
+  "ja": "最大の傾き",
+  "zh-TW": "最大傾斜"
+ },
+ "最大转向速度": {
+  "en": "Maximum turning speed",
+  "ja": "最大旋回速度",
+  "zh-TW": "最大轉向速度"
+ },
+ "最小的鼠标移动从这个摇杆倾斜开始，用来抵消游戏自己的摇杆死区": {
+  "en": "The smallest mouse movement starts at this stick tilt, to cancel the game's own stick dead zone",
+  "ja": "最小のマウス移動がこのスティックの傾きから始まります。ゲーム側のスティック デッドゾーンを打ち消すためです",
+  "zh-TW": "最小的滑鼠移動從這個搖桿傾斜開始，用來抵銷遊戲自己的搖桿死區"
+ },
+ "最快的舒适甩动": {
+  "en": "Your fastest comfortable flick",
+  "ja": "無理なくできる最速のフリック",
+  "zh-TW": "最快的舒適甩動"
+ },
+ "最慢的稳定移动": {
+  "en": "Your slowest steady move",
+  "ja": "安定してできる最も遅い動き",
+  "zh-TW": "最慢的穩定移動"
+ },
+ "有一次动作没有移动，或时间为零": {
+  "en": "one of the motions had no movement or no duration",
+  "ja": "動きがない、または時間がゼロの動作がありました",
+  "zh-TW": "有一次動作沒有移動，或時間為零"
+ },
+ "来自公开的按键表，未调校，未在游戏里验证：WASD 移动，Shift 奔跑，空格跳跃，鼠标左键射击，右键瞄准": {
+  "en": "From press tables, untuned, unverified in the game: WASD moves, Shift runs, Space jumps, left mouse shoots, right mouse aims",
+  "ja": "公開されたキー表に基づくもので、未調整・ゲーム内で未確認：WASD で移動、Shift でダッシュ、スペースでジャンプ、マウス左ボタンで射撃、右ボタンでエイム",
+  "zh-TW": "來自公開的按鍵表，未調校，未在遊戲裡驗證：WASD 移動，Shift 奔跑，空白鍵跳躍，滑鼠左鍵射擊，右鍵瞄準"
+ },
+ "来自游戏校准": {
+  "en": "From the game calibration",
+  "ja": "ゲーム キャリブレーションから",
+  "zh-TW": "來自遊戲校正"
+ },
+ "查看和修改": {
+  "en": "Show and edit",
+  "ja": "表示と編集",
+  "zh-TW": "查看和修改"
+ },
+ "校准向导": {
+  "en": "Calibration wizard",
+  "ja": "キャリブレーション ウィザード",
+  "zh-TW": "校正精靈"
+ },
+ "校准已结束，鼠标已交还。下面是引擎记录的原文（英文）：": {
+  "en": "The calibration has ended and the mouse is yours again. The engine's own lines:",
+  "ja": "キャリブレーションが終わり、マウスを戻しました。以下はエンジンが記録した原文（英語）です：",
+  "zh-TW": "校正已結束，滑鼠已交還。下面是引擎記錄的原文（英文）："
+ },
+ "正在接管鼠标…": {
+  "en": "Taking the mouse…",
+  "ja": "マウスを取り込んでいます…",
+  "zh-TW": "正在接管滑鼠…"
+ },
+ "正在记录：现在移动鼠标…": {
+  "en": "Recording: move the mouse now…",
+  "ja": "記録中：今マウスを動かしてください…",
+  "zh-TW": "正在記錄：現在移動滑鼠…"
+ },
+ "正在进行：%1": {
+  "en": "Now: %1",
+  "ja": "実行中：%1",
+  "zh-TW": "正在進行：%1"
+ },
+ "步行": {
+  "en": "Walking",
+  "ja": "歩行",
+  "zh-TW": "步行"
+ },
+ "步行、瞄准、奔跑、驾驶各用自己的灵敏度、曲线和死区补偿；默认不加任何缓冲": {
+  "en": "Walking, aiming, sprinting and driving each use their own sensitivity, curve and dead-zone compensation; no buffering is added by default",
+  "ja": "歩行・エイム・ダッシュ・運転のそれぞれに専用の感度、カーブ、デッドゾーン補正を使います。既定ではバッファリングを加えません",
+  "zh-TW": "步行、瞄準、奔跑、駕駛各用自己的靈敏度、曲線和死區補償；預設不加任何緩衝"
+ },
+ "步行的按键也用于奔跑和瞄准": {
+  "en": "Walking's keys are also used for sprinting and aiming",
+  "ja": "歩行のキーはダッシュとエイムでも使われます",
+  "zh-TW": "步行的按鍵也用於奔跑和瞄準"
+ },
+ "死区": {
+  "en": "Dead zone",
+  "ja": "デッドゾーン",
+  "zh-TW": "死區"
+ },
+ "死区、最大转速、游戏的响应和垂直比例取自按键方案文件里的游戏校准；关闭后使用这个情境自己的数值": {
+  "en": "Dead zone, full-turn speed, the game's response and the vertical ratio come from the game calibration in the profile file; switched off, this context's own numbers are used",
+  "ja": "デッドゾーン、最大旋回速度、ゲームの応答、垂直比率をプロファイル ファイル内のゲーム キャリブレーションから取ります。オフにすると、この状況自身の数値を使います",
+  "zh-TW": "死區、最大轉速、遊戲的回應和垂直比例取自按鍵方案檔案裡的遊戲校正；關閉後使用這個情境自己的數值"
+ },
+ "死区补偿": {
+  "en": "Dead-zone compensation",
+  "ja": "デッドゾーン補正",
+  "zh-TW": "死區補償"
+ },
+ "死区补偿 %1": {
+  "en": "Dead-zone compensation %1",
+  "ja": "デッドゾーン補正 %1",
+  "zh-TW": "死區補償 %1"
+ },
+ "每一步都可以跳过；在最后点“完成并应用”之前不会更改任何设置。唯一的例外：你开始的游戏内校准跑完时，引擎会自己写入并立即使用测得的数值。": {
+  "en": "Every step can be skipped; nothing changes before you press “Finish and apply”. The one exception: when a game calibration you started runs to its end, the engine itself writes the measured numbers and uses them at once.",
+  "ja": "どのステップもスキップできます。「完了して適用」を押すまで何も変わりません。唯一の例外：あなたが始めたゲーム内キャリブレーションが最後まで終わると、エンジン自身が測定値を書き込み、すぐに使います。",
+  "zh-TW": "每一步都可以跳過；在最後點「完成並套用」之前不會變更任何設定。唯一的例外：你開始的遊戲內校準跑完時，引擎會自己寫入並立即使用測得的數值。"
+ },
+ "每个动作用哪个键；第一次使用时的三步向导": {
+  "en": "Which key does each action; the three-step wizard for first use",
+  "ja": "各操作に使うキー、初回用の 3 ステップ ウィザード",
+  "zh-TW": "每個動作用哪個鍵；第一次使用時的三步精靈"
+ },
+ "水平灵敏度": {
+  "en": "Horizontal sensitivity",
+  "ja": "水平感度",
+  "zh-TW": "水平靈敏度"
+ },
+ "水平灵敏度 %1 · 垂直灵敏度 %2": {
+  "en": "Horizontal sensitivity %1 · vertical sensitivity %2",
+  "ja": "水平感度 %1 · 垂直感度 %2",
+  "zh-TW": "水平靈敏度 %1 · 垂直靈敏度 %2"
+ },
+ "没有更改": {
+  "en": "Nothing was changed",
+  "ja": "変更していません",
+  "zh-TW": "沒有變更"
+ },
+ "没有更改：这个版本不能修改按键": {
+  "en": "Nothing was changed: this build cannot change keys",
+  "ja": "変更していません：このビルドではキーを変更できません",
+  "zh-TW": "沒有變更：這個版本不能修改按鍵"
+ },
+ "没有检测到鼠标移动，请再记录一次": {
+  "en": "No mouse movement was detected; record this one again",
+  "ja": "マウスの動きを検出できませんでした。もう一度記録してください",
+  "zh-TW": "沒有偵測到滑鼠移動，請再記錄一次"
+ },
+ "没能开始：请确认 PushFPS 窗口在最前面，然后再试一次。": {
+  "en": "Could not start: make sure the PushFPS window is in front, then try again.",
+  "ja": "開始できませんでした。PushFPS のウィンドウが最前面にあることを確かめて、もう一度試してください。",
+  "zh-TW": "無法開始：請確認 PushFPS 視窗在最前面，然後再試一次。"
+ },
+ "没能读取这个按键方案文件": {
+  "en": "This profile file could not be read",
+  "ja": "このプロファイル ファイルを読み込めませんでした",
+  "zh-TW": "無法讀取這個按鍵方案檔案"
+ },
+ "测试动作不足以算出数值：%1": {
+  "en": "The test motions were not enough to work out the numbers: %1",
+  "ja": "テスト動作が足りず、数値を求められませんでした：%1",
+  "zh-TW": "測試動作不足以算出數值：%1"
+ },
+ "添加按键": {
+  "en": "Add a key",
+  "ja": "キーを追加",
+  "zh-TW": "新增按鍵"
+ },
+ "游戏中随时可以按 %1 把鼠标和键盘交还给电脑；打开这个页面时，鼠标和键盘始终留给界面": {
+  "en": "In the game, press %1 at any time to give mouse and keyboard back to the PC; while this page is open they always stay with the interface",
+  "ja": "ゲーム中はいつでも %1 を押すと、マウスとキーボードを PC に戻せます。このページを開いている間は、常に画面操作に使えます",
+  "zh-TW": "遊戲中隨時可以按 %1 把滑鼠和鍵盤交還給電腦；開啟這個頁面時，滑鼠和鍵盤始終留給介面"
+ },
+ "游戏内校准：引擎已写入并正在使用测得的数值；完成后整个方案也会保存，下次连接 PS5 时继续使用": {
+  "en": "Game calibration: the engine wrote the measured numbers and is using them; finishing also saves the whole profile, used again at the next PS5 connection.",
+  "ja": "ゲーム内キャリブレーション：エンジンが測定値を書き込み、使用中です。完了するとプロファイル全体も保存され、次に PS5 に接続したときも使われます",
+  "zh-TW": "遊戲內校準：引擎已寫入並正在使用測得的數值；完成後整個方案也會儲存，下次連線 PS5 時繼續使用"
+ },
+ "游戏本身的最快转速在第 2 步的“全速转一圈”里测量；这里测的是你的手。": {
+  "en": "The game's own fastest turn is measured in step 2 (“Full turn at full speed”); this step measures your hand.",
+  "ja": "ゲーム自体の最速旋回は手順 2 の「全速で 1 回転」で測ります。ここで測るのはあなたの手の動きです。",
+  "zh-TW": "遊戲本身的最快轉速在第 2 步的「全速轉一圈」裡測量；這裡測的是你的手。"
+ },
+ "游戏的辅助瞄准是为手柄设计的；这里不提供、也不增强任何瞄准辅助。": {
+  "en": "The game's aim assist is designed for controllers; nothing here provides or strengthens any aim assistance.",
+  "ja": "ゲームのエイム アシストはコントローラー向けに作られています。ここではエイム アシストを提供も強化もしません。",
+  "zh-TW": "遊戲的輔助瞄準是為手把設計的；這裡不提供、也不增強任何瞄準輔助。"
+ },
+ "游戏自己的摇杆加速度仍然生效，手感会和电脑游戏不同。": {
+  "en": "The game's own stick acceleration still applies, so it feels different from a PC game.",
+  "ja": "ゲーム側のスティック加速はそのまま働くため、PC ゲームとは感触が異なります。",
+  "zh-TW": "遊戲自己的搖桿加速度仍然生效，手感會和電腦遊戲不同。"
+ },
+ "滚轮向上": {
+  "en": "Wheel up",
+  "ja": "ホイール上",
+  "zh-TW": "滾輪向上"
+ },
+ "滚轮向下": {
+  "en": "Wheel down",
+  "ja": "ホイール下",
+  "zh-TW": "滾輪向下"
+ },
+ "灵敏度、曲线、平滑和发送方式都由你决定": {
+  "en": "You decide sensitivity, curves, smoothing and how input is sent",
+  "ja": "感度、カーブ、スムージング、送信方式をすべて自分で決められます",
+  "zh-TW": "靈敏度、曲線、平滑和傳送方式都由你決定"
+ },
+ "灵敏度：不更改": {
+  "en": "Sensitivity: unchanged",
+  "ja": "感度：変更なし",
+  "zh-TW": "靈敏度：不變更"
+ },
+ "灵敏度：使用测得的数值，并改用“自定义”输入方案": {
+  "en": "Sensitivity: the fitted numbers are used and the input profile becomes “Custom”",
+  "ja": "感度：測定した数値を使い、入力プロファイルを「カスタム」に切り替える",
+  "zh-TW": "靈敏度：使用測得的數值，並改用「自訂」輸入方案"
+ },
+ "点“完成并应用”后：": {
+  "en": "After “Finish and apply”:",
+  "ja": "「完了して適用」を押すと：",
+  "zh-TW": "按「完成並套用」後："
+ },
+ "点“添加按键”后按下键盘按键或鼠标按键。一个键只能做一件事；更改按键会松开所有按住的键。": {
+  "en": "Press “Add a key”, then a keyboard key or a mouse button. One key does one thing; changing keys releases every key that is held.",
+  "ja": "「キーを追加」を押してから、キーボードのキーかマウス ボタンを押します。1 つのキーにできることは 1 つです。キーを変更すると、押しているキーはすべて離されます。",
+  "zh-TW": "按「新增按鍵」後按下鍵盤按鍵或滑鼠按鍵。一個鍵只能做一件事；變更按鍵會放開所有按住的鍵。"
+ },
+ "状态到发送 P95": {
+  "en": "State to send P95",
+  "ja": "状態から送信まで P95",
+  "zh-TW": "狀態到傳送 P95"
+ },
+ "用你自己的手感来定：做几次测试动作，电脑据此算出多快的鼠标移动算“摇杆推到底”，以及灵敏度和曲线。记录时摇杆保持不动，游戏里不会有任何动作。": {
+  "en": "Set it from your own hand: make a few test motions, and the PC works out how fast a mouse movement counts as “full stick”, plus sensitivity and curve. While recording, the stick stays neutral: nothing happens in the game.",
+  "ja": "自分の手の感覚で決めます。テスト動作を何回か行うと、どれだけ速いマウスの動きを「スティック最大」とするか、および感度とカーブを PC が求めます。記録中はスティックを動かさないので、ゲーム内では何も起こりません。",
+  "zh-TW": "用你自己的手感來定：做幾次測試動作，電腦據此算出多快的滑鼠移動算「搖桿推到底」，以及靈敏度和曲線。記錄時搖桿保持不動，遊戲裡不會有任何動作。"
+ },
+ "用键盘和鼠标玩 PS5 串流": {
+  "en": "Play the PS5 stream with mouse and keyboard",
+  "ja": "PS5 ストリーミングをマウスとキーボードでプレイ",
+  "zh-TW": "用鍵盤和滑鼠玩 PS5 串流"
+ },
+ "用键盘和鼠标玩 PS5 串流：开关、按键和校准": {
+  "en": "Play the PS5 stream with mouse and keyboard: switch, keys and calibration",
+  "ja": "PS5 ストリーミングをマウスとキーボードでプレイ：オン / オフ、キー、キャリブレーション",
+  "zh-TW": "用鍵盤和滑鼠玩 PS5 串流：開關、按鍵和校正"
+ },
+ "由你选择": {
+  "en": "your choice",
+  "ja": "自分で選択",
+  "zh-TW": "由你選擇"
+ },
+ "由启动变量 VEYRA_EXP_RP_KBM 打开，这里无法关闭": {
+  "en": "Switched on by the start-up variable VEYRA_EXP_RP_KBM; it cannot be switched off here",
+  "ja": "起動時の変数 VEYRA_EXP_RP_KBM でオンになっています。ここではオフにできません",
+  "zh-TW": "由啟動變數 VEYRA_EXP_RP_KBM 開啟，這裡無法關閉"
+ },
+ "由按键方案文件决定": {
+  "en": "Set by the profile file",
+  "ja": "プロファイル ファイルで決まります",
+  "zh-TW": "由按鍵方案檔案決定"
+ },
+ "电脑把按键和鼠标移动变成手柄的按键和摇杆；主机看到的始终是一个手柄。": {
+  "en": "The PC turns keys and mouse movement into a controller's buttons and sticks; the console only ever sees a controller.",
+  "ja": "PC がキーとマウスの動きをコントローラーのボタンとスティックに変換します。本体から見えるのは常にコントローラーです。",
+  "zh-TW": "電腦把按鍵和滑鼠移動變成手把的按鍵和搖桿；主機看到的始終是一個手把。"
+ },
+ "瞄准": {
+  "en": "Aiming",
+  "ja": "エイム",
+  "zh-TW": "瞄準"
+ },
+ "瞄准情境下两个方向的灵敏度都乘以它": {
+  "en": "Multiplies both sensitivities in the aiming context",
+  "ja": "エイム中は、両方向の感度にこの値を掛けます",
+  "zh-TW": "瞄準情境下兩個方向的靈敏度都乘以它"
+ },
+ "瞄准沿用步行的按键；这里只改瞄准时不一样的键": {
+  "en": "Aiming uses walking's keys; only the keys that differ while aiming are changed here",
+  "ja": "エイムは歩行のキーを引き継ぎます。ここではエイム中だけ異なるキーを変更します",
+  "zh-TW": "瞄準沿用步行的按鍵；這裡只改瞄準時不一樣的鍵"
+ },
+ "瞄准灵敏度倍率 (ADS)": {
+  "en": "ADS sensitivity multiplier",
+  "ja": "エイム感度の倍率 (ADS)",
+  "zh-TW": "瞄準靈敏度倍率 (ADS)"
+ },
+ "空格": {
+  "en": "Space",
+  "ja": "スペース",
+  "zh-TW": "空白鍵"
+ },
+ "空格或鼠标左键：记下 · Enter：跳过这一步 · Esc：停止（不做更改）": {
+  "en": "Space or left mouse: tap · Enter: skip this step · Esc: stop (nothing changes)",
+  "ja": "スペースまたはマウス左ボタン：記録 · Enter：この手順をスキップ · Esc：中止（変更なし）",
+  "zh-TW": "空白鍵或滑鼠左鍵：記下 · Enter：跳過這一步 · Esc：停止（不做變更）"
+ },
+ "窗口太窄，放不下游戏画面：请先放大窗口。": {
+  "en": "The window is too narrow for the game picture: make it larger first.",
+  "ja": "ウィンドウが狭く、ゲーム画面を表示できません。先にウィンドウを広げてください。",
+  "zh-TW": "視窗太窄，放不下遊戲畫面：請先放大視窗。"
+ },
+ "立即重新接管": {
+  "en": "Capture again",
+  "ja": "今すぐ再び取り込む",
+  "zh-TW": "立即重新接管"
+ },
+ "站在空旷的地方，按空格开始；每个情境（步行、瞄准、驾驶）开始前都会先问一次，Enter 跳过该情境。": {
+  "en": "Stand in an open place and press Space to begin; each context (walking, aiming, driving) asks first, and Enter skips it.",
+  "ja": "開けた場所に立ち、スペースで開始します。状況（歩行・エイム・運転）ごとに始める前に確認があり、Enter でその状況をスキップできます。",
+  "zh-TW": "站在空曠的地方，按空白鍵開始；每個情境（步行、瞄準、駕駛）開始前都會先問一次，Enter 跳過該情境。"
+ },
+ "第 %1 次，共 %2 次：%3": {
+  "en": "Motion %1 of %2: %3",
+  "ja": "%2 回中 %1 回目：%3",
+  "zh-TW": "第 %1 次，共 %2 次：%3"
+ },
+ "第 %1 步，共 3 步": {
+  "en": "Step %1 of 3",
+  "ja": "ステップ %1 / 3",
+  "zh-TW": "第 %1 步，共 3 步"
+ },
+ "算出的数值（步行、瞄准和奔跑共用）：": {
+  "en": "Fitted numbers (shared by walking, aiming and sprinting):",
+  "ja": "求めた数値（歩行・エイム・ダッシュで共通）：",
+  "zh-TW": "算出的數值（步行、瞄準和奔跑共用）："
+ },
+ "精准区范围": {
+  "en": "Precision zone width",
+  "ja": "精密域の幅",
+  "zh-TW": "精準區範圍"
+ },
+ "精准区输出": {
+  "en": "Precision zone output",
+  "ja": "精密域の出力",
+  "zh-TW": "精準區輸出"
+ },
+ "精准段结束时的摇杆输出比例": {
+  "en": "Share of stick travel reached at the end of the precision segment",
+  "ja": "精密域の終わりで達するスティック出力の割合",
+  "zh-TW": "精準段結束時的搖桿輸出比例"
+ },
+ "精准＋速度": {
+  "en": "Precision + speed",
+  "ja": "精密＋速度",
+  "zh-TW": "精準＋速度"
+ },
+ "精细瞄准（按住时鼠标变慢）": {
+  "en": "Fine aim (slower mouse while held)",
+  "ja": "精密エイム（押している間マウスが遅くなる）",
+  "zh-TW": "精細瞄準（按住時滑鼠變慢）"
+ },
+ "线性": {
+  "en": "Linear",
+  "ja": "リニア",
+  "zh-TW": "線性"
+ },
+ "自动：按住瞄准键用瞄准，切到驾驶用驾驶，移动时按住奔跑键用奔跑。手动选择只改变镜头手感，不改变按键": {
+  "en": "Automatic: aiming while the aim button is held, driving after switching to driving, sprinting while the sprint key is held with a movement key. A manual choice changes the camera feel only, never the keys",
+  "ja": "自動：エイム ボタンを押している間はエイム、運転に切り替えると運転、移動中にダッシュ キーを押している間はダッシュ。手動で選ぶとカメラの感触だけが変わり、キーは変わりません",
+  "zh-TW": "自動：按住瞄準鍵用瞄準，切到駕駛用駕駛，移動時按住奔跑鍵用奔跑。手動選擇只改變鏡頭手感，不改變按鍵"
+ },
+ "自适应换算比简单路径慢": {
+  "en": "the adaptive conversion was slower than the simple path",
+  "ja": "アダプティブ変換が単純な経路より遅かった",
+  "zh-TW": "自適應換算比簡單路徑慢"
+ },
+ "自适应精准": {
+  "en": "Adaptive Precision",
+  "ja": "アダプティブ精密",
+  "zh-TW": "自適應精準"
+ },
+ "触摸板按下": {
+  "en": "Touchpad click",
+  "ja": "タッチパッド押し込み",
+  "zh-TW": "觸控板按下"
+ },
+ "记录这一次（约 3 秒）": {
+  "en": "Record this one (about 3 s)",
+  "ja": "この 1 回を記録（約 3 秒）",
+  "zh-TW": "記錄這一次（約 3 秒）"
+ },
+ "请先输入方案名称（字母或数字）": {
+  "en": "Type a profile name first (letters or digits)",
+  "ja": "先にプロファイル名を入力してください（英字または数字）",
+  "zh-TW": "請先輸入方案名稱（字母或數字）"
+ },
+ "请按下一个键": {
+  "en": "Press a key",
+  "ja": "キーを押してください",
+  "zh-TW": "請按下一個鍵"
+ },
+ "请按下要用于“%1”的键盘按键，或在下面的方框里按鼠标按键、滚动滚轮（Esc 取消）": {
+  "en": "Press the keyboard key to use for “%1”, or press a mouse button or turn the wheel in the box below (Esc cancels)",
+  "ja": "「%1」に使うキーを押すか、下の枠の中でマウス ボタンを押すかホイールを回してください（Esc でキャンセル）",
+  "zh-TW": "請按下要用於「%1」的鍵盤按鍵，或在下面的方框裡按滑鼠按鍵、捲動滾輪（Esc 取消）"
+ },
+ "请按键…": {
+  "en": "Press a key…",
+  "ja": "キーを押してください…",
+  "zh-TW": "請按鍵…"
+ },
+ "超低延迟输入": {
+  "en": "Ultra Low Latency input",
+  "ja": "超低遅延入力",
+  "zh-TW": "超低延遲輸入"
+ },
+ "跑完后数值由引擎写入按键方案文件并立即使用（旧文件保留为 .bak）；中途停止则不做任何更改。": {
+  "en": "When it runs to its end, the engine writes the numbers to the profile file and uses them at once (the old file is kept as .bak); stopping midway changes nothing.",
+  "ja": "最後まで実行すると、エンジンが数値をプロファイル ファイルに書き込み、すぐに使います（古いファイルは .bak として残ります）。途中で中止した場合は何も変更しません。",
+  "zh-TW": "跑完後數值由引擎寫入按鍵方案檔案並立即使用（舊檔案保留為 .bak）；中途停止則不做任何變更。"
+ },
+ "跳过这一步": {
+  "en": "Skip this step",
+  "ja": "この手順をスキップ",
+  "zh-TW": "跳過這一步"
+ },
+ "转四分之一圈：按你希望的距离移动鼠标": {
+  "en": "A quarter turn: move the mouse as far as you want it to take",
+  "ja": "4 分の 1 回転：その分だけ動かしたいと思う距離でマウスを動かしてください",
+  "zh-TW": "轉四分之一圈：依你希望的距離移動滑鼠"
+ },
+ "输入在发送前等待得更久": {
+  "en": "input waited longer before being sent",
+  "ja": "入力が送信までより長く待たされた",
+  "zh-TW": "輸入在傳送前等待得更久"
+ },
+ "输入性能方案": {
+  "en": "Input performance profile",
+  "ja": "入力パフォーマンス プロファイル",
+  "zh-TW": "輸入效能方案"
+ },
+ "输入方案由测试开关（VEYRA_EXP_RP_KBM_INPUT_PROFILE / VEYRA_EXP_RP_KBM_INPUT）设定，这里无法更改": {
+  "en": "The input profile is set by a test switch (VEYRA_EXP_RP_KBM_INPUT_PROFILE / VEYRA_EXP_RP_KBM_INPUT) and cannot be changed here",
+  "ja": "入力プロファイルはテスト用スイッチ（VEYRA_EXP_RP_KBM_INPUT_PROFILE / VEYRA_EXP_RP_KBM_INPUT）で設定されており、ここでは変更できません",
+  "zh-TW": "輸入方案由測試開關（VEYRA_EXP_RP_KBM_INPUT_PROFILE / VEYRA_EXP_RP_KBM_INPUT）設定，這裡無法變更"
+ },
+ "输入来源": {
+  "en": "Input source",
+  "ja": "入力元",
+  "zh-TW": "輸入來源"
+ },
+ "返回": {
+  "en": "Back",
+  "ja": "戻る",
+  "zh-TW": "返回"
+ },
+ "还没有可显示的校准值": {
+  "en": "No calibrated value to show yet",
+  "ja": "表示できる校正値はまだありません",
+  "zh-TW": "還沒有可顯示的校正值"
+ },
+ "这一次没有写入任何数值": {
+  "en": "No numbers were written this time",
+  "ja": "今回は数値を書き込みませんでした",
+  "zh-TW": "這一次沒有寫入任何數值"
+ },
+ "这个版本不含 PS5 串流，无法使用键盘和鼠标": {
+  "en": "This build has no PS5 streaming, so mouse and keyboard cannot be used",
+  "ja": "このビルドには PS5 ストリーミングがないため、マウスとキーボードは使えません",
+  "zh-TW": "這個版本不含 PS5 串流，無法使用鍵盤和滑鼠"
+ },
+ "这个版本不能修改按键：没有 PS5 串流，或引擎还没有这项功能。": {
+  "en": "This build cannot change keys: it has no PS5 streaming, or the engine does not have this yet.",
+  "ja": "このビルドではキーを変更できません。PS5 ストリーミングがないか、エンジンにまだこの機能がありません。",
+  "zh-TW": "這個版本不能修改按鍵：沒有 PS5 串流，或引擎還沒有這項功能。"
+ },
+ "这个版本只使用已验证的固定节奏；“变化即发”还没有启用": {
+  "en": "This build uses only the proven fixed schedule; “On change” is not enabled yet",
+  "ja": "このビルドは実績のある一定間隔だけを使います。「変化時に送信」はまだ有効になっていません",
+  "zh-TW": "這個版本只使用已驗證的固定節奏；「變化即傳」還沒有啟用"
+ },
+ "这个版本在下次连接 PS5 时才会用上保存的按键；请保存为方案文件。": {
+  "en": "This build uses saved keys from the next PS5 connection on; save them as a profile file.",
+  "ja": "このビルドでは、保存したキーは次回の PS5 接続から使われます。プロファイル ファイルとして保存してください。",
+  "zh-TW": "這個版本在下次連接 PS5 時才會用上儲存的按鍵；請儲存為方案檔案。"
+ },
+ "这个版本的引擎还没有键盘和鼠标页面需要的功能": {
+  "en": "This build's engine does not have what the Mouse & Keyboard page needs yet",
+  "ja": "このビルドのエンジンには、「マウスとキーボード」ページに必要な機能がまだありません",
+  "zh-TW": "這個版本的引擎還沒有鍵盤和滑鼠頁面需要的功能"
+ },
+ "这个版本的输入引擎没有可显示的情境数值。": {
+  "en": "This build's input engine has no per-context numbers to show.",
+  "ja": "このビルドの入力エンジンには、表示できる状況ごとの数値がありません。",
+  "zh-TW": "這個版本的輸入引擎沒有可顯示的情境數值。"
+ },
+ "这个版本的输入引擎还没有新的输入方案：实际使用的是“和以前一样”": {
+  "en": "This build's input engine has no new input profiles yet: “As before” is what runs",
+  "ja": "このビルドの入力エンジンには新しい入力プロファイルがまだありません。実際に動くのは「これまでどおり」です",
+  "zh-TW": "這個版本的輸入引擎還沒有新的輸入方案：實際使用的是「和以前一樣」"
+ },
+ "这个版本的输入引擎还没有这项测量。": {
+  "en": "This build's input engine does not have this measurement yet.",
+  "ja": "このビルドの入力エンジンには、この測定がまだありません。",
+  "zh-TW": "這個版本的輸入引擎還沒有這項測量。"
+ },
+ "这个版本请在游戏画面里按 Ctrl+Alt+Shift+K 开始校准：空格或鼠标左键记下，Enter 跳过，Esc 停止。": {
+  "en": "In this build, start the calibration in the game picture with Ctrl+Alt+Shift+K: Space or left mouse taps, Enter skips, Esc stops.",
+  "ja": "このビルドでは、ゲーム画面で Ctrl+Alt+Shift+K を押してキャリブレーションを始めてください。スペースまたはマウス左ボタンで記録、Enter でスキップ、Esc で中止です。",
+  "zh-TW": "這個版本請在遊戲畫面裡按 Ctrl+Alt+Shift+K 開始校正：空白鍵或滑鼠左鍵記下，Enter 跳過，Esc 停止。"
+ },
+ "这个键不能用于按键方案": {
+  "en": "This key cannot be used in a profile",
+  "ja": "このキーはプロファイルに使えません",
+  "zh-TW": "這個鍵不能用於按鍵方案"
+ },
+ "这些方案只改变键盘和鼠标的换算，和画面方案（快速设置里的极低延迟等）互不影响": {
+  "en": "These profiles change only how mouse and keyboard are converted; they are independent of the picture profiles (Ultra Low Latency and others in quick setup)",
+  "ja": "これらのプロファイルはキーボードとマウスの変換だけを変えます。画面プロファイル（クイック設定の超低遅延など）とは無関係です",
+  "zh-TW": "這些方案只改變鍵盤和滑鼠的換算，和畫面方案（快速設定裡的超低延遲等）互不影響"
+ },
+ "这些是电脑内部的处理时间，不是从输入到画面的延迟。": {
+  "en": "These are processing times inside the PC, not input-to-photon latency.",
+  "ja": "これらは PC 内部の処理時間で、入力から画面までの遅延ではありません。",
+  "zh-TW": "這些是電腦內部的處理時間，不是從輸入到畫面的延遲。"
+ },
+ "退回状态": {
+  "en": "Fallback",
+  "ja": "フォールバック",
+  "zh-TW": "退回狀態"
+ },
+ "选择“自定义”才能修改这些数值": {
+  "en": "Choose “Custom” to change these values",
+  "ja": "これらの数値を変更するには「カスタム」を選んでください",
+  "zh-TW": "選擇「自訂」才能修改這些數值"
+ },
+ "释放鼠标": {
+  "en": "Release the mouse",
+  "ja": "マウスの解放",
+  "zh-TW": "釋放滑鼠"
+ },
+ "重新开始": {
+  "en": "Start over",
+  "ja": "やり直す",
+  "zh-TW": "重新開始"
+ },
+ "重新接管": {
+  "en": "Capture again",
+  "ja": "再び取り込む",
+  "zh-TW": "重新接管"
+ },
+ "键盘和鼠标": {
+  "en": "Mouse & Keyboard",
+  "ja": "マウスとキーボード",
+  "zh-TW": "鍵盤和滑鼠"
+ },
+ "键盘和鼠标向导": {
+  "en": "Mouse & Keyboard wizard",
+  "ja": "マウスとキーボードのウィザード",
+  "zh-TW": "鍵盤和滑鼠精靈"
+ },
+ "镜头反复向右、再向上摆动，向上的幅度逐渐变大：看起来和向右一样大时按空格。": {
+  "en": "The camera swings right, then up, again and again, the up swing growing: tap Space when it looks as large as the right swing.",
+  "ja": "カメラが右、次に上へと繰り返し振れ、上への振り幅がだんだん大きくなります。右への振りと同じ大きさに見えたらスペースを押してください。",
+  "zh-TW": "鏡頭反覆向右、再向上擺動，向上的幅度逐漸變大：看起來和向右一樣大時按空白鍵。"
+ },
+ "镜头转速有上限：摇杆推到底就是游戏允许的最快转速。": {
+  "en": "Turning speed has a ceiling: full stick is the fastest the game allows.",
+  "ja": "カメラの旋回速度には上限があります。スティック最大が、ゲームが許す最速です。",
+  "zh-TW": "鏡頭轉速有上限：搖桿推到底就是遊戲允許的最快轉速。"
+ },
+ "限制": {
+  "en": "Limits",
+  "ja": "制限",
+  "zh-TW": "限制"
+ },
+ "需要先连接 PS5 串流、打开键盘和鼠标，并让角色站在空旷的地方。可以先跳过：串流时按 %1 放开鼠标，再回到这个页面。": {
+  "en": "Needs a connected PS5 stream with mouse and keyboard on, and your character standing in an open place. You can skip for now: during a stream press %1 to free the mouse, then come back to this page.",
+  "ja": "PS5 ストリーミングに接続してマウスとキーボードをオンにし、キャラクターを開けた場所に立たせる必要があります。今はスキップしても構いません。ストリーミング中に %1 を押してマウスを解放し、このページに戻ってください。",
+  "zh-TW": "需要先連接 PS5 串流、開啟鍵盤和滑鼠，並讓角色站在空曠的地方。可以先跳過：串流時按 %1 放開滑鼠，再回到這個頁面。"
+ },
+ "需要正在运行的 PS5 串流并打开键盘和鼠标。可以先跳过。": {
+  "en": "Needs a running PS5 stream with mouse and keyboard on. You can skip for now.",
+  "ja": "実行中の PS5 ストリーミングと、マウスとキーボードのオンが必要です。今はスキップしても構いません。",
+  "zh-TW": "需要正在執行的 PS5 串流並開啟鍵盤和滑鼠。可以先跳過。"
+ },
+ "需要至少 3 次有效的甩动": {
+  "en": "at least 3 valid flicks are needed",
+  "ja": "有効なフリックが 3 回以上必要です",
+  "zh-TW": "需要至少 3 次有效的甩動"
+ },
+ "需要至少 3 次有效的转向动作": {
+  "en": "at least 3 valid turn motions are needed",
+  "ja": "有効な旋回動作が 3 回以上必要です",
+  "zh-TW": "需要至少 3 次有效的轉向動作"
+ },
+ "驾驶": {
+  "en": "Driving",
+  "ja": "運転",
+  "zh-TW": "駕駛"
+ },
+ "驾驶有自己的一套按键": {
+  "en": "Driving has its own set of keys",
+  "ja": "運転には専用のキー一式があります",
+  "zh-TW": "駕駛有自己的一套按鍵"
+ },
+ "默认。和之前的版本完全相同：数值来自按键方案文件，带其中的平滑": {
+  "en": "The default. Exactly as in earlier versions: the numbers come from the profile file, with its smoothing",
+  "ja": "既定。以前のバージョンとまったく同じです。数値はプロファイル ファイルのもので、そのスムージングも含みます",
+  "zh-TW": "預設。和之前的版本完全相同：數值來自按鍵方案檔案，帶其中的平滑"
+ },
+ "鼠标中键": {
+  "en": "Middle mouse button",
+  "ja": "マウス中ボタン",
+  "zh-TW": "滑鼠中鍵"
+ },
+ "鼠标事件到换算 P95": {
+  "en": "Mouse event to translation P95",
+  "ja": "マウス イベントから変換まで P95",
+  "zh-TW": "滑鼠事件到換算 P95"
+ },
+ "鼠标侧键 1": {
+  "en": "Mouse side button 1",
+  "ja": "マウス サイド ボタン 1",
+  "zh-TW": "滑鼠側鍵 1"
+ },
+ "鼠标侧键 2": {
+  "en": "Mouse side button 2",
+  "ja": "マウス サイド ボタン 2",
+  "zh-TW": "滑鼠側鍵 2"
+ },
+ "鼠标右键": {
+  "en": "Right mouse button",
+  "ja": "マウス右ボタン",
+  "zh-TW": "滑鼠右鍵"
+ },
+ "鼠标回报率": {
+  "en": "Mouse report rate",
+  "ja": "マウスのレポート レート",
+  "zh-TW": "滑鼠回報率"
+ },
+ "鼠标左键": {
+  "en": "Left mouse button",
+  "ja": "マウス左ボタン",
+  "zh-TW": "滑鼠左鍵"
+ },
+ "鼠标已被游戏占用：按 %1 释放": {
+  "en": "Mouse captured: press %1 to release",
+  "ja": "マウスはゲームが使用中：%1 で解放",
+  "zh-TW": "滑鼠已被遊戲佔用：按 %1 釋放"
+ },
+ "鼠标按键按这里": {
+  "en": "Mouse buttons: press here",
+  "ja": "マウス ボタンはここで押す",
+  "zh-TW": "滑鼠按鍵按這裡"
+ },
+ "鼠标速度低于这个比例时使用精准段": {
+  "en": "Below this share of full mouse speed the precision segment is used",
+  "ja": "マウス速度がこの割合より低いとき、精密域を使います",
+  "zh-TW": "滑鼠速度低於這個比例時使用精準段"
+ }
+}
