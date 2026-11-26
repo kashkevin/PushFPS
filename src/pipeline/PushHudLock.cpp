@@ -23,6 +23,7 @@ bool PushHudLock::initialize(ID3D12Device* device, uint32_t width, uint32_t heig
     state_ = makeTexture(device, width_, height_, kStateFormat, true);
     scratch_ = makeTexture(device, width_, height_, format_, true);
     if (!state_ || !scratch_) return false;
+    state_->SetName(L"PushFPS HUD Lock state"); scratch_->SetName(L"PushFPS HUD Lock scratch");
     std::vector<uint8_t> cs;
     if (!update_.loadShader("PushHudLockUpdate.dxil", cs) || !update_.create(device, cs, 2 * kUpdateStride, 2, 1, kConstants)) return false;
     if (!compose_.loadShader("PushHudLockCompose.dxil", cs) ||

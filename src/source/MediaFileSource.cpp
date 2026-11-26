@@ -282,6 +282,16 @@ bool MediaFileSource::open(const SourceOpenDesc& desc)
     info_.videoPixelFormatName = params->format >= 0 && av_get_pix_fmt_name(static_cast<AVPixelFormat>(params->format))
         ? av_get_pix_fmt_name(static_cast<AVPixelFormat>(params->format)) : "unknown";
     info_.color = parseColor(params);
+    // TEST ONLY (stream "s12-hud", D3D12_1047.md "HDR10 end to end"): VEYRA_TEST_REPLAY_HDR10_CONTRACT=1 declares the opened
+    // file HDR10 (PQ, BT.2020 primaries and NCL matrix) when its first frames are, as a capture card declares its HDR10
+    // signal when it opens. On CI's runner the stream parameters of the test clip carried no transfer (opened as
+    // transfer=2 assumed) while every frame was PQ, so the graph was built SDR and refused the frames. Never set by the app.
+    if (GetEnvironmentVariableW(L"VEYRA_TEST_REPLAY_HDR10_CONTRACT", nullptr, 0) > 0 && info_.color.transferAssumed) {
+        info_.color.transfer = pipeline::TransferFunction::PQ; info_.color.transferAssumed = false;
+        info_.color.primaries = pipeline::ColorPrimaries::BT2020; info_.color.primariesAssumed = false;
+        info_.color.matrix = pipeline::YuvMatrix::BT2020NCL; info_.color.matrixAssumed = false;
+        veyra::log::warn("source-file", "TEST-ONLY VEYRA_TEST_REPLAY_HDR10_CONTRACT: the file is declared HDR10 (PQ, BT.2020) at open");
+    }
     if(const auto* side=av_packet_side_data_get(params->coded_side_data,params->nb_coded_side_data,AV_PKT_DATA_DOVI_CONF)){
         if(side->size<offsetof(AVDOVIDecoderConfigurationRecord,dv_bl_signal_compatibility_id)+sizeof(uint8_t)){
             errorMessage_=L"Dolby Vision 配置信息不完整";return false;

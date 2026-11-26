@@ -8,7 +8,7 @@
 #include "veyra/pipeline/NisPass.h"
 #include "veyra/pipeline/PushCleanPass.h"
 #include "veyra/pipeline/PushHudLock.h"
-#include "veyra/pipeline/PushHudLock.h"
+#include "veyra/pipeline/PushHudGuardPass.h"
 #include "veyra/pipeline/BeautyPass.h"
 #include "veyra/beauty/FaceTracker.h"
 #include "veyra/pipeline/NrInstance.h"
@@ -798,6 +798,10 @@ public:
     // could not be created (frame generation runs without it), 3 asked for but this frame generation
     // has no graph frames to lock (off, or XeSS generating inside its presenter).
     int hudLockState() const { if(!desc_.hudLock)return 0; if(hudLock_)return 1; if(!fgEnabled_||presentSinkFg())return 3; return 2; }
+    // Stream "s12-hud" (review 2 SHOULD 4), beside hudLockState (whose values stay as they are): HUD Guard while the lock
+    // runs: 0 the lock does not run, 1 running, 2 its pass could not be created (the lock runs as in Package 16),
+    // 3 restored to Package 16 by VEYRA_TEST_RP_LEGACY_HUD_GUARD (or PACKAGE16).
+    int hudGuardState() const { if(!desc_.hudLock||!hudLock_)return 0; if(hudGuard_)return 1; return hudGuardLegacy_?3:2; }
     // PushFPS experiment VEYRA_EXP_RP_STREAM_DEDUP (pipeline/StreamChangePass.h): how much a
     // hardware-decoded (D3D12VA, 8-bit NV12) picture differs from the one measured before it.
     // Called by the engine before it decides whether to keep the frame; waits for the GPU until
@@ -1237,6 +1241,11 @@ private:
     bool cleanKeptReference_=false;    // this frame's comparison reference was taken before the clean-up
     bool cleanRanLast_=false;          // the stage changed the last picture (final-write dither)
     std::unique_ptr<PushHudLock> hudLock_;  // PushFPS: Live HUD Lock
+    ComPtr<ID3D12Resource> hudReal_[2];   // stream "s12-hud": private copies of the real frames for HUD Lock / Guard (D3D12_1047.md)
+    std::unique_ptr<PushHudGuardPass> hudGuard_;   // stream "s12-hud": HUD Guard, part of Live HUD Lock (PushHudGuardPass.h)
+    const char* hudGuardPreClean_="off-no-pair";  // why the last pair's generator input was or was not cleaned ([hud-guard])
+    bool hudGuardLegacy_=false;                   // not created: the restoring switch (hudGuardState 3)
+    bool hudGuardCleanedPair_=false;              // this pair's VFG input is the cleaned copy (never predicted then)
     // Stream "predict": created only when the "Lower delay" row (desc_.lowDelay) or VEYRA_EXP_RP_FG_SCHEDULE=onepredicted
     // asks for it and VFG can feed it (initPredict).
     std::unique_ptr<PushPredictPass> predict_;
@@ -1282,6 +1291,8 @@ private:
     bool initStreamChange();
     bool initHudLock();
     void composeHudLock(ID3D12GraphicsCommandList* list,unsigned generatedSlot,unsigned heldParity);
+    // HUD Guard's compose of a generated frame at time t between A = real[1 - parity] and B = real[parity] (after the lock's).
+    void composeHudGuard(ID3D12GraphicsCommandList* list,unsigned generatedSlot,unsigned parity,float t,unsigned source=0);
     // Double SR first passes on DLSS SR / FSR (the final pass keeps the members above).
     std::unique_ptr<ngx::DlssSrBackend> firstDlssSrBackend_;
     std::unique_ptr<gfx::FsrSrBackend> firstFsrSrBackend_;

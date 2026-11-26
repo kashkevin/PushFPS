@@ -16,6 +16,9 @@
 //    picture, a generated frame takes the HUD pixels from the held real frame
 //    and keeps its own everywhere else; a HUD that disappears is released on
 //    that frame; a reset starts over.
+//  - PushHudGuardPass (HUD Guard, stream "s12-hud"): state, mask, counters, cleaned copy and compose against the CPU
+//    reference on a crosshair over a picture panned in a circle with a thin bar crossing it, the crosshair changing and
+//    then gone (SDR and HDR10 words).
 //  - StreamChangePass / StreamChangeRunner (experiment VEYRA_EXP_RP_STREAM_DEDUP): the block-mean
 //    and per-sample change of a luma plane against the previous picture equals the CPU reference
 //    (pipeline/StreamChange.h) for 8-bit and 16-bit planes, includes the smaller blocks at the
@@ -46,6 +49,8 @@
 #include "veyra/engine/PushHudSampler.h"
 #include "veyra/engine/PushPipelineProbe.h"
 #include "veyra/pipeline/PushHudLock.h"
+#include "veyra/pipeline/PushHudGuardPass.h"
+#include "../remoteplay/HudGuardScene.h"
 #include "veyra/pipeline/PushCleanPass.h"
 #include "veyra/pipeline/StreamChangePass.h"
 #include "veyra/pipeline/PushGpuPath.h"
@@ -2436,6 +2441,147 @@ void testHudLock(Gpu& gpu) {
     check(!gpu.debugErrors(), "hud lock: no D3D12 debug errors");
 }
 
+// Stream "s12-hud": HUD Guard (pipeline/PushHudGuardPass.h) against its CPU reference (pipeline/PushHudGuard.h) on the
+// synthetic scenes of tests/remoteplay/HudGuardScene.h: a 2-px crosshair at the centre of a picture panned in a circle,
+// a thin bar crossing it, the crosshair changing its value at frame 14 (aiming) and gone from frame 20. Per real frame
+// the state word and the mask equal the reference at every pixel, the evidence counters (aim window included) equal the
+// reference's, the cleaned copy is within one code of the reference with no crosshair pixel left while it is cleaned,
+// and a generated frame composed at t = 1/3, 2/3 and 1/2 is bit-identical to the real frame at every composed pixel
+// where A == B, within one code elsewhere, and untouched at every other pixel. SDR (RGBA8) and HDR10 (RGB10A2, PQ
+// thresholds and BT.2020 luma).
+// anchorCase (26 Nov 2026): a still camera over flat sky with a crosshair, still for 30 frames (the aim anchor protects it:
+// flat surround, state bit 28 clear), then at frame 34 an 8 x 8 square jumps in at 40 px per frame (anything changed around
+// the aim window sets the busy bit and drops the anchor): state words, masks and counters must equal the reference at
+// every frame, so the flat-surround count and the busy test are checked on the GPU as well.
+void testHudGuard(Gpu& gpu, bool tenBit, bool anchorCase = false) {
+    using hud_guard_scene::Scene;
+    constexpr uint32_t W = 160, H = 112;
+    const DXGI_FORMAT F = tenBit ? DXGI_FORMAT_R10G10B10A2_UNORM : DXGI_FORMAT_R8G8B8A8_UNORM;
+    const char* tag = anchorCase ? (tenBit ? "hud guard anchor hdr10" : "hud guard anchor") : tenBit ? "hud guard hdr10" : "hud guard";
+    auto* device = gpu.device.Get();
+    Plane real[2]{{pipeline::makeTexture(device, W, H, F, true), F, W, H, 4}, {pipeline::makeTexture(device, W, H, F, true), F, W, H, 4}};
+    Plane generated{pipeline::makeTexture(device, W, H, F, true), F, W, H, 4};
+    check(real[0].texture && real[1].texture && generated.texture, std::format("{}: textures created", tag));
+    pipeline::PushHudGuardPass guard;
+    check(guard.initialize(device, W, H, F, tenBit ? 2u : 0u, true), std::format("{}: created", tag));
+    pipeline::DescriptorStager stager;
+    check(stager.initialize(device, 64), std::format("{}: staging heap", tag));
+    ID3D12Resource* reals[2] = {real[0].texture.Get(), real[1].texture.Get()};
+    ID3D12Resource* gens[1] = {generated.texture.Get()};
+    guard.createViews(device, stager, reals, gens, 1, nullptr);
+    pipeline::PushHudGuardReference ref(W, H);
+    const Scene scene = anchorCase
+        ? Scene(W, H, {hud_guard_scene::Overlay::Kind::Crosshair, 2, 14, 1.0f, 0.96f, -1, 0.55f}, {false, 0.0f}, {hud_guard_scene::World::Kind::Sky},
+                {true, 40.0f, 8.0f, 8.0f, 0.92f, 52.0f / 112.0f, 34.0f}, tenBit)
+        : Scene(W, H, {hud_guard_scene::Overlay::Kind::Crosshair, 2, 14, 1.0f, 0.96f, 14, 0.55f}, {true, 20}, {}, {true, 14.0f}, tenBit);
+    auto bytes = [](const std::vector<uint32_t>& f) { std::vector<uint8_t> b(f.size() * 4); std::memcpy(b.data(), f.data(), b.size()); return b; };
+    auto toWords = [](const std::vector<uint8_t>& b) { std::vector<uint32_t> f(b.size() / 4); std::memcpy(f.data(), b.data(), f.size() * 4); return f; };
+    auto channelDiff = [&](uint32_t a, uint32_t b) {
+        const auto ca = pipeline::pushHudGuardUnpack(a, tenBit), cb = pipeline::pushHudGuardUnpack(b, tenBit);
+        const float scale = tenBit ? 1023.0f : 255.0f;
+        return int(std::lround(std::max({std::fabs(ca.r - cb.r), std::fabs(ca.g - cb.g), std::fabs(ca.b - cb.b)}) * scale));
+    };
+    pipeline::StateTracker states;
+    std::vector<uint32_t> prev;
+    int stateMismatch = 0, maskMismatch = 0, countMismatch = 0, cleanOff = 0, cleanCross = 0, composeBad = 0, composeChecked = 0, keptChecked = 0, untouchedBad = 0, frames = 0;
+    uint64_t protectSeen = 0, aimSeen = 0;
+    const int kFrames = anchorCase ? 38 : 26, kGone = anchorCase ? 1000 : 20;
+    for (int k = 0; k < kFrames; ++k) {
+        const unsigned parity = unsigned(k) & 1u;
+        const auto b = scene.frame(k, k < kGone);
+        const bool reset = k == 0;
+        const auto counts = ref.update(reset ? b : prev, b, tenBit, reset);
+        gpu.begin();
+        auto up = recordFill(gpu, real[parity], bytes(b), states.get(real[parity].texture.Get()), D3D12_RESOURCE_STATE_COMMON);
+        states.set(real[parity].texture.Get(), D3D12_RESOURCE_STATE_COMMON);
+        bool ok = guard.update(gpu.list.Get(), states, parity, reset) && guard.clean(gpu.list.Get(), states, parity);
+        Plane statePlane{nullptr, DXGI_FORMAT_R32_UINT, W, H, 4};
+        statePlane.texture = guard.state();
+        Plane maskPlane{nullptr, DXGI_FORMAT_R8_UINT, W, H, 1};
+        maskPlane.texture = guard.mask();
+        Plane cleanPlane{nullptr, F, W, H, 4};
+        cleanPlane.texture = guard.cleaned();
+        auto rbState = recordRead(gpu, statePlane, states.get(guard.state()));
+        auto rbMask = recordRead(gpu, maskPlane, states.get(guard.mask()));
+        auto rbClean = recordRead(gpu, cleanPlane, states.get(guard.cleaned()));
+        ok = ok && gpu.submitAndWait();
+        guard.submitted(uint64_t(k) + 1);
+        guard.report(uint64_t(k) + 1, -1.0, "test");
+        check(ok, std::format("{}: frame {} recorded and ran", tag, k));
+        if (!ok) return;
+        const auto st = toWords(mapRead(statePlane, rbState.Get()));
+        const auto mk = mapRead(maskPlane, rbMask.Get());
+        for (uint32_t y = 0; y < H; ++y)
+            for (uint32_t x = 0; x < W; ++x) {
+                const size_t i = size_t(y) * W + x;
+                if (st[i] != pipeline::pushHudGuardPackCell(ref.cell(x, y))) ++stateMismatch;
+                if (mk[i] != ref.mask(x, y)) ++maskMismatch;
+            }
+        const auto got = guard.lastCounts();
+        if (!reset && (got.protect != counts.protect || got.clean != counts.clean || got.centreProtect != counts.centreProtect ||
+                       got.centreClean != counts.centreClean || got.aimProtect != counts.aimProtect || got.aimClean != counts.aimClean ||
+                       got.aimRunMax != counts.aimRunMax))
+            ++countMismatch;
+        protectSeen += counts.protect;
+        aimSeen += counts.aimProtect;
+        const auto cleanedGpu = toWords(mapRead(cleanPlane, rbClean.Get()));
+        const auto cleanedCpu = ref.clean(b, tenBit);
+        for (size_t i = 0; i < cleanedGpu.size(); ++i) {
+            if (channelDiff(cleanedGpu[i], cleanedCpu[i]) > 1) ++cleanOff;
+            const uint32_t x = uint32_t(i % W), y = uint32_t(i / W);
+            bool inside = false;
+            // The white crosshair (before frame 14: its value is then 0.55, which a background estimate can equal) left as
+            // it is in the copy: none may be.
+            if (k < 14 && ref.isCleaned(x, y) && scene.coverage(int(x), int(y), inside) >= 1.0f && scene.value(b[i]) > 0.9f &&
+                scene.value(cleanedGpu[i]) > 0.9f) ++cleanCross;
+        }
+        if (!reset) {
+            // Review 2 SHOULD 1: with the cleaned copy (cleanedPair) background pixels of the clean area keep the generator's
+            // output; the CPU decides from the GPU's own cleaned copy (one-code differences can not flip it), pixels within
+            // 0.002 of the threshold are not judged.
+            for (const auto [t, withCleaned] : {std::pair{1.0f / 3.0f, false}, std::pair{2.0f / 3.0f, false}, std::pair{0.5f, false},
+                                                std::pair{1.0f / 3.0f, true}, std::pair{2.0f / 3.0f, true}}) {
+                const uint32_t fill = pipeline::pushHudGuardPack({0.5f, 0.5f, 0.5f, 1}, tenBit);
+                std::vector<uint32_t> cpu(size_t(W) * H, fill);
+                ref.compose(cpu, prev, b, t, tenBit, withCleaned ? &cleanedGpu : nullptr);
+                gpu.begin();
+                auto upG = recordFill(gpu, generated, bytes(std::vector<uint32_t>(cpu.size(), fill)), states.get(generated.texture.Get()), D3D12_RESOURCE_STATE_COMMON);
+                states.set(generated.texture.Get(), D3D12_RESOURCE_STATE_COMMON);
+                const bool composed = guard.compose(gpu.list.Get(), states, 0, parity, t, 0, withCleaned);
+                auto rbG = recordRead(gpu, generated, states.get(generated.texture.Get()));
+                if (!composed || !gpu.submitAndWait()) { check(false, std::format("{}: compose ran at frame {}", tag, k)); return; }
+                const auto out = toWords(mapRead(generated, rbG.Get()));
+                for (uint32_t y = 0; y < H; ++y)
+                    for (uint32_t x = 0; x < W; ++x) {
+                        const size_t i = size_t(y) * W + x;
+                        if (!ref.protectMask(int(x), int(y))) { untouchedBad += out[i] != fill; continue; }
+                        if (withCleaned && ref.cleanMask(int(x), int(y))) {
+                            const float d = std::fabs(pipeline::pushHudGuardWordLuma(b[i], tenBit) - pipeline::pushHudGuardWordLuma(cleanedGpu[i], tenBit));
+                            if (std::fabs(d - guard.params().backgroundMatch) < 0.002f) continue;
+                            if (d <= guard.params().backgroundMatch) { ++keptChecked; composeBad += out[i] != fill; continue; }
+                        }
+                        ++composeChecked;
+                        if (prev[i] == b[i] ? out[i] != b[i] : channelDiff(out[i], cpu[i]) > 1) ++composeBad;
+                    }
+            }
+        }
+        prev = b;
+        ++frames;
+    }
+    std::printf("INFO %s: %d frames, protected pixel-frames %llu (aim window %llu), compose checked %d, background kept %d\n", tag, frames,
+                static_cast<unsigned long long>(protectSeen), static_cast<unsigned long long>(aimSeen), composeChecked, keptChecked);
+    checkValue(keptChecked > 0 || anchorCase,std::format("{}: background pixels of the clean area kept the generator's output", tag), keptChecked, "> 0");
+    checkValue(stateMismatch == 0, std::format("{}: state word equals the CPU reference at every pixel and frame", tag), stateMismatch, 0);
+    checkValue(maskMismatch == 0, std::format("{}: mask equals the CPU reference at every pixel and frame", tag), maskMismatch, 0);
+    checkValue(countMismatch == 0, std::format("{}: evidence counters (aim window included) equal the reference", tag), countMismatch, 0);
+    checkValue(protectSeen > 800 && aimSeen > 800, std::format("{}: the crosshair is protected", tag), protectSeen, "> 800");
+    checkValue(cleanOff == 0, std::format("{}: cleaned copy within one code of the reference", tag), cleanOff, 0);
+    checkValue(cleanCross == 0, std::format("{}: no crosshair pixel left in the cleaned copy where it is cleaned", tag), cleanCross, 0);
+    checkValue(composeBad == 0, std::format("{}: composed pixels (A == B bit-identical, else within one code)", tag), composeBad, 0);
+    checkValue(untouchedBad == 0, std::format("{}: every other pixel of the generated frame untouched", tag), untouchedBad, 0);
+    check(!gpu.debugErrors(), std::format("{}: no D3D12 debug errors", tag));
+}
+
 // PushFPS restoration (pipeline/PushCleanPass.h): the shader against the CPU reference (engine/PushClean.h)
 // on one picture with bands, block steps, ripples beside an edge, grain, texture and text strokes; SDR
 // (sRGB, coloured) and HDR (BT.2020 PQ, grey: the reference's PQ helpers work per component), up to about
@@ -2969,6 +3115,10 @@ int main(int argc, char** argv) {
         {"hud-sampler", [](Gpu& g) { testHudSampler(g); }},
         {"pipeline-probe", [](Gpu& g) { testPipelineProbe(g); }},
         {"hud-lock", [](Gpu& g) { testHudLock(g); }},
+        {"hud-guard", [](Gpu& g) { testHudGuard(g, false); }},                       // stream "s12-hud"
+        {"hud-guard-hdr10", [](Gpu& g) { testHudGuard(g, true); }},
+        {"hud-guard-anchor", [](Gpu& g) { testHudGuard(g, false, true); }},   // aim anchor: flat surround and busy bit
+        {"hud-guard-anchor-hdr10", [](Gpu& g) { testHudGuard(g, true, true); }},
         {"gpu-path-real-wait", [](Gpu& g) { testGpuPathRealWait(g); }},
         {"predict", [](Gpu& g) { testPredict(g, false); }},
         {"predict-hdr10", [](Gpu& g) { testPredict(g, true); }},

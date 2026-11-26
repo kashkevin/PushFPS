@@ -932,7 +932,10 @@ bool EnhanceGraph::initialize(const EnhanceGraphDesc& desc)
     const bool reuseRequested=desc_.nrReusePreview&&desc_.enableNr&&desc_.nrReuse!=engine::NrReuseMode::Off;
     const uint64_t reuseBytes=reuseRequested?uint64_t(desc_.finalNrAfterSr()?workW_:srcW_)*(desc_.finalNrAfterSr()?workH_:srcH_)*16u+
         uint64_t(nvofW_)*nvofH_*20u:0;
-    const uint64_t estimate=reuseBytes+temporalHdrBytes+dlaaBytes+vfxSrBytes+dualBytes+supersampleBytes+uint64_t(workW_)*workH_*(76u+4u*generatedTextures)+vfgSharedBytes
+    // Stream "s12-hud" (review SHOULD 7): HUD Guard's textures with Live HUD Lock (change, state, mask, the cleaned copy).
+    const uint64_t hudGuardBytes=desc_.hudLock&&desc_.enableFg?PushHudGuardPass::textureBytes(workW_,workH_,true)+
+        2u*uint64_t(workW_)*workH_*(desc_.hdrOutput&&!hdr10Output()?8u:4u):0;   // + the lock's two private real-frame copies
+    const uint64_t estimate=hudGuardBytes+reuseBytes+temporalHdrBytes+dlaaBytes+vfxSrBytes+dualBytes+supersampleBytes+uint64_t(workW_)*workH_*(76u+4u*generatedTextures)+vfgSharedBytes
         +nrTextureBytes+fullLayerBytes
         +uint64_t(srcW_)*srcH_*(32u+(desc_.protectionBeforeSr()?8u:0u))+temporalBytes+tailColorBytes+interProtectionBytes
         +(flowRefine_?uint64_t(nvofW_)*nvofH_*(flowConsistency_?13u:flowClaims_?18u:12u)+uint64_t(workW_)*workH_*4u:0)
@@ -1173,6 +1176,9 @@ bool EnhanceGraph::createResources()
     if(!createBeautyShared())return false;
     videoFrame_[0] = makeTexture(context_.device(), workW_, workH_, outputFormat(), true);
     videoFrame_[1] = makeTexture(context_.device(), workW_, workH_, outputFormat(), true);
+    // Debug names (stream "s12-hud", D3D12_1047.md): the debug layer and DRED name the resource in their messages.
+    if(videoFrame_[0])videoFrame_[0]->SetName(L"Veyra real frame 0");
+    if(videoFrame_[1])videoFrame_[1]->SetName(L"Veyra real frame 1");
     if(desc_.exclusion.enabled){
         for(auto& texture:exclusionVideo_){
             texture=makeTexture(context_.device(),workW_,workH_,outputFormat(),true);
@@ -1197,6 +1203,7 @@ bool EnhanceGraph::createResources()
         const bool used=fgEnabled_&&i<usedCount;
         genFrame_[i]=makeTexture(context_.device(),used?workW_:1,used?workH_:1,outputFormat(),true);
         if(!genFrame_[i])return false;
+        genFrame_[i]->SetName((L"Veyra generated frame "+std::to_wstring(i)).c_str());
     }
     nrZeroMotion_ = makeTexture(context_.device(), workW_, workH_, DXGI_FORMAT_R16G16_FLOAT, false);
     nrZeroDepth_ = makeTexture(context_.device(), workW_, workH_, DXGI_FORMAT_R32_FLOAT, false);
@@ -1808,7 +1815,10 @@ PushPredictRefusal EnhanceGraph::predictStaticRefusal(unsigned multiplier)const{
 }
 
 bool EnhanceGraph::initHudLock() {
+    hudGuard_.reset();
     hudLock_.reset();
+    hudReal_[0].Reset();hudReal_[1].Reset();
+    hudGuardLegacy_=false;
     if(!desc_.hudLock||!fgEnabled_||presentSinkFg())return true;
     auto pass=std::make_unique<PushHudLock>();
     if(!pass->initialize(context_.device(),workW_,workH_,outputFormat(),hdr10Output()?2u:desc_.hdrOutput?1u:0u)){
@@ -1816,6 +1826,33 @@ bool EnhanceGraph::initHudLock() {
         return true;
     }
     hudLock_=std::move(pass);
+    // Stream "s12-hud" (D3D12_1047.md): the lock and the guard read the real frames from private copies made in each real
+    // frame's own base list. They read the PREVIOUS real frame A in the next pair's lists, while the presentation queue may
+    // still be showing A from the graph's own texture: two queues using one non-simultaneous-access texture without a
+    // fence (debug layer id=1047 in every e2e run with Live HUD Lock). The copies are used by the graph's queue only.
+    for(unsigned i=0;i<2;++i){
+        hudReal_[i]=makeTexture(context_.device(),workW_,workH_,outputFormat(),false);
+        if(hudReal_[i])hudReal_[i]->SetName((L"PushFPS HUD Lock real copy "+std::to_wstring(i)).c_str());
+    }
+    if(!hudReal_[0]||!hudReal_[1]){
+        hudReal_[0].Reset();hudReal_[1].Reset();
+        veyra::log::warn("hud-lock","the private copies of the real frames could not be created: the lock reads the real frames themselves (as Package 16)");
+    }
+    // Stream "s12-hud": HUD Guard, part of Live HUD Lock (no row of its own). VEYRA_TEST_RP_LEGACY_HUD_GUARD = 1 (or
+    // PACKAGE16 = 1): the lock alone, as Package 16; _HUD_GUARD_CLEAN = 1: compose only, no pre-clean of VFG's input.
+    const auto env=engine::pushEnvironment();
+    if(engine::pushLegacyRestored(engine::PushLegacyPart::HudGuard17,env)){
+        veyra::log::info("hud-guard","not created: VEYRA_TEST_RP_LEGACY_HUD_GUARD (or PACKAGE16) restores Package 16's Live HUD Lock");
+        hudGuardLegacy_=true;
+        return true;
+    }
+    auto guard=std::make_unique<PushHudGuardPass>();
+    const bool preClean=!engine::pushLegacyRestored(engine::PushLegacyPart::HudGuardClean17,env);
+    if(!guard->initialize(context_.device(),workW_,workH_,outputFormat(),hdr10Output()?2u:desc_.hdrOutput?1u:0u,preClean)){
+        veyra::log::error("hud-guard",std::format("HUD Guard unavailable at {}x{}; Live HUD Lock runs as in Package 16",workW_,workH_));
+        return true;
+    }
+    hudGuard_=std::move(guard);
     return true;
 }
 // PushFPS experiment VEYRA_EXP_RP_STREAM_DEDUP: the change of a hardware-decoded picture against
@@ -1896,6 +1933,10 @@ void EnhanceGraph::streamChangeCounters(uint64_t& measured,uint64_t& timeouts,ui
 void EnhanceGraph::composeHudLock(ID3D12GraphicsCommandList* list,unsigned generatedSlot,unsigned heldParity){
     if(hudLock_&&!hudLock_->compose(list,tracker_,generatedSlot,heldParity))
         veyra::log::warn("hud-lock",std::format("compose skipped slot={} held={}",generatedSlot,heldParity));
+}
+void EnhanceGraph::composeHudGuard(ID3D12GraphicsCommandList* list,unsigned generatedSlot,unsigned parity,float t,unsigned source){
+    if(hudGuard_&&!hudGuard_->compose(list,tracker_,generatedSlot,parity,t,source,hudGuardCleanedPair_))
+        veyra::log::warn("hud-guard",std::format("compose skipped slot={} parity={} source={}",generatedSlot,parity,source));
 }
 
 bool EnhanceGraph::fsrActive() const { return fsrFgBackend_&&fsrFgBackend_->available(); }
@@ -2658,10 +2699,11 @@ bool EnhanceGraph::createViews()
     if(nisPass_)nisPass_->createViews(context_.device(),stager_,srStageInput(),workRgba_.Get());
     if(cleanPass_)cleanPass_->createViews(context_.device(),stager_,srcRgba_.Get());
     if(hudLock_){
-        ID3D12Resource* const real[2]={videoFrame_[0].Get(),videoFrame_[1].Get()};
+        ID3D12Resource* const real[2]={hudReal_[0]?hudReal_[0].Get():videoFrame_[0].Get(),hudReal_[1]?hudReal_[1].Get():videoFrame_[1].Get()};
         std::array<ID3D12Resource*,kGeneratedPoolSlots> generated{};
         for(size_t i=0;i<kGeneratedPoolSlots;++i)generated[i]=genFrame_[i].Get();
         hudLock_->createViews(context_.device(),stager_,real,generated.data(),unsigned(generated.size()));
+        if(hudGuard_)hudGuard_->createViews(context_.device(),stager_,real,generated.data(),unsigned(generated.size()),hudLock_->predictedHeld());
     }
     // Descriptor initialization is DEFAULT ON since the RAW-upload-SRV removal
     // (2026-09-06): texture SRV/UAV views keep the device alive and NVOF
@@ -4407,20 +4449,49 @@ bool EnhanceGraph::process(const AVFrame* frame, double ptsMs, bool reset, Frame
     const bool pushFlowKeepsHistory=pushFlow_&&fgBackendAvailable&&!runFg&&historyValid;
     if(fgBackendAvailable&&!runFg){out.fgSkippedBeforeEval=out.fgCandidates;fgHistorySkipped_=!vfgRecordOnly&&!pushFlowKeepsHistory;}
     gpuTimer_.mark(list,GpuStage::BaseTail,true);
+    // Stream "s12-hud": HUD Guard learns from this real frame (past frames only) BEFORE VFG's input copy, and with VFG
+    // cleans the copy VFG reads (the crosshair replaced by its background estimate): VFG then draws no copies of it; every
+    // generated frame gets the console's own pixels back in composeHudGuard. Not with "Lower delay" (its predicted frame
+    // and the HUD Lock copy are read from VFG's input buffers) and not for other generators (compose only).
+    ID3D12Resource* vfgSource=videoFrame_[parity].Get();
+    hudGuardCleanedPair_=false;
+    if(hudLock_&&hudReal_[parity]){
+        // The private copy of this real frame (see initHudLock): B is final here and not yet handed to the presenter.
+        tracker_.transition(list,videoFrame_[parity].Get(),D3D12_RESOURCE_STATE_COPY_SOURCE);
+        tracker_.transition(list,hudReal_[parity].Get(),D3D12_RESOURCE_STATE_COPY_DEST);
+        list->CopyResource(hudReal_[parity].Get(),videoFrame_[parity].Get());
+        tracker_.transition(list,hudReal_[parity].Get(),D3D12_RESOURCE_STATE_COMMON);
+        tracker_.transition(list,videoFrame_[parity].Get(),D3D12_RESOURCE_STATE_COMMON);
+    }
+    if(hudGuard_){
+        gpuTimer_.mark(list,GpuStage::HudGuard);
+        if(!hudGuard_->update(list,tracker_,parity,!prevValid_))veyra::log::warn("hud-guard","update skipped");
+        const bool vfgPair=(runFg||vfgRecordOnly)&&vfgBackend_&&!pushFlow_&&!amfFrc_;
+        // Review SHOULD 5: off only while a predicted pair is possible (the row is on, or the schedule asked), not for the
+        // whole run once the pass exists (it is kept after the first switch-on).
+        const bool lowerDelayNow=predict_&&(requestedSchedule_==PushPairSchedule::OnePredicted||predictFromSwitch_||
+                                            engine::pushLowDelayShared().wanted.load(std::memory_order_relaxed));
+        hudGuardPreClean_=!hudGuard_->preClean()?"off-switch":!vfgPair?(vfgBackend_?"off-no-pair":"off-not-vfg"):lowerDelayNow?"off-lower-delay":"on";
+        if(vfgPair&&hudGuard_->preClean()&&!lowerDelayNow){
+            if(hudGuard_->clean(list,tracker_,parity)){vfgSource=hudGuard_->cleaned();hudGuardCleanedPair_=true;}
+            else hudGuardPreClean_="off-failed";
+        }
+        gpuTimer_.mark(list,GpuStage::HudGuard,true);
+    }
     if((runFg||vfgRecordOnly)&&vfgBackend_){
         // First timestamp precedes the producer signal/CUDA dependency wait;
         // the matching end follows the consumer copy. The direct-queue span
         // therefore includes actual cross-queue work, not CPU wall time.
         if(runFg){gpuTimer_.mark(list,GpuStage::FgBatch);gpuTimer_.mark(list,GpuStage::Fg1);}
-        tracker_.transition(list,videoFrame_[parity].Get(),D3D12_RESOURCE_STATE_COPY_SOURCE);
+        tracker_.transition(list,vfgSource,D3D12_RESOURCE_STATE_COPY_SOURCE);
         // The same list tests A/B for a shot change on the GPU (VfgBackend);
         // a reset pair has no valid A and is bypassed by the shot-change test instead.
         // Package 16: the copy into VFG's input and the cut test have their own stage; Fg1 still starts before them
         // (unchanged, so gpu_fg1 stays comparable with earlier logs: VfgCapture is a part of it).
         gpuTimer_.mark(list,GpuStage::VfgCapture);
-        if(!vfgBackend_->capture(list,videoFrame_[parity].Get(),parity,!resetFg)){failedBackend_=engine::FailedBackend::Fg;return false;}
+        if(!vfgBackend_->capture(list,vfgSource,parity,!resetFg)){failedBackend_=engine::FailedBackend::Fg;return false;}
         gpuTimer_.mark(list,GpuStage::VfgCapture,true);
-        tracker_.transition(list,videoFrame_[parity].Get(),D3D12_RESOURCE_STATE_COMMON);
+        tracker_.transition(list,vfgSource,D3D12_RESOURCE_STATE_COMMON);
     }
     if(runFg&&amfFrc_){
         // As for VFG, the span from here to the copy back brackets AMF's own queue work.
@@ -4437,6 +4508,11 @@ bool EnhanceGraph::process(const AVFrame* frame, double ptsMs, bool reset, Frame
     if(!runFg)gpuTimer_.resolve(list);
     noteBaseSubmit(sourceFrameId);   // Package 16: CPU submit time of the base list, against its GPU start (submitToGpuStartMs)
     if (!submitGraph(slot)) return false;
+    if(hudGuard_){   // stream "s12-hud": the counters of this update are readable once this list's fence completes
+        hudGuard_->submitted(ring_.lastSignaledValue());
+        const auto& g=gpuTimer_.last().gpu[size_t(GpuStage::HudGuard)];
+        hudGuard_->report(context_.fence()->GetCompletedValue(),g.milliseconds?*g.milliseconds:-1.0,hudGuardPreClean_);
+    }
     // Review 1 MUST 2 / release review REL16 SHOULD 9: the clock calibration (at most once a second) runs when this
     // function returns, after the pair's LAST submitGraph (the I and P lists are not delayed by it).
     struct CalibrateOnReturn { EnhanceGraph* graph; ~CalibrateOnReturn() { graph->calibrateAfterSubmit(); } } calibrateOnReturn{this};
@@ -4514,7 +4590,8 @@ bool EnhanceGraph::process(const AVFrame* frame, double ptsMs, bool reset, Frame
         pe.vfgRefused=engine::pushLowDelayShared().vfgRefused.load(std::memory_order_relaxed)||
                       (ladderResetPending_&&vfgBackend_&&vfgBackend_->aloneMode()==PushVfgAloneMode::Refused);
         lastPredictRefusal_=pushPredictPairRefusal(pe);
-        predictPair=lastPredictRefusal_==PushPredictRefusal::Ok&&runFg&&fgCalls==2&&fgCreated();
+        // Stream "s12-hud": a pair whose VFG input was cleaned is never predicted (P and its HUD Lock copy read that input).
+        predictPair=lastPredictRefusal_==PushPredictRefusal::Ok&&runFg&&fgCalls==2&&fgCreated()&&!hudGuardCleanedPair_;
         if(predictPair)lastPredictWorkMs_=steadyMs();
     }
     if(predictPair){
@@ -4529,6 +4606,7 @@ bool EnhanceGraph::process(const AVFrame* frame, double ptsMs, bool reset, Frame
         // (the lock's state was updated with B in the base list, as for today's I(1/3) and I(2/3)).
         const auto fromI=pushPredictComposeSources(false,parity),fromP=pushPredictComposeSources(true,parity);
         composeHudLock(ilist,plan.interpolatedSlot,fromI.hudHeld);
+        composeHudGuard(ilist,plan.interpolatedSlot,parity,float(plan.vfgFrameIndex)/float(plan.vfgMultiplier));
         if(!composeExclusion(ilist,plan.interpolatedSlot+2,fromI.exclusionRaw,false))return false;
         tracker_.transition(ilist,genFrame_[plan.interpolatedSlot].Get(),D3D12_RESOURCE_STATE_COMMON);
         gpuTimer_.mark(ilist,GpuStage::Fg1,true);gpuTimer_.mark(ilist,GpuStage::Fg2);   // Fg2 = the predicted frame
@@ -4567,6 +4645,7 @@ bool EnhanceGraph::process(const AVFrame* frame, double ptsMs, bool reset, Frame
             if(!vfgBackend_->copyInput(plist,hudLock_->predictedHeld(),parity,false)){failedBackend_=engine::FailedBackend::Fg;return false;}
             tracker_.transition(plist,hudLock_->predictedHeld(),D3D12_RESOURCE_STATE_COMMON);
             composeHudLock(plist,plan.predictedSlot,fromP.hudHeld);
+            composeHudGuard(plist,plan.predictedSlot,parity,1.0f,PushHudGuardPass::kHeld);   // P follows B: from the copy of B
         }
         if(!composeExclusion(plist,plan.predictedSlot+2,fromP.exclusionRaw,false))return false;
         tracker_.transition(plist,genFrame_[plan.predictedSlot].Get(),D3D12_RESOURCE_STATE_COMMON);
@@ -4617,6 +4696,7 @@ bool EnhanceGraph::process(const AVFrame* frame, double ptsMs, bool reset, Frame
             tracker_.transition(flist,videoFrame_[1-parity].Get(),D3D12_RESOURCE_STATE_COMMON);
             tracker_.transition(flist,videoFrame_[parity].Get(),D3D12_RESOURCE_STATE_COMMON);
             composeHudLock(flist,generatedSlot,1-parity);
+            composeHudGuard(flist,generatedSlot,parity,float(sub)/float(outputMultiplier));
             if(!composeExclusion(flist,generatedSlot+2,1-parity,false))return false;
             tracker_.transition(flist,genFrame_[generatedSlot].Get(),D3D12_RESOURCE_STATE_COMMON);
             if(sub==fgCalls){gpuTimer_.mark(flist,GpuStage::Fg1,true);gpuTimer_.mark(flist,GpuStage::FgBatch,true);gpuTimer_.resolve(flist);}
@@ -4641,6 +4721,7 @@ bool EnhanceGraph::process(const AVFrame* frame, double ptsMs, bool reset, Frame
             const bool copied=amfFrc_->copyOutput(flist,genFrame_[generatedSlot].Get());
             if(!copied&&!resetFg){veyra::log::error("amf-frc","AMF returned no interpolated frame for this pair");failedBackend_=engine::FailedBackend::Fg;return false;}
             composeHudLock(flist,generatedSlot,resetFg?parity:1-parity);
+            if(!resetFg)composeHudGuard(flist,generatedSlot,parity,float(sub)/float(outputMultiplier));
             if(!composeExclusion(flist,generatedSlot+2,resetFg?parity:1-parity,false))return false;
             tracker_.transition(flist,genFrame_[generatedSlot].Get(),D3D12_RESOURCE_STATE_COMMON);
             gpuTimer_.mark(flist,GpuStage::Fg1,true);gpuTimer_.mark(flist,GpuStage::FgBatch,true);gpuTimer_.resolve(flist);
@@ -4667,6 +4748,7 @@ bool EnhanceGraph::process(const AVFrame* frame, double ptsMs, bool reset, Frame
             tracker_.transition(flist,genFrame_[generatedSlot].Get(),D3D12_RESOURCE_STATE_COPY_DEST);
             if(!vfgBackend_->copyOutput(flist,genFrame_[generatedSlot].Get(),generatedSlot)){failedBackend_=engine::FailedBackend::Fg;return false;}
             composeHudLock(flist,generatedSlot,resetFg?parity:1-parity);
+            if(!resetFg)composeHudGuard(flist,generatedSlot,parity,float(sub)/float(outputMultiplier));
             if(!composeExclusion(flist,generatedSlot+2,resetFg?parity:1-parity,false))return false;
             tracker_.transition(flist,genFrame_[generatedSlot].Get(),D3D12_RESOURCE_STATE_COMMON);
             const auto timingStage=GpuStage(unsigned(GpuStage::Fg1)+sub-1);gpuTimer_.mark(flist,timingStage,true);
@@ -4750,6 +4832,7 @@ bool EnhanceGraph::process(const AVFrame* frame, double ptsMs, bool reset, Frame
         flist->CopyBufferRegion(fgDisableReadback_[generatedSlot].Get(),0,fgDisable_[parity].Get(),0,4);
         }
         composeHudLock(flist,generatedSlot,resetFg?parity:1-parity);
+        if(!resetFg)composeHudGuard(flist,generatedSlot,parity,float(sub)/float(fgCalls+1));
         if(!composeExclusion(flist,generatedSlot+2,resetFg?parity:1-parity,false))return false;
         tracker_.transition(flist,videoFrame_[parity].Get(),D3D12_RESOURCE_STATE_COMMON);
         tracker_.transition(flist,genFrame_[generatedSlot].Get(),D3D12_RESOURCE_STATE_COMMON);
@@ -5360,7 +5443,7 @@ void EnhanceGraph::shutdown()
     neuralTex_.Reset();
     proxyTex_.Reset();
     exclusionPass_={};exclusionScratch_.Reset();
-    hudLock_.reset();
+    hudGuard_.reset();hudLock_.reset();hudReal_[0].Reset();hudReal_[1].Reset();
     cleanPass_.reset();
     for(auto& r:exclusionVideo_)r.Reset();
     for(auto& r:exclusionUi_)r.Reset();

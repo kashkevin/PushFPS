@@ -16832,6 +16832,23 @@
    "ru": "Generated frames on time"
   },
   {
+   "zh": "准星残影保护没能启动，实时 HUD 锁定照常运行（原因见日志）",
+   "src": "qml/PushQuickSetup.qml",
+   "zh-TW": "準星殘影保護沒能啟動，即時 HUD 鎖定照常執行（原因見日誌）",
+   "en": "The crosshair ghost protection could not start; Live HUD Lock runs as before (see the log)",
+   "ja": "照準の残像対策を開始できませんでした。ライブ HUD ロックはこれまでどおり動作します（理由はログを参照）",
+   "nl": "The crosshair ghost protection could not start; Live HUD Lock runs as before (see the log)",
+   "de": "The crosshair ghost protection could not start; Live HUD Lock runs as before (see the log)",
+   "es": "The crosshair ghost protection could not start; Live HUD Lock runs as before (see the log)",
+   "fr": "The crosshair ghost protection could not start; Live HUD Lock runs as before (see the log)",
+   "it": "The crosshair ghost protection could not start; Live HUD Lock runs as before (see the log)",
+   "pt-BR": "The crosshair ghost protection could not start; Live HUD Lock runs as before (see the log)",
+   "tr": "The crosshair ghost protection could not start; Live HUD Lock runs as before (see the log)",
+   "ar": "The crosshair ghost protection could not start; Live HUD Lock runs as before (see the log)",
+   "pl": "The crosshair ghost protection could not start; Live HUD Lock runs as before (see the log)",
+   "ru": "The crosshair ghost protection could not start; Live HUD Lock runs as before (see the log)"
+  },
+  {
    "zh": "减少 NR 明暗改动；1 为保留原图亮度",
    "src": "qml/NrLayerEditor.qml",
    "zh-TW": "減少 NR 明暗改動；1 為保留原圖亮度",
@@ -46362,23 +46379,6 @@
    "ru": "Running: %1 · %2 ms per frame (95%: %3 ms)"
   },
   {
-   "zh": "正在运行：文字和准星在补出来的帧里保持清晰",
-   "src": "qml/PushQuickSetup.qml",
-   "zh-TW": "正在運行：文字和準星在補出來的幀裡保持清晰",
-   "en": "Running: text and crosshairs stay sharp in generated frames",
-   "ja": "動作中：生成フレームでも文字や照準がくっきり保たれます",
-   "nl": "Actief: tekst en vizieren blijven scherp in gegenereerde frames",
-   "de": "Aktiv: Text und Fadenkreuze bleiben in generierten Bildern scharf",
-   "es": "Activo: el texto y las miras siguen nítidos en los fotogramas generados",
-   "fr": "Actif : le texte et les viseurs restent nets dans les images générées",
-   "it": "Attivo: testo e mirini restano nitidi nei fotogrammi generati",
-   "pt-BR": "Ativo: texto e miras ficam nítidos nos quadros gerados",
-   "tr": "Çalışıyor: yazı ve nişangahlar üretilen karelerde net kalır",
-   "ar": "قيد التشغيل: يبقى النص وعلامات التصويب واضحة في الإطارات المولّدة",
-   "pl": "Działa: tekst i celowniki zostają ostre w generowanych klatkach",
-   "ru": "Работает: текст и прицелы остаются чёткими в сгенерированных кадрах"
-  },
-  {
    "zh": "正在运行：每秒显示 %1 个预测帧（%2% 的帧对）",
    "src": "qml/PushLowDelayRow.qml",
    "zh-TW": "正在執行：每秒顯示 %1 個預測幀（%2% 的幀對）",
@@ -46411,6 +46411,23 @@
    "ar": "Running: no pair used a prediction in this second",
    "pl": "Running: no pair used a prediction in this second",
    "ru": "Running: no pair used a prediction in this second"
+  },
+  {
+   "zh": "正在运行：静止的 HUD 像素在补出来的帧里用主机原来的像素",
+   "src": "qml/PushQuickSetup.qml",
+   "zh-TW": "正在執行：靜止的 HUD 像素在補出來的幀裡用主機原來的像素",
+   "en": "Running: still HUD pixels use the console's own pixels in generated frames",
+   "ja": "実行中：静止した HUD ピクセルは生成フレームでゲーム機本来のピクセルを使います",
+   "nl": "Running: still HUD pixels use the console's own pixels in generated frames",
+   "de": "Running: still HUD pixels use the console's own pixels in generated frames",
+   "es": "Running: still HUD pixels use the console's own pixels in generated frames",
+   "fr": "Running: still HUD pixels use the console's own pixels in generated frames",
+   "it": "Running: still HUD pixels use the console's own pixels in generated frames",
+   "pt-BR": "Running: still HUD pixels use the console's own pixels in generated frames",
+   "tr": "Running: still HUD pixels use the console's own pixels in generated frames",
+   "ar": "Running: still HUD pixels use the console's own pixels in generated frames",
+   "pl": "Running: still HUD pixels use the console's own pixels in generated frames",
+   "ru": "Running: still HUD pixels use the console's own pixels in generated frames"
   },
   {
    "zh": "正在进行：%1",
@@ -47128,7 +47145,7 @@
   },
   {
    "zh": "每一帧自动找出 HUD，文字和准星在补出来的帧里保持清晰",
-   "src": "qml/PushQuickSetup.qml",
+   "src": "portable/app/qml/HomePage.qml",
    "zh-TW": "每一幀自動找出 HUD，文字和準星在補出來的幀裡保持清晰",
    "en": "Finds the HUD on every frame, so text and crosshairs stay sharp in generated frames",
    "ja": "毎フレーム HUD を自動で見つけ、生成フレームでも文字や照準をくっきり保ちます",
@@ -59180,21 +59197,21 @@
    "ru": "Не удалось извлечь пакет виртуальных динамиков"
   },
   {
-   "zh": "补出来的帧会把画面上静止的文字、准星和血条跟着背景一起拉动，看起来发糊或抖动。开启后 PushFPS 每一帧都会找出静止的 HUD 像素，补帧时直接用主机原来的像素，不需要画框",
+   "zh": "补出来的帧会把画面上静止的文字、准星和血条跟着背景一起拉动，看起来发糊或抖动。开启后 PushFPS 每一帧都会找出静止的 HUD 像素，补帧时直接用主机原来的像素，不需要画框。画面周围在动约 0.2 秒后才开始；半透明的准星和文字不在其内。画面纹理很少（天空、黑暗、雾）时可能不起作用；会让每一帧晚约 0.3–0.7 毫秒显示（估计）；开启“更低延迟”时只放回准星，不去掉残影",
    "src": "qml/PushQuickSetup.qml",
-   "zh-TW": "補出來的幀會把畫面上靜止的文字、準星和血條跟著背景一起拉動，看起來發糊或抖動。開啟後 PushFPS 每一幀都會找出靜止的 HUD 像素，補幀時直接用主機原來的像素，不需要畫框",
-   "en": "Generated frames drag still text, crosshairs and health bars along with the moving background, so they smear or wobble. When on, PushFPS finds the still HUD pixels on every frame and uses the console's own pixels there when generating frames, with no boxes to draw",
-   "ja": "生成フレームは静止した文字、照準、体力バーを動く背景と一緒に引きずるため、にじんだり揺れたりします。オンにすると PushFPS が毎フレーム静止した HUD ピクセルを見つけ、フレーム生成時にゲーム機本来のピクセルを使います。枠を描く必要はありません",
-   "nl": "Gegenereerde frames slepen stilstaande tekst, vizieren en levensbalken mee met de bewegende achtergrond, waardoor ze vlekken of wiebelen. Als dit aan staat, vindt PushFPS op elk frame de stilstaande HUD-pixels en gebruikt daar bij het genereren de pixels van de console zelf, zonder kaders te tekenen",
-   "de": "Generierte Bilder ziehen stillstehenden Text, Fadenkreuze und Lebensbalken mit dem bewegten Hintergrund mit, sodass sie verschmieren oder wackeln. Eingeschaltet findet PushFPS auf jedem Bild die stillstehenden HUD-Pixel und nutzt dort beim Generieren die eigenen Pixel der Konsole, ganz ohne Rahmen zu zeichnen",
-   "es": "Los fotogramas generados arrastran el texto, las miras y las barras de vida quietas junto con el fondo en movimiento, así que se emborronan o tiemblan. Activado, PushFPS encuentra en cada fotograma los píxeles quietos del HUD y usa ahí los píxeles de la propia consola al generar, sin dibujar recuadros",
-   "fr": "Les images générées entraînent le texte, les viseurs et les barres de vie immobiles avec le fond qui bouge, ce qui les brouille ou les fait trembler. Activé, PushFPS trouve à chaque image les pixels immobiles du HUD et y utilise les pixels de la console lors de la génération, sans cadre à dessiner",
-   "it": "I fotogrammi generati trascinano testo, mirini e barre della salute fermi insieme allo sfondo in movimento, quindi si sbavano o tremano. Attivo, PushFPS trova a ogni fotogramma i pixel fermi dell'HUD e usa lì i pixel originali della console durante la generazione, senza disegnare riquadri",
-   "pt-BR": "Os quadros gerados arrastam texto, miras e barras de vida parados junto com o fundo em movimento, que borram ou tremem. Ligado, o PushFPS encontra em cada quadro os pixels parados do HUD e usa ali os pixels do próprio console ao gerar quadros, sem desenhar caixas",
-   "tr": "Üretilen kareler sabit yazıları, nişangahları ve can barlarını hareket eden arka planla birlikte sürükler, bu yüzden bulanıklaşır veya titrerler. Açıkken PushFPS her karede sabit HUD piksellerini bulur ve kare üretirken orada konsolun kendi piksellerini kullanır; kutu çizmek gerekmez",
-   "ar": "تسحب الإطارات المولّدة النصوص وعلامات التصويب وأشرطة الصحة الثابتة مع الخلفية المتحركة، فتتلطخ أو تهتز. عند التشغيل يجد PushFPS في كل إطار بكسلات HUD الثابتة ويستخدم هناك بكسلات الكونسول الأصلية عند توليد الإطارات، دون رسم مربعات",
-   "pl": "Generowane klatki ciągną nieruchomy tekst, celowniki i paski zdrowia razem z poruszającym się tłem, przez co się rozmazują lub drgają. Po włączeniu PushFPS na każdej klatce znajduje nieruchome piksele HUD i przy generowaniu używa tam własnych pikseli konsoli, bez rysowania ramek",
-   "ru": "Сгенерированные кадры тянут неподвижный текст, прицелы и полоски здоровья вместе с движущимся фоном, и они размазываются или дрожат. Когда включено, PushFPS в каждом кадре находит неподвижные пиксели HUD и при генерации использует там собственные пиксели консоли, без рисования рамок"
+   "zh-TW": "補出來的幀會把畫面上靜止的文字、準星和血條跟著背景一起拉動，看起來發糊或抖動。開啟後 PushFPS 每一幀都會找出靜止的 HUD 像素，補幀時直接用主機原來的像素，不需要畫框。畫面周圍在動約 0.2 秒後才開始；半透明的準星和文字不在其內。畫面紋理很少（天空、黑暗、霧）時可能不起作用；會讓每一幀晚約 0.3–0.7 毫秒顯示（估計）；開啟「更低延遲」時只放回準星，不去掉殘影",
+   "en": "Generated frames drag still text, crosshairs and health bars along with the moving background, so they smear or wobble. When on, PushFPS finds the still HUD pixels on every frame and uses the console's own pixels there when generating frames, with no boxes to draw. It starts about 0.2 s after the picture around them moves; translucent crosshairs and text are not covered. May not act over plain backgrounds (sky, darkness, fog); every frame is shown about 0.3-0.7 ms later (estimate); with Lower delay on, the crosshair is put back but its copies are not removed",
+   "ja": "生成フレームは静止した文字、照準、体力バーを動く背景と一緒に引きずるため、にじんだり揺れたりします。オンにすると PushFPS が毎フレーム静止した HUD ピクセルを見つけ、フレーム生成時にゲーム機本来のピクセルを使います。枠を描く必要はありません。周りの画面が動き始めてから約 0.2 秒後に始まります。半透明の照準や文字は対象外です。模様の少ない背景（空、暗がり、霧）では効かないことがあります。各フレームの表示が約 0.3〜0.7 ミリ秒遅れます（推定）。「低遅延」がオンのときは照準を元に戻すだけで、残像は消しません",
+   "nl": "Generated frames drag still text, crosshairs and health bars along with the moving background, so they smear or wobble. When on, PushFPS finds the still HUD pixels on every frame and uses the console's own pixels there when generating frames, with no boxes to draw. It starts about 0.2 s after the picture around them moves; translucent crosshairs and text are not covered. May not act over plain backgrounds (sky, darkness, fog); every frame is shown about 0.3-0.7 ms later (estimate); with Lower delay on, the crosshair is put back but its copies are not removed",
+   "de": "Generated frames drag still text, crosshairs and health bars along with the moving background, so they smear or wobble. When on, PushFPS finds the still HUD pixels on every frame and uses the console's own pixels there when generating frames, with no boxes to draw. It starts about 0.2 s after the picture around them moves; translucent crosshairs and text are not covered. May not act over plain backgrounds (sky, darkness, fog); every frame is shown about 0.3-0.7 ms later (estimate); with Lower delay on, the crosshair is put back but its copies are not removed",
+   "es": "Generated frames drag still text, crosshairs and health bars along with the moving background, so they smear or wobble. When on, PushFPS finds the still HUD pixels on every frame and uses the console's own pixels there when generating frames, with no boxes to draw. It starts about 0.2 s after the picture around them moves; translucent crosshairs and text are not covered. May not act over plain backgrounds (sky, darkness, fog); every frame is shown about 0.3-0.7 ms later (estimate); with Lower delay on, the crosshair is put back but its copies are not removed",
+   "fr": "Generated frames drag still text, crosshairs and health bars along with the moving background, so they smear or wobble. When on, PushFPS finds the still HUD pixels on every frame and uses the console's own pixels there when generating frames, with no boxes to draw. It starts about 0.2 s after the picture around them moves; translucent crosshairs and text are not covered. May not act over plain backgrounds (sky, darkness, fog); every frame is shown about 0.3-0.7 ms later (estimate); with Lower delay on, the crosshair is put back but its copies are not removed",
+   "it": "Generated frames drag still text, crosshairs and health bars along with the moving background, so they smear or wobble. When on, PushFPS finds the still HUD pixels on every frame and uses the console's own pixels there when generating frames, with no boxes to draw. It starts about 0.2 s after the picture around them moves; translucent crosshairs and text are not covered. May not act over plain backgrounds (sky, darkness, fog); every frame is shown about 0.3-0.7 ms later (estimate); with Lower delay on, the crosshair is put back but its copies are not removed",
+   "pt-BR": "Generated frames drag still text, crosshairs and health bars along with the moving background, so they smear or wobble. When on, PushFPS finds the still HUD pixels on every frame and uses the console's own pixels there when generating frames, with no boxes to draw. It starts about 0.2 s after the picture around them moves; translucent crosshairs and text are not covered. May not act over plain backgrounds (sky, darkness, fog); every frame is shown about 0.3-0.7 ms later (estimate); with Lower delay on, the crosshair is put back but its copies are not removed",
+   "tr": "Generated frames drag still text, crosshairs and health bars along with the moving background, so they smear or wobble. When on, PushFPS finds the still HUD pixels on every frame and uses the console's own pixels there when generating frames, with no boxes to draw. It starts about 0.2 s after the picture around them moves; translucent crosshairs and text are not covered. May not act over plain backgrounds (sky, darkness, fog); every frame is shown about 0.3-0.7 ms later (estimate); with Lower delay on, the crosshair is put back but its copies are not removed",
+   "ar": "Generated frames drag still text, crosshairs and health bars along with the moving background, so they smear or wobble. When on, PushFPS finds the still HUD pixels on every frame and uses the console's own pixels there when generating frames, with no boxes to draw. It starts about 0.2 s after the picture around them moves; translucent crosshairs and text are not covered. May not act over plain backgrounds (sky, darkness, fog); every frame is shown about 0.3-0.7 ms later (estimate); with Lower delay on, the crosshair is put back but its copies are not removed",
+   "pl": "Generated frames drag still text, crosshairs and health bars along with the moving background, so they smear or wobble. When on, PushFPS finds the still HUD pixels on every frame and uses the console's own pixels there when generating frames, with no boxes to draw. It starts about 0.2 s after the picture around them moves; translucent crosshairs and text are not covered. May not act over plain backgrounds (sky, darkness, fog); every frame is shown about 0.3-0.7 ms later (estimate); with Lower delay on, the crosshair is put back but its copies are not removed",
+   "ru": "Generated frames drag still text, crosshairs and health bars along with the moving background, so they smear or wobble. When on, PushFPS finds the still HUD pixels on every frame and uses the console's own pixels there when generating frames, with no boxes to draw. It starts about 0.2 s after the picture around them moves; translucent crosshairs and text are not covered. May not act over plain backgrounds (sky, darkness, fog); every frame is shown about 0.3-0.7 ms later (estimate); with Lower delay on, the crosshair is put back but its copies are not removed"
   },
   {
    "zh": "补出来的帧夹在两张真实画面之间，画面会晚一张真实画面显示",
@@ -59501,6 +59518,23 @@
    "ar": "طريقة توليد الإطارات",
    "pl": "Metoda generowania klatek",
    "ru": "Способ генерации кадров"
+  },
+  {
+   "zh": "补帧时把静止的准星和文字留在原位（需要画面先转动起来）",
+   "src": "qml/PushQuickSetup.qml",
+   "zh-TW": "補幀時把靜止的準星和文字留在原位（需要畫面先轉動起來）",
+   "en": "Keeps a still crosshair and text in place in generated frames (after the picture has started to move)",
+   "ja": "生成フレームで静止した照準や文字を元の位置に保ちます（画面が動き始めてから）",
+   "nl": "Keeps a still crosshair and text in place in generated frames (after the picture has started to move)",
+   "de": "Keeps a still crosshair and text in place in generated frames (after the picture has started to move)",
+   "es": "Keeps a still crosshair and text in place in generated frames (after the picture has started to move)",
+   "fr": "Keeps a still crosshair and text in place in generated frames (after the picture has started to move)",
+   "it": "Keeps a still crosshair and text in place in generated frames (after the picture has started to move)",
+   "pt-BR": "Keeps a still crosshair and text in place in generated frames (after the picture has started to move)",
+   "tr": "Keeps a still crosshair and text in place in generated frames (after the picture has started to move)",
+   "ar": "Keeps a still crosshair and text in place in generated frames (after the picture has started to move)",
+   "pl": "Keeps a still crosshair and text in place in generated frames (after the picture has started to move)",
+   "ru": "Keeps a still crosshair and text in place in generated frames (after the picture has started to move)"
   },
   {
    "zh": "补帧暂停",

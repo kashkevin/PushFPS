@@ -15,7 +15,7 @@
 static_assert(unsigned(veyra::diagnostics::GpuStage::Color)==0&&unsigned(veyra::diagnostics::GpuStage::Fg1)==5&&unsigned(veyra::diagnostics::GpuStage::Fg2)==6&&
               unsigned(veyra::diagnostics::GpuStage::FgBatch)==12&&unsigned(veyra::diagnostics::GpuStage::Blit)==13&&
               unsigned(veyra::diagnostics::GpuStage::BaseTail)==35&&unsigned(veyra::diagnostics::GpuStage::VfgCapture)==36&&
-              unsigned(veyra::diagnostics::GpuStage::RealCompose)==37,"PushFgHealth.h kPushHealthStages");
+              unsigned(veyra::diagnostics::GpuStage::RealCompose)==37&&unsigned(veyra::diagnostics::GpuStage::HudGuard)==38,"PushFgHealth.h kPushHealthStages");
 namespace veyra::engine {
 bool VideoPresenter::beginSourceInput(uint64_t stallUs){
     if(!reflexInputFrame_&&reflex_.active())reflexInputFrame_=reflex_.begin(stallUs);
@@ -91,6 +91,7 @@ bool VideoPresenter::open(gfx::D3D12DeviceContext& ctx,HWND window,pipeline::Enh
                 support.PriorityForTypeIsSupported,unsigned(queried),desc.Priority));
         }
         HRESULT hr=ctx.device()->CreateCommandQueue(&desc,IID_PPV_ARGS(&presentationQueue_));
+        if(SUCCEEDED(hr))presentationQueue_->SetName(L"Veyra presentation queue");   // named in debug-layer / DRED messages
         if(SUCCEEDED(hr))veyra::log::info("present-priority",std::format("actualType={} actualPriority={}",
             unsigned(presentationQueue_->GetDesc().Type),presentationQueue_->GetDesc().Priority));
         if(SUCCEEDED(hr))hr=ctx.device()->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&presentationFence_));
