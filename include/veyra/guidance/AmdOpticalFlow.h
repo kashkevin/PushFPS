@@ -17,6 +17,7 @@ public:
     bool warmedUp() const;
     uint32_t width() const;
     uint32_t height() const;
+    int lastResult() const;   // stream "ownfg": the last ffxOpticalflowContextDispatch return code (0 = FFX_OK; -1 = none yet)
 private:
     struct Impl;
     std::unique_ptr<Impl> p_;

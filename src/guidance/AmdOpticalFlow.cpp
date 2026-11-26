@@ -10,6 +10,7 @@ namespace veyra::guidance {
 struct AmdOpticalFlow::Impl {
     uint32_t w=0,h=0;
     uint32_t framesSinceReset=0;
+    int lastResult=-1;   // stream "ownfg"
     ID3D12Device* device=nullptr;
     pipeline::ComPtr<ID3D12Resource> flow,scd;
 #ifdef VEYRA_HAS_AMD_OF
@@ -54,6 +55,7 @@ bool AmdOpticalFlow::dispatch(ID3D12GraphicsCommandList* list,ID3D12Resource* co
     d.opticalFlowSCD=ffxGetResourceDX12(p.scd.Get(),ffxGetResourceDescriptionDX12(p.scd.Get()),L"Veyra OF cut",FFX_RESOURCE_STATE_COMMON);
     d.reset=reset;d.backbufferTransferFunction=0;d.minMaxLuminance={0,1};
     const auto result=ffxOpticalflowContextDispatch(&p.context,&d);
+    p.lastResult=int(result);   // stream "ownfg": for the self-check's diagnostics
     if(result==FFX_OK)p.framesSinceReset=reset?1:std::min(p.framesSinceReset+1,7u);
     if(result!=FFX_OK||log::verboseFrameLogs()||reset)log::info("amd-of",std::format("Dispatch reset={} result={}",reset,unsigned(result)));
     return result==FFX_OK;
@@ -66,4 +68,5 @@ ID3D12Resource* AmdOpticalFlow::sceneChanges()const{return p_->scd.Get();}
 bool AmdOpticalFlow::warmedUp()const{return p_->framesSinceReset>=7;}
 uint32_t AmdOpticalFlow::width()const{return p_->flow?uint32_t(p_->flow->GetDesc().Width):0;}
 uint32_t AmdOpticalFlow::height()const{return p_->flow?p_->flow->GetDesc().Height:0;}
+int AmdOpticalFlow::lastResult()const{return p_->lastResult;}
 }

@@ -129,6 +129,10 @@ private:
     double checkCostMs_ = -1.0;   // VEYRA_TEST_PREDICT_FLOW=zero (tests only): motion_ zero and trust_ 1, written once
     bool initializeZeroFlow(ID3D12Device* device);
     bool warmOf_[kSlots] = {};
+    // Stream "ownfg" (FidelityFX self-check diagnostics): while the check runs, recordFlowFrame stamps the end of the
+    // downsample and of FidelityFX's dispatch at checkStampAt_ and checkStampAt_ + 1 of this heap (null in play).
+    ID3D12QueryHeap* checkStamps_ = nullptr;
+    UINT checkStampAt_ = 0;
     // FidelityFX's start-up self-check, end to end through recordFlowFrame / recordMotion / recordPredict on synthetic
     // work-size frames (pushFlowCheckWindows), on a queue of its own; fidelity_ must be set. Containment as for GPU DIS.
     struct FidelityCheck {
@@ -136,6 +140,7 @@ private:
         bool inFlight = false;   // REL16 MUST 3: stopped by the budget with a frame still on the GPU (objects kept)
         double flowGpuMs = -1.0, pairGpuMs = -1.0, wallMs = 0.0;
         std::string text;
+        std::string stageText;   // stream "ownfg": per frame downsample / FidelityFX / rest, GPU ms
     };
     FidelityCheck runFidelityCheck(ID3D12Device* device);
     bool recordDensify(guidance::AmdOpticalFlow& of, ID3D12GraphicsCommandList* list, UINT block, ID3D12Resource* previous,

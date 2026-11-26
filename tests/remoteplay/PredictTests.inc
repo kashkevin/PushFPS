@@ -474,6 +474,85 @@ TEST(predict_flow_check_windows) {
     CHECK(std::fabs(pushFlowCheckGrey(0, 0) - 128.0 - 25.0 * 0.0) < 1e-9);
 }
 
+// Stream "ownfg" (his Package 16 log: the FidelityFX check found nothing): the check's broadband texture keeps energy at
+// the coarse pyramid levels a block search starts from; the old periodic one does not. Pure parts only (WARP cannot
+// run FidelityFX's motion: 4-lane waves).
+TEST(predict_flow_check_broadband_texture) {
+    double lo = 255, hi = 0;
+    for (int y = -300; y < 2400; y += 7)
+        for (int x = -300; x < 4200; x += 11) { const double g = pushFlowCheckGreyBroadband(x, y); lo = std::min(lo, g); hi = std::max(hi, g); }
+    CHECK(lo >= 4.0 - 1e-9 && hi <= 252.0 + 1e-9 && hi - lo > 100.0);   // inside the code range without clamping, and contrasty
+    // continuous (the truth at a fractional shift is exact) and equal to its separable form (what the fill's tables use)
+    CHECK(std::fabs(pushFlowCheckGreyBroadband(100.5, 77.25) - pushFlowCheckGreyBroadband(100.5 + 1e-7, 77.25)) < 1e-3);
+    double sep = 128.0;
+    for (unsigned k = 0; k < kPushFlowCheckOctaves.size(); ++k)
+        sep += pushFlowCheckSeparable(100.5, k, false) + pushFlowCheckSeparable(77.25, k, true) + pushFlowCheckFactor(100.5, k, false) * pushFlowCheckFactor(77.25, k, true);
+    CHECK(std::fabs(sep - pushFlowCheckGreyBroadband(100.5, 77.25)) < 1e-9);
+    // Energy at FidelityFX's level 4 (64 x 64 work-pixel cells at a 4x flow ratio x 16): the spread of cell means.
+    const auto spread = [](auto grey) {
+        double s = 0, q = 0; int n = 0;
+        for (int cy = 0; cy < 16; ++cy)
+            for (int cx = 0; cx < 30; ++cx) {
+                double m = 0;
+                for (int y = 0; y < 64; y += 4)
+                    for (int x = 0; x < 64; x += 4) m += grey(cx * 64.0 + x, cy * 64.0 + y);
+                m /= 256.0; s += m; q += m * m; ++n;
+            }
+        return std::sqrt(std::max(0.0, q / n - (s / n) * (s / n)));
+    };
+    const double oldSpread = spread([](double x, double y) { return pushFlowCheckGrey(x, y); });            // 4.1 (sampling residue)
+    const double newSpread = spread([](double x, double y) { return pushFlowCheckGreyBroadband(x, y); });   // 10.6
+    CHECK(oldSpread < 5.0 && newSpread > 8.0 && newSpread > 2.0 * oldSpread);
+}
+
+TEST(predict_flow_check_raw_window_stats) {
+    const auto w = pushFlowCheckWindows(3840, 2160, 960, 540);
+    constexpr std::uint32_t RW = 120, RH = 68;
+    std::vector<std::int16_t> raw(std::size_t(RW) * RH * 2, 0);
+    // window 2 (truth (-4, 4)) right everywhere; window 1 (truth (-1, -1)) a wrong constant
+    for (std::uint32_t by = 0; by < RH; ++by)
+        for (std::uint32_t bx = 0; bx < RW; ++bx) {
+            const double x = (bx + 0.5) * 32.0, y = (by + 0.5) * 32.0;
+            auto* v = &raw[(std::size_t(by) * RW + bx) * 2];
+            if (x >= w[2].x0 && x < w[2].x1 && y >= w[2].y0 && y < w[2].y1) { v[0] = std::int16_t(-w[2].flowVx); v[1] = std::int16_t(-w[2].flowVy); }
+            if (x >= w[1].x0 && x < w[1].x1 && y >= w[1].y0 && y < w[1].y1) { v[0] = -23; v[1] = 36; }
+        }
+    const auto s2 = pushFlowRawWindowStats(raw.data(), RW, RW, RH, w[2], 4.0, 4.0);
+    CHECK(s2.blocks > 500 && s2.right == s2.blocks && s2.nonzero == s2.blocks && s2.minX == -4 && s2.maxY == 4);
+    const auto s1 = pushFlowRawWindowStats(raw.data(), RW, RW, RH, w[1], 4.0, 4.0);
+    CHECK(s1.blocks > 500 && s1.right == 0 && std::fabs(s1.meanX + 23.0) < 1e-9 && s1.maxY == 36);
+    const auto s0 = pushFlowRawWindowStats(raw.data(), RW, RW, RH, w[0], 4.0, 4.0);   // static, all zero: right, none nonzero
+    CHECK(s0.right == s0.blocks && s0.nonzero == 0);
+    CHECK(pushFlowRawWindowStats(nullptr, RW, RW, RH, w[0], 4.0, 4.0).blocks == 0);
+}
+
+TEST(predict_flow_check_field_window_stats) {
+    const auto w = pushFlowCheckWindows(3840, 2160, 960, 540);
+    constexpr std::uint32_t FW = 960, FH = 540;
+    std::vector<std::uint16_t> motion(std::size_t(FW) * FH * 2, 0);
+    std::vector<std::uint8_t> trust(std::size_t(FW) * FH, 0);
+    // window 1 (truth (-1, -1)): v x trust with trust 1 -> (-1, -1) as halves 0xBC00; window 3: trusted but the wrong sign
+    for (std::uint32_t y = 0; y < FH; ++y)
+        for (std::uint32_t x = 0; x < FW; ++x) {
+            const int wx = int(x) * 4, wy = int(y) * 4;
+            const auto in = [&](const PushFlowWindow& o) { return wx >= o.x0 && wx < o.x1 && wy >= o.y0 && wy < o.y1; };
+            if (in(w[1])) { motion[(std::size_t(y) * FW + x) * 2] = 0xBC00; motion[(std::size_t(y) * FW + x) * 2 + 1] = 0xBC00; trust[std::size_t(y) * FW + x] = 255; }
+            if (in(w[3])) { motion[(std::size_t(y) * FW + x) * 2] = 0xCA00; trust[std::size_t(y) * FW + x] = 255; }   // -12: truth is +12
+        }
+    const auto s1 = pushFlowFieldWindowStats(motion.data(), FW, trust.data(), FW, FW, FH, w[1], 4.0, 4.0);
+    CHECK(s1.pixels > 50000 && s1.trusted == s1.pixels && s1.right == s1.pixels && std::fabs(s1.meanX + 1.0) < 1e-9);
+    const auto s3 = pushFlowFieldWindowStats(motion.data(), FW, trust.data(), FW, FW, FH, w[3], 4.0, 4.0);
+    CHECK(s3.trusted == s3.pixels && s3.right == 0 && std::fabs(s3.meanX + 12.0) < 1e-9);   // a sign flip reads as mean -12 against truth +12
+    const auto s0 = pushFlowFieldWindowStats(motion.data(), FW, trust.data(), FW, FW, FH, w[0], 4.0, 4.0);
+    CHECK(s0.pixels > 0 && s0.trusted == 0);
+    // a zero field with full trust is not "right" in the 1-px window
+    std::vector<std::uint16_t> zero(motion.size(), 0);
+    std::vector<std::uint8_t> full(trust.size(), 255);
+    CHECK(pushFlowFieldWindowStats(zero.data(), FW, full.data(), FW, FW, FH, w[1], 4.0, 4.0).right == 0);
+    std::vector<std::int16_t> raw0(std::size_t(120) * 68 * 2, 0);
+    CHECK(pushFlowRawWindowStats(raw0.data(), 120, 120, 68, w[1], 4.0, 4.0).right == 0);
+}
+
 TEST(predict_flow_check_marker) {
     using B = PushFlowCheckBlock;
     const std::string_view id = "01dc5e7a9b3c0000-0000000002a1b000";
