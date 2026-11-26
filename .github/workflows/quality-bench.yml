@@ -29,10 +29,11 @@ jobs:
   bench:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
-    env:
-      QB_BUILD: ${{ runner.temp }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Build folder for the C++ references
+        run: echo "QB_BUILD=$RUNNER_TEMP" >> "$GITHUB_ENV"
 
       - uses: actions/setup-python@v5
         with:
