@@ -316,7 +316,7 @@ TEST(hud_guard_clean_leaves_unmasked_pixels_and_fills_from_neighbours) {
 // block-motion model of HudGuardScene.h, "perfect" = the truth, so every wrong pixel is the guard's own).
 // ---------------------------------------------------------------------------------------------------------------------
 namespace hud_guard_tests {
-inline void printLine(const char* label, const char* gen, unsigned multiplier, const Result& raw, const Result& guard) {
+inline void printLine(const char* label, const char* gen, unsigned multiplier, const hud_guard_scene::Result& raw, const hud_guard_scene::Result& guard) {
     const auto u = [](std::uint64_t v) { return static_cast<unsigned long long>(v); };
     std::printf("[hud-guard-sim] SIMULATED %-50s %s %uX | raw: exact %llu/%llu ghost %llu wrong %llu wrongFar %llu fringe %.1f ring %.2f | guard: exact %llu/%llu ghost %llu "
                 "wrong %llu wrongFar %llu fringe %.1f ring %.2f protectedPx %llu\n",
