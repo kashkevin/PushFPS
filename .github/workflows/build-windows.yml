@@ -627,14 +627,15 @@ jobs:
           # (Parsing: checks.yml runs qmlformat on every file; loading: the page runs below instantiate them, a load error is an
           # [ERROR] [qml] line; the component tests above load them from a copy of qml/.)
           $qmlDir = 'D:\pf-install\qml\Veyra'
-          $qmldir = Get-Content "$qmlDir\qmldir" -Raw
+          # (not $qmldir: PowerShell names ignore case, so that would overwrite $qmlDir; build-windows #104 and #105 failed here)
+          $listed = Get-Content "$qmlDir\qmldir" -Raw
           foreach ($c in 'PushRunningNow', 'PushEffectBoard', 'PushEffectNote') {
             if (-not (Test-Path "$qmlDir\$c.qml") -or (Get-Item "$qmlDir\$c.qml").Length -lt 200) { throw "$c.qml is missing or empty in the installed qml folder" }
-            if ($qmldir -notmatch "(?m)^$c\s+1\.0\s+$c\.qml\s*$") { throw "qmldir does not list $c" }
+            if ($listed -notmatch "(?m)^$c\s+1\.0\s+$c\.qml\s*$") { throw "qmldir does not list $c" }
             if ((Get-FileHash "$qmlDir\$c.qml").Hash -ne (Get-FileHash "qml\Veyra\$c.qml").Hash) { throw "installed $c.qml differs from the source tree" }
           }
           # Every component qmldir lists exists installed (a listed file that is missing breaks the whole Veyra module).
-          foreach ($line in ($qmldir -split "`n")) {
+          foreach ($line in ($listed -split "`n")) {
             if ($line -match '^\s*(?:singleton\s+)?\w+\s+[\d.]+\s+(\S+\.qml)\s*$') {
               if (-not (Test-Path "$qmlDir\$($Matches[1])")) { throw "qmldir lists $($Matches[1]) but it is not installed" }
             }
