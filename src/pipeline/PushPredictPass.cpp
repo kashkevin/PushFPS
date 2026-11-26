@@ -565,19 +565,44 @@ PushPredictPass::FidelityCheck PushPredictPass::runFidelityCheck(ID3D12Device* d
     const auto od = output->GetDesc();
     device->GetCopyableFootprints(&od, 0, 1, 0, &outFp, nullptr, nullptr, &outBytes);
     ComPtr<ID3D12Resource> outRb = makeBufferOf(device, outBytes, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST, false);
-    D3D12_QUERY_HEAP_DESC qh{}; qh.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP; qh.Count = 2 * kPushFlowCheckFrames;
+    // Stream "ownfg": 4 stamps per frame: start, after the downsample, after FidelityFX, end (densify, and P on the last).
+    D3D12_QUERY_HEAP_DESC qh{}; qh.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP; qh.Count = 4 * kPushFlowCheckFrames;
     ComPtr<ID3D12QueryHeap> stamps;
     ComPtr<ID3D12Resource> stampRb = makeBufferOf(device, uint64_t(qh.Count) * 8, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST, false);
     if (!outRb || !stampRb || FAILED(device->CreateQueryHeap(&qh, IID_PPV_ARGS(&stamps)))) return r;
+    const UINT last = UINT((kPushFlowCheckFrames - 1) % kSlots);
+    // Stream "ownfg": FidelityFX's raw vectors and scene-change words of the last frame, read back for the log.
+    ID3D12Resource* rawVectors = fidelity_->vectors();
+    ID3D12Resource* rawCuts = fidelity_->sceneChanges();
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT rawFp{}, cutFp{};
+    UINT64 rawBytes = 0, cutBytes = 0;
+    if (rawVectors) { const auto d = rawVectors->GetDesc(); device->GetCopyableFootprints(&d, 0, 1, 0, &rawFp, nullptr, nullptr, &rawBytes); }
+    if (rawCuts) { const auto d = rawCuts->GetDesc(); device->GetCopyableFootprints(&d, 0, 1, 0, &cutFp, nullptr, nullptr, &cutBytes); }
+    ComPtr<ID3D12Resource> rawRb = rawBytes ? makeBufferOf(device, rawBytes, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST, false) : nullptr;
+    ComPtr<ID3D12Resource> cutRb = cutBytes ? makeBufferOf(device, cutBytes, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST, false) : nullptr;
+    // ... and the densified field P warps with (v x trust, trust) of the last frame.
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT motionFp{}, trustFp{};
+    UINT64 motionBytes = 0, trustBytes = 0;
+    { const auto d = motion_[last]->GetDesc(); device->GetCopyableFootprints(&d, 0, 1, 0, &motionFp, nullptr, nullptr, &motionBytes); }
+    { const auto d = trust_[last]->GetDesc(); device->GetCopyableFootprints(&d, 0, 1, 0, &trustFp, nullptr, nullptr, &trustBytes); }
+    ComPtr<ID3D12Resource> motionRb = makeBufferOf(device, motionBytes, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST, false);
+    ComPtr<ID3D12Resource> trustRb = makeBufferOf(device, trustBytes, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST, false);
+    std::string results;   // FidelityFX's return code of each frame's dispatch
     uint8_t* mapped[2] = {};
     for (int i = 0; i < 2; ++i) if (FAILED(frames[i]->Map(0, nullptr, reinterpret_cast<void**>(&mapped[i]))) || !mapped[i]) return r;
-    // The texture's separable parts over the widest shift the sequence reaches.
+    // The texture's separable parts over the widest shift the sequence reaches. Stream "ownfg" (25 Nov 2026, his
+    // Package 16 log): the broadband texture pushFlowCheckGreyBroadband, not the periodic pushFlowCheckGrey, which a
+    // coarse-to-fine block search cannot follow (PushPredictCheck.h). sx / sy: the separable sum; px / py: the products.
     int reach = 0;
     for (const auto& w : windows) reach = std::max({reach, std::abs(w.vx), std::abs(w.vy)});
     reach = reach * int(kPushFlowCheckFrames) + 2;
-    std::vector<double> ax(size_t(width_) + 2 * size_t(reach)), cx(ax.size()), by(size_t(height_) + 2 * size_t(reach)), dy(by.size());
-    for (size_t i = 0; i < ax.size(); ++i) { const double x = double(int(i) - reach); ax[i] = 45.0 * std::sin(0.21 * x); cx[i] = 25.0 * std::sin(0.53 * x); }
-    for (size_t i = 0; i < by.size(); ++i) { const double y = double(int(i) - reach); by[i] = 35.0 * std::sin(0.17 * y); dy[i] = std::cos(0.29 * y); }
+    constexpr unsigned kOct = unsigned(kPushFlowCheckOctaves.size());
+    std::vector<double> sxT(size_t(width_) + 2 * size_t(reach)), syT(size_t(height_) + 2 * size_t(reach));
+    std::vector<double> pxT(sxT.size() * kOct), pyT(syT.size() * kOct);
+    for (size_t i = 0; i < sxT.size(); ++i)
+        for (unsigned o = 0; o < kOct; ++o) { const double x = double(int(i) - reach); sxT[i] += pushFlowCheckSeparable(x, o, false); pxT[i * kOct + o] = pushFlowCheckFactor(x, o, false); }
+    for (size_t i = 0; i < syT.size(); ++i)
+        for (unsigned o = 0; o < kOct; ++o) { const double y = double(int(i) - reach); syT[i] += pushFlowCheckSeparable(y, o, true); pyT[i * kOct + o] = pushFlowCheckFactor(y, o, true); }
     const bool tenBit = format_ == DXGI_FORMAT_R10G10B10A2_UNORM;
     const auto wordOf = [&](double g) -> uint32_t {
         g = std::clamp(g, 0.0, 255.0);
@@ -591,7 +616,9 @@ PushPredictPass::FidelityCheck PushPredictPass::runFidelityCheck(ID3D12Device* d
                 uint32_t* row = reinterpret_cast<uint32_t*>(to + size_t(y) * pitch);
                 for (int x = w.x0; x < w.x1; ++x) {
                     const size_t xi = size_t(x - w.vx * k + reach);
-                    row[x] = wordOf(128.0 + ax[xi] + by[yi] + cx[xi] * dy[yi]);
+                    double g = 128.0 + sxT[xi] + syT[yi];
+                    for (unsigned o = 0; o < kOct; ++o) g += pxT[xi * kOct + o] * pyT[yi * kOct + o];
+                    row[x] = wordOf(g);
                 }
             }
     };
@@ -599,18 +626,20 @@ PushPredictPass::FidelityCheck PushPredictPass::runFidelityCheck(ID3D12Device* d
     if (!done) return r;
     const auto keepAll = [&] {
         for (IUnknown* o : std::initializer_list<IUnknown*>{queue.Get(), allocator.Get(), list.Get(), fence.Get(), frames[0].Get(), frames[1].Get(), output.Get(),
-                                                            outRb.Get(), stamps.Get(), stampRb.Get()})
+                                                            outRb.Get(), stamps.Get(), stampRb.Get(), rawRb.Get(), cutRb.Get(), motionRb.Get(), trustRb.Get()})
             keptForever().emplace_back(o);
     };
-    const UINT last = UINT((kPushFlowCheckFrames - 1) % kSlots);
     step(std::format("{} frames, windows static and 1 / 4 / 12 / 30 flow px a frame (capped at 1/8 of a window)", kPushFlowCheckFrames));
     for (uint32_t k = 0; k < kPushFlowCheckFrames; ++k) {
         const bool lastFrame = k + 1 == kPushFlowCheckFrames;
         const UINT slot = UINT(k % kSlots);
         fill(mapped[slot], int(k));
         if (FAILED(allocator->Reset()) || FAILED(list->Reset(allocator.Get(), nullptr))) { CloseHandle(done); return r; }
-        list->EndQuery(stamps.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 2 * k);
+        list->EndQuery(stamps.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 4 * k);
+        checkStamps_ = stamps.Get(); checkStampAt_ = 4 * k + 1;
         bool recorded = sehRecordFlowFrame(this, list.Get(), slot, frames[slot].Get(), pitch, k + 1, k == 0, &r.faulted);
+        checkStamps_ = nullptr;
+        results += std::format("{}{}", k ? "," : "", fidelity_->lastResult());
         if (recorded && lastFrame) {
             recorded = recordMotion(list.Get(), queue.Get(), fence.Get(), k + 1, slot, frames[1 - slot].Get(), frames[slot].Get(), pitch, k, k + 1) &&
                        recordPredict(list.Get(), slot, frames[1 - slot].Get(), frames[slot].Get(), pitch, motion(slot), trust(slot), output.Get(), pushPredictStep(3));
@@ -621,10 +650,22 @@ PushPredictPass::FidelityCheck PushPredictPass::runFidelityCheck(ID3D12Device* d
                 dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT; dst.pResource = outRb.Get(); dst.PlacedFootprint = outFp;
                 list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
                 transition(list.Get(), output.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
+                // Stream "ownfg": the raw vectors and scene-change words FidelityFX left for this frame (state COMMON).
+                const std::pair<ID3D12Resource*, std::pair<ID3D12Resource*, D3D12_PLACED_SUBRESOURCE_FOOTPRINT>> copies[4] = {
+                    {rawVectors, {rawRb.Get(), rawFp}}, {rawCuts, {cutRb.Get(), cutFp}}, {motion_[last].Get(), {motionRb.Get(), motionFp}}, {trust_[last].Get(), {trustRb.Get(), trustFp}}};
+                for (const auto& c : copies) {
+                    if (!c.first || !c.second.first) continue;
+                    transition(list.Get(), c.first, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_SOURCE);
+                    D3D12_TEXTURE_COPY_LOCATION from{}, to{};
+                    from.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX; from.pResource = c.first;
+                    to.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT; to.pResource = c.second.first; to.PlacedFootprint = c.second.second;
+                    list->CopyTextureRegion(&to, 0, 0, 0, &from, nullptr);
+                    transition(list.Get(), c.first, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
+                }
             }
         }
-        list->EndQuery(stamps.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 2 * k + 1);
-        if (lastFrame) list->ResolveQueryData(stamps.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0, qh.Count, stampRb.Get(), 0);
+        list->EndQuery(stamps.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 4 * k + 3);
+        if (lastFrame) list->ResolveQueryData(stamps.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0, qh.Count, stampRb.Get(), 0);   // unwritten stamps read 0: shown as -1
         if (!recorded) {
             list->Close();
             log::warn("push-predict", std::format("flow self-check fidelityfx: frame {} not recorded{}", k + 1, r.faulted ? " (a fault inside FidelityFX was caught)" : ""));
@@ -682,11 +723,15 @@ PushPredictPass::FidelityCheck PushPredictPass::runFidelityCheck(ID3D12Device* d
         std::memcpy(t.data(), data, t.size() * 8);
         stampRb->Unmap(0, &none);
         double flowSum = 0; unsigned flowN = 0;
+        const auto ms = [&](uint32_t a, uint32_t b) { return t[b] >= t[a] ? double(t[b] - t[a]) * 1000.0 / double(frequency) : -1.0; };
         for (uint32_t k = 0; k + 1 < kPushFlowCheckFrames; ++k)
-            if (t[2 * k + 1] >= t[2 * k]) { flowSum += double(t[2 * k + 1] - t[2 * k]) * 1000.0 / double(frequency); ++flowN; }
+            if (t[4 * k + 3] >= t[4 * k]) { flowSum += ms(4 * k, 4 * k + 3); ++flowN; }
         if (flowN) r.flowGpuMs = flowSum / flowN;
         const uint32_t k = kPushFlowCheckFrames - 1;
-        if (t[2 * k + 1] >= t[2 * k]) r.pairGpuMs = double(t[2 * k + 1] - t[2 * k]) * 1000.0 / double(frequency);
+        r.pairGpuMs = ms(4 * k, 4 * k + 3);
+        // Stream "ownfg": per frame, downsample / FidelityFX / the rest (densify; on the last frame also P), ms.
+        for (uint32_t f = 0; f < kPushFlowCheckFrames; ++f)
+            r.stageText += std::format("{}{:.3f}/{:.3f}/{:.3f}", f ? " " : "", ms(4 * f, 4 * f + 1), ms(4 * f + 1, 4 * f + 2), ms(4 * f + 2, 4 * f + 3));
     }
     data = nullptr;
     if (FAILED(outRb->Map(0, nullptr, &data)) || !data) return r;
@@ -708,8 +753,8 @@ PushPredictPass::FidelityCheck PushPredictPass::runFidelityCheck(ID3D12Device* d
         double sp = 0, sb = 0, qp = 0, qb = 0; uint64_t n = 0;
         for (int y = w.y0 + m; y < w.y1 - m; y += 2)
             for (int x = w.x0 + m; x < w.x1 - m; x += 2) {
-                const double truth = std::clamp(pushFlowCheckGrey(x - w.vx * kt, y - w.vy * kt), 0.0, 255.0);
-                const double b = std::clamp(pushFlowCheckGrey(x - w.vx * kp, y - w.vy * kp), 0.0, 255.0);
+                const double truth = std::clamp(pushFlowCheckGreyBroadband(x - w.vx * kt, y - w.vy * kt), 0.0, 255.0);
+                const double b = std::clamp(pushFlowCheckGreyBroadband(x - w.vx * kp, y - w.vy * kp), 0.0, 255.0);
                 const double p = greyAt(uint32_t(x), uint32_t(y));
                 sp += std::abs(p - truth); sb += std::abs(b - truth); qp += (p - truth) * (p - truth); qb += (b - truth) * (b - truth); ++n;
             }
@@ -720,6 +765,43 @@ PushPredictPass::FidelityCheck PushPredictPass::runFidelityCheck(ID3D12Device* d
                             errP, errB, n ? pushPsnr(qp / double(n)) : 0.0, n ? pushPsnr(qb / double(n)) : 0.0, n, pass ? "pass" : "FAIL");
     }
     outRb->Unmap(0, &none);
+    // Stream "ownfg": what FidelityFX itself returned in each window (raw block vectors, flow pixels, current -> previous),
+    // so the next log on his card says whether the vectors or what follows them (densify, warp) is wrong.
+    std::string raw;
+    void* rawData = nullptr;
+    if (rawRb && SUCCEEDED(rawRb->Map(0, nullptr, &rawData)) && rawData) {
+        const auto* base = reinterpret_cast<const std::int16_t*>(static_cast<const uint8_t*>(rawData) + rawFp.Offset);
+        const double fx = double(width_) / double(flowWidth_), fy = double(height_) / double(flowHeight_);
+        for (size_t i = 0; i < windows.size(); ++i) {
+            const auto st = pushFlowRawWindowStats(base, rawFp.Footprint.RowPitch / 4, rawFp.Footprint.Width, rawFp.Footprint.Height, windows[i], fx, fy);
+            raw += std::format("{}w{}: truth=({},{}) blocks={} right={} nonzero={} mean=({:.1f},{:.1f}) min=({},{}) max=({},{})", i ? " " : "", i, -windows[i].flowVx,
+                               -windows[i].flowVy, st.blocks, st.right, st.nonzero, st.meanX, st.meanY, st.minX, st.minY, st.maxX, st.maxY);
+        }
+        rawRb->Unmap(0, &none);
+    } else raw = "not read";
+    std::string field;
+    void* motionData = nullptr; void* trustData = nullptr;
+    if (motionRb && trustRb && SUCCEEDED(motionRb->Map(0, nullptr, &motionData)) && motionData && SUCCEEDED(trustRb->Map(0, nullptr, &trustData)) && trustData) {
+        const auto* mv = reinterpret_cast<const std::uint16_t*>(static_cast<const uint8_t*>(motionData) + motionFp.Offset);
+        const auto* tv = static_cast<const std::uint8_t*>(trustData) + trustFp.Offset;
+        const double fx = double(width_) / double(flowWidth_), fy = double(height_) / double(flowHeight_);
+        for (size_t i = 0; i < windows.size(); ++i) {
+            const auto st = pushFlowFieldWindowStats(mv, motionFp.Footprint.RowPitch / 4, tv, trustFp.Footprint.RowPitch, flowWidth_, flowHeight_, windows[i], fx, fy);
+            field += std::format("{}w{}: trusted={}/{} right={} mean=({:.2f},{:.2f})", i ? " " : "", i, st.trusted, st.pixels, st.right, st.meanX, st.meanY);
+        }
+    } else field = "not read";
+    if (motionData) motionRb->Unmap(0, &none);
+    if (trustData) trustRb->Unmap(0, &none);
+    std::string cuts;
+    void* cutData = nullptr;
+    if (cutRb && SUCCEEDED(cutRb->Map(0, nullptr, &cutData)) && cutData) {
+        const auto* words = reinterpret_cast<const uint32_t*>(static_cast<const uint8_t*>(cutData) + cutFp.Offset);
+        for (UINT i = 0; i < std::min<UINT>(cutFp.Footprint.Width, 3u); ++i) cuts += std::format("{}{:#x}", i ? "," : "", words[i]);
+        cutRb->Unmap(0, &none);
+    } else cuts = "not read";
+    log::info("push-predict", std::format("flow self-check fidelityfx raw vectors (last frame, block 8, flow px, current -> previous, right = exact, raw {}x{}): {}; "
+                                          "densified field (flow px, trust >= 0.5, right = within 0.5): {}; scene-change words {}; dispatch results {}; GPU ms per frame downsample/FidelityFX/rest: {}",
+                                          rawFp.Footprint.Width, rawFp.Footprint.Height, raw, field, cuts, results, r.stageText));
     r.wallMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
     r.found = all;
     r.ok = true;
@@ -837,7 +919,9 @@ bool PushPredictPass::recordFlowFrame(ID3D12GraphicsCommandList* list, UINT slot
     list->Dispatch((flowWidth_ + 15) / 16, (flowHeight_ + 15) / 16, 1);
     uavBarrier(list, target);
     transition(list, target, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON);
+    if (checkStamps_) list->EndQuery(checkStamps_, D3D12_QUERY_TYPE_TIMESTAMP, checkStampAt_);   // stream "ownfg": the check only
     if (!fidelity_->dispatch(list, target, reset)) return false;
+    if (checkStamps_) list->EndQuery(checkStamps_, D3D12_QUERY_TYPE_TIMESTAMP, checkStampAt_ + 1);
     const bool warm = fidelity_->warmedUp();
     if (!recordDensify(*fidelity_, list, slot, flowPicture_[1 - slot][1].Get(), target, motion_[slot].Get(), trust_[slot].Get(), warm)) return false;
     flowFrameOf_[slot] = frameIndex;

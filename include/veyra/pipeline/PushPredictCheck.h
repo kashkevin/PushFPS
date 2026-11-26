@@ -266,6 +266,95 @@ inline std::array<PushFlowWindow, 6> pushFlowCheckWindows(std::uint32_t workW, s
 inline double pushFlowCheckGrey(double x, double y) {
     return 128.0 + 45.0 * std::sin(0.21 * x) + 35.0 * std::sin(0.17 * y) + 25.0 * std::sin(0.53 * x) * std::cos(0.29 * y);
 }
+// The FidelityFX check's texture (stream "ownfg", 25 Nov 2026, after his Package 16 log: "did not find the known
+// motions", every moving window wrong, the static one right). pushFlowCheckGrey above is periodic with all its energy at
+// periods of 3-9 FLOW pixels: FidelityFX's coarse-to-fine 8x8 block search (+-8 px on 7 pyramid levels, SDK 1.1.4) sees
+// nothing at its coarse levels and many equal minima at the fine ones, so it locks onto aliases. A FidelityFX-like model
+// of that search (tools/pushwarp_eval/ffx_check_sim.py, SIMULATED, CPU) gives 0-22 % right vectors in the moving windows
+// on that texture and 91-100 % on this one. This texture: value noise at 512, 128, 32 and 8 work pixels (non-periodic,
+// energy at every pyramid level), as separable parts and products of 1-D noises so play-size frames fill from tables.
+inline double pushFlowCheckNoise(double t, double cell, std::uint32_t seed) {
+    const double fi = std::floor(t / cell), f = t / cell - fi;
+    const auto hash = [seed](double i) {
+        std::uint32_t n = std::uint32_t(std::int64_t(i)) * 374761393u + seed * 668265263u;
+        n = (n ^ (n >> 13)) * 1274126177u;
+        return double((n ^ (n >> 16)) & 0xFFFFu) / 65535.0 * 2.0 - 1.0;
+    };
+    const double s = f * f * (3.0 - 2.0 * f);
+    return hash(fi) * (1.0 - s) + hash(fi + 1.0) * s;
+}
+struct PushFlowCheckOctave { double cell, amplitude; };
+constexpr std::array<PushFlowCheckOctave, 4> kPushFlowCheckOctaves{{{512.0, 24.0}, {128.0, 18.0}, {32.0, 12.0}, {8.0, 8.0}}};
+// The parts of octave k at x (or y): the separable half-terms and the product factors (pushFlowCheckGreyBroadband).
+inline double pushFlowCheckSeparable(double t, unsigned k, bool vertical) {
+    return 0.5 * kPushFlowCheckOctaves[k].amplitude * pushFlowCheckNoise(t, kPushFlowCheckOctaves[k].cell, 2u * k + (vertical ? 2u : 1u));
+}
+inline double pushFlowCheckFactor(double t, unsigned k, bool vertical) {
+    return (vertical ? 1.0 : kPushFlowCheckOctaves[k].amplitude) * pushFlowCheckNoise(t, kPushFlowCheckOctaves[k].cell * 0.7, 2u * k + (vertical ? 12u : 11u));
+}
+inline double pushFlowCheckGreyBroadband(double x, double y) {
+    double g = 128.0;
+    for (unsigned k = 0; k < kPushFlowCheckOctaves.size(); ++k)
+        g += pushFlowCheckSeparable(x, k, false) + pushFlowCheckSeparable(y, k, true) + pushFlowCheckFactor(x, k, false) * pushFlowCheckFactor(y, k, true);
+    return g;
+}
+// The raw FidelityFX vectors of one window (diagnostics of the check, his next log): blocks two blocks inside the
+// window; truth = the window's current -> previous motion in flow pixels (-flowVx, -flowVy); "right" = exactly the
+// truth (the windows move whole flow pixels; a tolerance of 1 would count the zero vector right in the 1-px window).
+struct PushFlowRawStats {
+    std::uint32_t blocks = 0, right = 0, nonzero = 0;
+    int minX = 0, minY = 0, maxX = 0, maxY = 0;
+    double meanX = 0.0, meanY = 0.0;
+};
+// raw: rawW x rawH pairs of int16 (R16G16_SINT, row pitch in pairs), block = 8 flow pixels; window in WORK pixels with
+// workPerFlowX / workPerFlowY the work/flow ratio.
+inline PushFlowRawStats pushFlowRawWindowStats(const std::int16_t* raw, std::uint32_t rowPitchPairs, std::uint32_t rawW, std::uint32_t rawH,
+                                               const PushFlowWindow& w, double workPerFlowX, double workPerFlowY) {
+    PushFlowRawStats s;
+    if (!raw || workPerFlowX <= 0.0 || workPerFlowY <= 0.0) return s;
+    const int bx0 = int(std::ceil(double(w.x0) / workPerFlowX / 8.0)) + 2, bx1 = int(std::floor(double(w.x1) / workPerFlowX / 8.0)) - 2;
+    const int by0 = int(std::ceil(double(w.y0) / workPerFlowY / 8.0)) + 2, by1 = int(std::floor(double(w.y1) / workPerFlowY / 8.0)) - 2;
+    double sx = 0.0, sy = 0.0;
+    for (int by = std::max(by0, 0); by < std::min(by1, int(rawH)); ++by)
+        for (int bx = std::max(bx0, 0); bx < std::min(bx1, int(rawW)); ++bx) {
+            const std::int16_t* v = raw + (std::size_t(by) * rowPitchPairs + std::size_t(bx)) * 2;
+            const int vx = v[0], vy = v[1];
+            if (s.blocks == 0) { s.minX = s.maxX = vx; s.minY = s.maxY = vy; }
+            s.minX = std::min(s.minX, vx); s.maxX = std::max(s.maxX, vx); s.minY = std::min(s.minY, vy); s.maxY = std::max(s.maxY, vy);
+            ++s.blocks;
+            if (vx != 0 || vy != 0) ++s.nonzero;
+            if (vx == -w.flowVx && vy == -w.flowVy) ++s.right;
+            sx += vx; sy += vy;
+        }
+    if (s.blocks) { s.meanX = sx / s.blocks; s.meanY = sy / s.blocks; }
+    return s;
+}
+// The densified field of one window (what P warps with): R16G16_FLOAT v x trust and R8_UNORM trust at the flow size,
+// pixels 16 flow pixels inside the window; trusted = trust >= 0.5; right = |v - truth| <= 0.5 flow pixel.
+struct PushFlowFieldStats {
+    std::uint32_t pixels = 0, trusted = 0, right = 0;
+    double meanX = 0.0, meanY = 0.0;   // over the trusted pixels
+};
+inline PushFlowFieldStats pushFlowFieldWindowStats(const std::uint16_t* motion, std::uint32_t motionPitchPairs, const std::uint8_t* trust, std::uint32_t trustPitch,
+                                                   std::uint32_t flowW, std::uint32_t flowH, const PushFlowWindow& w, double workPerFlowX, double workPerFlowY) {
+    PushFlowFieldStats s;
+    if (!motion || !trust || workPerFlowX <= 0.0 || workPerFlowY <= 0.0) return s;
+    const int x0 = int(std::ceil(double(w.x0) / workPerFlowX)) + 16, x1 = int(std::floor(double(w.x1) / workPerFlowX)) - 16;
+    const int y0 = int(std::ceil(double(w.y0) / workPerFlowY)) + 16, y1 = int(std::floor(double(w.y1) / workPerFlowY)) - 16;
+    double sx = 0.0, sy = 0.0;
+    for (int y = std::max(y0, 0); y < std::min(y1, int(flowH)); ++y)
+        for (int x = std::max(x0, 0); x < std::min(x1, int(flowW)); ++x) {
+            ++s.pixels;
+            const double t = double(trust[std::size_t(y) * trustPitch + std::size_t(x)]) / 255.0;
+            if (t < 0.5) continue;
+            const std::uint16_t* m = motion + (std::size_t(y) * motionPitchPairs + std::size_t(x)) * 2;
+            const double vx = double(pushHalfToFloat(m[0])) / t, vy = double(pushHalfToFloat(m[1])) / t;
+            ++s.trusted; sx += vx; sy += vy;
+            if (std::abs(vx + w.flowVx) <= 0.5 && std::abs(vy + w.flowVy) <= 0.5) ++s.right;
+        }
+    if (s.trusted) { s.meanX = sx / s.trusted; s.meanY = sy / s.trusted; }
+    return s;
+}
 // Pixels scored in a window: inside it by the motion over the pair and P's extra third, plus one FidelityFX block (its
 // 8 x 8 flow-pixel cells straddle the window edges) and 4 pixels. A window with nothing left to score fails.
 inline int pushFlowCheckMargin(const PushFlowWindow& w, double blockWork) {
