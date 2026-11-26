@@ -18,6 +18,8 @@
 #include <QScopedValueRollback>
 #include "veyra/ui/EffectAvailability.h"
 #include "veyra/engine/FrameGenerationSelection.h"
+#include "veyra/engine/PushHookHold.h"
+#include "veyra/engine/PushPipelineHook.h"
 #include "veyra/ui/QmlExportQueueModel.h"
 #include "veyra/ui/PlaylistModel.h"
 #include "veyra/ui/UpdateChecker.h"
@@ -185,7 +187,10 @@ using namespace bridge_detail;
 
 QVariantMap currentEffectCapabilities(bool refresh=false);
 QString unavailableEffects(const engine::EnhancementSettings& settings);
+void pushNeuralCapabilities(QVariantMap& capabilities, bool autoVerifiedHere);   // PushNeural.cpp: nr3 only for a verified NVIDIA-signed original; nrAuto
+engine::NrRuntime pushNeuralDefaultRuntime(engine::NrRuntime runtime);     // PushNeural.cpp: the untouched default -> the verified original
 QString disableUnavailableEffects(engine::ChainConfiguration& configuration);
+bool pushNeuralStartupHold(engine::ChainSession& running, const engine::ChainSession& saved, QVariantMap& prefs);   // PushNeural.cpp: the original-runtime neural layer held off at start (pref pushNrHeldOff)
 ui::EffectGpu effectGpu();
 
 namespace bridge_detail {
@@ -745,6 +750,7 @@ struct QmlPlayerBridge::Impl {
                 if(FAILED(adapter->GetDesc1(&desc))||(desc.Flags&DXGI_ADAPTER_FLAG_SOFTWARE))continue;
                 auto initial=facade.pendingSettings();
                 initial.nrRuntime=desc.VendorId==0x1002?engine::NrRuntime::LmxxfAmd:engine::NrRuntime::Ampere;
+                initial.nrRuntime=pushNeuralDefaultRuntime(initial.nrRuntime);   // PushFPS: the verified NVIDIA original when the default slot's file is not installed
                 if(desc.VendorId==0x1002||desc.VendorId==0x8086){
                     initial.opticalFlowBackend=engine::OpticalFlowBackend::AmdFidelityFx;
                     initial.videoSrQuality=engine::kVideoSrFsr;
@@ -844,6 +850,9 @@ struct QmlPlayerBridge::Impl {
     }
 
     bool persistSession() {
+        // Not while an autorun hook step holds test settings (engine/PushHookHold.h): nothing is lost, the
+        // next save after the step writes whatever differs from the file.
+        if (!engine::pushSessionSaveAllowed()) return true;
         const auto current = currentSession();
         if (current == savedSession) return true;
         if (!facade.saveChainSession(current)) return false;
@@ -1008,10 +1017,16 @@ struct QmlPlayerBridge::Impl {
 uint32_t primaryGpuVendor();
 bool fsr4Possible();
 const DXGI_ADAPTER_DESC1* engineAdapterDesc();
+QVariantMap pushDecodeCapabilities();   // PushFPS: D3D12 video decode profiles of that adapter (Hardware.cpp)
+QVariantMap pushAdapterCapabilities(double refreshHz, int vrrState);   // PushFPS: capability model input + ceiling (Hardware.cpp)
 bool vfgHardwarePossible();
 unsigned normalizeFgMultiplier(unsigned value, engine::FrameGenerationBackend backend, unsigned cap);
 QString fgEffectId(engine::FrameGenerationBackend backend);
 int xessCeiling(const engine::PlayerSnapshot& snapshot);
 void ensureGdiplus();
+// PushFPS VEYRA_TEST_RP_PIPELINE (PushPipelineHook.cpp): another part of the app adds its own keys; apply returns
+// the reason a key could not be applied, empty when it was.
+using PipelineHookApply = std::string (*)(QmlPlayerBridge& bridge, const std::string& key, const std::string& value);
+void registerPipelineHookExtension(const engine::PipeHookExtension* keys, PipelineHookApply apply);
 
 } // namespace veyra::ui

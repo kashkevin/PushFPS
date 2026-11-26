@@ -5,6 +5,7 @@
 #include <format>
 #include <algorithm>
 #include <charconv>
+#include <limits>
 #include <condition_variable>
 #include <mutex>
 namespace veyra::remoteplay {
@@ -73,6 +74,58 @@ DiscoveryReport discoverLocalPs5(std::stop_token stop){
     chiaki_discovery_service_fini(&service);
     result.report.diagnostics.push_back(std::format("discovery finished hosts={} cancelled={}",result.report.hosts.size(),stop.stop_requested()));
     return std::move(result.report);
+}
+std::vector<LocalInterface> localInterfaces() noexcept {
+    std::vector<LocalInterface> out;
+    try{
+        ULONG bytes=16384;std::vector<unsigned char> buffer;
+        ULONG code=ERROR_BUFFER_OVERFLOW;
+        for(int attempt=0;attempt<3&&code==ERROR_BUFFER_OVERFLOW;++attempt){
+            if(bytes>4*1024*1024)break;
+            buffer.resize(bytes);
+            code=GetAdaptersAddresses(AF_INET,GAA_FLAG_SKIP_ANYCAST|GAA_FLAG_SKIP_MULTICAST|GAA_FLAG_SKIP_DNS_SERVER,
+                nullptr,reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buffer.data()),&bytes);
+        }
+        if(code!=NO_ERROR)return out;
+        for(auto* adapter=reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buffer.data());adapter;adapter=adapter->Next){
+            if(adapter->OperStatus!=IfOperStatusUp||adapter->IfType==IF_TYPE_SOFTWARE_LOOPBACK)continue;
+            const LinkKind kind=adapter->IfType==IF_TYPE_IEEE80211?LinkKind::WiFi:adapter->IfType==IF_TYPE_ETHERNET_CSMACD?LinkKind::Ethernet:LinkKind::Other;
+            // All ones means the driver does not report a speed.
+            const std::uint64_t speed=adapter->ReceiveLinkSpeed==(std::numeric_limits<ULONG64>::max)()?0:static_cast<std::uint64_t>(adapter->ReceiveLinkSpeed);
+            for(auto* entry=adapter->FirstUnicastAddress;entry;entry=entry->Next){
+                if(!entry->Address.lpSockaddr||entry->Address.lpSockaddr->sa_family!=AF_INET)continue;
+                LocalInterface local;
+                local.address=ntohl(reinterpret_cast<sockaddr_in*>(entry->Address.lpSockaddr)->sin_addr.s_addr);
+                local.prefixLength=entry->OnLinkPrefixLength;local.kind=kind;local.linkBitsPerSecond=speed;
+                out.push_back(local);
+            }
+        }
+    }catch(...){out.clear();}
+    return out;
+}
+RouteFacts routeFacts(std::string_view host) noexcept {
+    RouteFacts out;
+    const auto peer=parseIpv4(host);
+    if(!peer)return out;
+    SOCKADDR_INET destination{};
+    destination.Ipv4.sin_family=AF_INET;destination.Ipv4.sin_addr.s_addr=htonl(*peer);
+    MIB_IPFORWARD_ROW2 row{};SOCKADDR_INET source{};
+    if(GetBestRoute2(nullptr,0,nullptr,&destination,0,&row,&source)!=NO_ERROR)return out;
+    out.interfaceIndex=static_cast<std::uint32_t>(row.InterfaceIndex);
+    // An on-link route has no next hop (0.0.0.0); a host route may name the console itself.
+    const bool direct=row.NextHop.si_family==AF_INET&&(row.NextHop.Ipv4.sin_addr.s_addr==0||row.NextHop.Ipv4.sin_addr.s_addr==destination.Ipv4.sin_addr.s_addr);
+    out.hop=direct?RouteHop::OnLink:RouteHop::Gateway;
+    return out;
+}
+SystemNetCounters systemNetCounters(std::uint32_t interfaceIndex) noexcept {
+    SystemNetCounters out;
+    MIB_UDPSTATS udp{};
+    if(GetUdpStatisticsEx(&udp,AF_INET)==NO_ERROR){out.udpKnown=true;out.udpInDatagrams=udp.dwInDatagrams;out.udpInErrors=udp.dwInErrors;}
+    if(interfaceIndex!=0){
+        MIB_IF_ROW2 row{};row.InterfaceIndex=interfaceIndex;
+        if(GetIfEntry2(&row)==NO_ERROR){out.nicKnown=true;out.nicInPackets=row.InUcastPkts;out.nicInDiscards=row.InDiscards;out.nicInErrors=row.InErrors;}
+    }
+    return out;
 }
 BackendResult wakeLocalPs5(const NativeConnectRequest& request){
     if(!validHost(request.host))return {false,-1300,"invalid_wakeup_host"};

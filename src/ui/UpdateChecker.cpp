@@ -60,8 +60,16 @@ UpdateChecker::~UpdateChecker() {
         download_->abort();
     }
 }
+// Slipstream: true, with one log line, when this copy must not use the updater (UpdatePolicy.h).
+bool UpdateChecker::refusedByPolicy() const {
+    if (updatesAllowed(policy_)) return false;
+    const auto reason = updatePolicyReason(policy_);
+    qInfo().noquote() << "[update-check]" << QStringLiteral("disabled: ") + QString::fromLatin1(reason.data(), qsizetype(reason.size()));
+    return true;
+}
 void UpdateChecker::startAutomaticCheck() {
     if (automaticScheduled_) return;
+    if (refusedByPolicy()) { automaticScheduled_ = true; return; }
     automaticScheduled_ = true;
     QTimer::singleShot(2500, this, [this] {
         // A manual check made during startup already fulfils this run's check.
@@ -69,6 +77,7 @@ void UpdateChecker::startAutomaticCheck() {
     });
 }
 void UpdateChecker::check(bool manual) {
+    if (refusedByPolicy()) { emit completed(QStringLiteral("disabled")); return; }
     if (checking()) { manual_ = manual_ || manual; return; }
     manual_ = manual;
     body_.clear(); failure_.clear();
@@ -167,6 +176,7 @@ bool UpdateChecker::assetUrlOk(const QUrl& url) const {
     return url.scheme() == QStringLiteral("https") && url.host() == QStringLiteral("github.com") && url.port(-1) == -1;
 }
 bool UpdateChecker::canInstall() const {
+    if (!updatesAllowed(policy_)) return false;
     if (publicKeyPem_.isEmpty() || sumsUrl_.isEmpty() || sigUrl_.isEmpty() || zipUrl_.isEmpty() || installDir_.isEmpty()) return false;
     QFile f(QDir(installDir_).filePath(QStringLiteral("PushFPS-VERSION.txt")));
     if (!f.open(QIODevice::ReadOnly)) return false;   // a portable or development copy: the release page instead
@@ -223,6 +233,7 @@ void UpdateChecker::download(const QUrl& url, qint64 limit, std::function<void(Q
     });
 }
 void UpdateChecker::installUpdate() {
+    if (refusedByPolicy()) return;
     if (installState_ == QStringLiteral("downloading") || installState_ == QStringLiteral("verifying") || installState_ == QStringLiteral("installing")) return;
     if (!canInstall()) { openRelease(); return; }
     qInfo().noquote() << "[update-install] start" << latestVersion_;

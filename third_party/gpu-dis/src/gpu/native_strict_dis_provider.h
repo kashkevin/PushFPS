@@ -9,6 +9,7 @@
 #include <memory>
 #include <string>
 #include <cstdint>
+#include <vector>
 
 namespace xess_gpu {
 class MotionProvider;
@@ -20,5 +21,15 @@ enum class StrictDisInput { RawLuma8, Ffmpeg71RgbGrayLimited };
 std::unique_ptr<MotionProvider> make_strict_dis_provider(
     const std::string& shader_directory, StrictDisPreset preset=StrictDisPreset::Fast,
     StrictDisInput input=StrictDisInput::RawLuma8);
+// Veyra/PushFPS 2026-11-25: the same provider over shaders compiled with `double` defined as `float` (the CPU-rounding
+// corrections become float approximations; no FP64 shader operations are required). Not CPU-exact; compared with the
+// strict provider by its caller before use.
+std::unique_ptr<MotionProvider> make_float_dis_provider(
+    const std::string& shader_directory, StrictDisPreset preset=StrictDisPreset::Fast,
+    StrictDisInput input=StrictDisInput::RawLuma8);
 uint64_t strict_dis_shader_dispatches(const MotionProvider& provider) noexcept;
+// Veyra/PushFPS 2026-11-25, tests only: record at most `limit` dispatches per record() (-1 = all) and, with trace, keep
+// "<shader>.dxil <x>x<y>" for every dispatch of the last record() (skipped ones included).
+void strict_dis_set_test(MotionProvider& provider,int64_t limit,bool trace) noexcept;
+std::vector<std::string> strict_dis_test_names(const MotionProvider& provider);
 }

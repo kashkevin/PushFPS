@@ -1,0 +1,12 @@
+{
+ "补出来的帧会把画面上静止的文字、准星和血条跟着背景一起拉动，看起来发糊或抖动。开启后 PushFPS 每一帧都会找出静止的 HUD 像素，补帧时直接用主机原来的像素，不需要画框。画面周围在动约 0.2 秒后才开始；半透明的准星和文字不在其内": {
+  "en": "Generated frames drag still text, crosshairs and health bars along with the moving background, so they smear or wobble. When on, PushFPS finds the still HUD pixels on every frame and uses the console's own pixels there when generating frames, with no boxes to draw. It starts about 0.2 s after the picture around them moves; translucent crosshairs and text are not covered",
+  "zh-TW": "補出來的幀會把畫面上靜止的文字、準星和血條跟著背景一起拉動，看起來發糊或抖動。開啟後 PushFPS 每一幀都會找出靜止的 HUD 像素，補幀時直接用主機原來的像素，不需要畫框。畫面周圍在動約 0.2 秒後才開始；半透明的準星和文字不在其內",
+  "ja": "生成フレームは静止した文字、照準、体力バーを動く背景と一緒に引きずるため、にじんだり揺れたりします。オンにすると PushFPS が毎フレーム静止した HUD ピクセルを見つけ、フレーム生成時にゲーム機本来のピクセルを使います。枠を描く必要はありません。周りの画面が動き始めてから約 0.2 秒後に始まります。半透明の照準や文字は対象外です"
+ },
+ "正在运行：静止的 HUD 像素在补出来的帧里用主机原来的像素": {
+  "en": "Running: still HUD pixels use the console's own pixels in generated frames",
+  "zh-TW": "正在執行：靜止的 HUD 像素在補出來的幀裡用主機原來的像素",
+  "ja": "実行中：静止した HUD ピクセルは生成フレームでゲーム機本来のピクセルを使います"
+ }
+}

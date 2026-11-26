@@ -246,7 +246,7 @@ Item {
             quick.liveStats = ({ hudLockState: 2 })
             compare(control("pushfps-hudlock-row").hint, qsTr("实时 HUD 锁定没能在这台电脑上启动，补帧照常运行（原因见日志）"))
             quick.liveStats = ({ hudLockState: 1 })
-            compare(control("pushfps-hudlock-row").hint, qsTr("正在运行：文字和准星在补出来的帧里保持清晰"))
+            compare(control("pushfps-hudlock-row").hint, qsTr("正在运行：静止的 HUD 像素在补出来的帧里用主机原来的像素"))
             veyra.hudLock = false
             quick.liveStats = ({})
         }
@@ -354,9 +354,40 @@ Item {
             tools.canRepair = false; tools.changed()
             tryVerify(() => !row.visible, 2000, "nothing left to set: the row goes")
             compare(veyra.preferences.pushGsyncChecked, true, "and that is remembered")
+            // Stream "s10-display": the repair is applied by the driver only after a restart of PushFPS: said until then.
+            compare(veyra.preferences.pushGsyncRestartPending, true, "a repair waits for a restart")
+            compare(quick.gsyncRun, 1)
+            verify(control("pushfps-gsync-restart-row").visible, "the row says: restart PushFPS to finish")
+            quick.gsyncRun = 0
             veyra.vrrState = 0; veyra.displaySync = 2; veyra.variableRefresh = false
             veyra.nvidiaVrrProfile = null
             tools.destroy()
+        }
+
+        // Stream "s10-display" (review MUST 1): after the restart only the driver's answer is stated, and only where PushFPS
+        // asked for variable refresh; never a troubleshooting instruction.
+        function test_gsync_after_restart_states_only_what_the_driver_answered() {
+            compare(quick.gsyncVerdict(false, 3), 0, "variable refresh not requested: nothing to say")
+            compare(quick.gsyncVerdict(false, 4), 0)
+            compare(quick.gsyncVerdict(true, 4), 2, "requested and reported active")
+            compare(quick.gsyncVerdict(true, 3), 3, "requested, not reported active: said as such")
+            quick.gsyncRun = 3
+            const row = control("pushfps-gsync-restart-row")
+            verify(row.visible)
+            verify(row.hint.indexOf("控制面板") < 0, "no control-panel instruction")
+            quick.gsyncRun = 2
+            verify(row.visible)
+            quick.gsyncRun = 0
+            verify(!row.visible)
+        }
+        // Stream "s10-display": the auto-fullscreen row shows this PC's measured display path in the current window mode.
+        function test_auto_fullscreen_hint_shows_the_measured_to_screen_figure() {
+            veyra.liveStats = ({running: true, toScreenKnown: true, toScreenP50Ms: 9.43, toScreenP95Ms: 14.5})
+            control("pushfps-display-path-timer").triggered()
+            verify(quick.toScreenText.indexOf("9.4") >= 0, quick.toScreenText)
+            veyra.liveStats = ({running: true, toScreenKnown: false})
+            control("pushfps-display-path-timer").triggered()
+            compare(quick.toScreenText, "", "nothing measured: nothing said")
         }
 
         // The look of AI picture enhancement: presets, two sliders, reset, every layer.

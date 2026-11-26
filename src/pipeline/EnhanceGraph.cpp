@@ -11,17 +11,23 @@
 #include "veyra/pipeline/Rdna3NrBackend.h"
 #include "veyra/pipeline/AmdNrProvider.h"
 #include "veyra/pipeline/VfgBackend.h"
+#include "veyra/pipeline/StreamChangePass.h"
 #include "veyra/engine/GraphDescription.h"
+#include "veyra/engine/PushStreamDedup.h"
+#include "veyra/engine/PushLowDelay.h"
+#include "veyra/engine/PushFgHealth.h"
 #include "veyra/engine/ColorLut.h"
 #include "veyra/engine/EffectChain.h"
 #include "veyra/diagnostics/CpuStallTrace.h"
 
 #include <algorithm>
+#include <atomic>
 #include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstring>
 #include <fstream>
+#include <mutex>
 #include <thread>
 
 #include "veyra/Log.h"
@@ -43,7 +49,10 @@
 #include "veyra/ngx/DlssNrRuntimeAdapter.h"
 #include "veyra/ngx/DlssSrBackend.h"
 #include "veyra/ngx/VideoSrBackend.h"
+#include "veyra/engine/PushSrPlan.h"
+#include "veyra/engine/PushPipelinePlan.h"
 #include "veyra/pipeline/VfxSrBackend.h"
+#include "veyra/pipeline/PushGpuPath.h"
 #include "veyra/ngx/TrueHdrBackend.h"
 #include "veyra/ngx/NgxCoreHost.h"
 #include "veyra/ngx/DlssgLite.h"
@@ -52,6 +61,7 @@
 #include "veyra/ngx/NvOfSession.h"
 #include "veyra/guidance/AmdOpticalFlow.h"
 #include "veyra/guidance/GpuDisOpticalFlow.h"
+#include "veyra/engine/PushLegacyEnv.h"
 
 extern "C" {
 #include <libavutil/frame.h>
@@ -67,6 +77,27 @@ static_assert(diagnostics::kTimedNrLayers==engine::kMaxNrInstances&&diagnostics:
               "every NR layer / Color / anti-aliasing / beauty instance needs its own node timing slot");
 
 namespace {
+
+// Stream "gpupath" (PushGpuPath.h): the two restore switches, each exactly "1", read once per process; the first use
+// logs what is in force (the defaults are on in every build: they only lower fences that something waits for).
+struct PushGpuPathRestore { bool realWaitsGroup=false,uploadLate=false; };
+const PushGpuPathRestore& pushGpuPathRestore(){
+    static const PushGpuPathRestore value=[]{
+        auto one=[](const wchar_t* name){wchar_t v[4]{};return GetEnvironmentVariableW(name,v,4)==1&&v[0]==L'1';};
+        // Package 14's rollback (PushLegacy.h): VEYRA_TEST_RP_LEGACY_GPU_REAL_WAITS / _UPLOAD_RELEASE / _PACKAGE13 = 1, the
+        // earlier names as aliases.
+        PushGpuPathRestore r;r.realWaitsGroup=engine::pushLegacyRestored(engine::PushLegacyPart::GpuRealWaits,engine::pushEnvironment());
+        r.uploadLate=engine::pushLegacyRestored(engine::PushLegacyPart::UploadRelease,engine::pushEnvironment());
+        // Stream "delay90"'s experiment switch for the same release: now the default, read only to say so in the log.
+        const bool earlyAsked=one(L"VEYRA_EXP_RP_UPLOAD_EARLY_RELEASE");
+        veyra::log::info("gpu-path",std::format("realFrameWait={} uploadRelease={} (stream gpupath defaults: a real frame's presentation waits for its own lists with VFG "
+            "and no HUD Lock or exclusion, the capture upload buffer is released after the base list; VEYRA_TEST_RP_LEGACY_GPU_REAL_WAITS=1 and "
+            "VEYRA_TEST_RP_LEGACY_UPLOAD_RELEASE=1 (or VEYRA_TEST_RP_LEGACY_PACKAGE13=1) restore the old waits; no picture or order changes; VEYRA_EXP_RP_UPLOAD_EARLY_RELEASE set={} has no further effect)",
+            r.realWaitsGroup?"pair-group":"own-lists",r.uploadLate?"pair-group":"base-list",earlyAsked?1:0));
+        return r;
+    }();
+    return value;
+}
 
 constexpr int64_t usPerSecond = 1000000;
 float uintBits(uint32_t v) { return std::bit_cast<float>(v); }
@@ -100,6 +131,37 @@ bool mixedDualSr(const EnhanceGraphDesc& d){
 }
 const char* srRuntimeName(uint32_t quality){
     return quality==0?"dlss":quality==engine::kVideoSrFsr?"fsr":quality==engine::kVideoSrNis?"nis":engine::vfxVideoSr(quality)?"video-effects":"ngx";
+}
+// PushFPS sprint 4 (stream "sr"): [slipstream-sr] statistics and the RTX Video SR level experiments
+// (engine/PushSrPlan.h, docs/SUPER_RESOLUTION.md). Each switch is read once. With none of them set and no
+// autorun request, the level passed to the SDK is the configured one and noteSrTimings returns at once.
+std::string srSwitchText(const wchar_t* name){
+    wchar_t value[16]{};
+    const DWORD length=GetEnvironmentVariableW(name,value,16);
+    std::string text;
+    if(length==0||length>=16)return text;
+    for(DWORD i=0;i<length;++i)text.push_back(value[i]>0&&value[i]<128?static_cast<char>(value[i]):'?');
+    return text;
+}
+bool srStatsSwitch(){static const bool on=srSwitchText(L"VEYRA_EXP_RP_STATS")=="1";return on;}
+uint32_t srFixedLevel(){static const uint32_t level=engine::pushSrLevelSwitch(srSwitchText(L"VEYRA_EXP_SR_QUALITY"));return level;}
+double srBudgetMs(){static const double ms=engine::pushSrBudgetSwitch(srSwitchText(L"VEYRA_EXP_SR_BUDGET_MS"));return ms;}
+// PushFPS sprint 5 (stream "pipeline"): VEYRA_EXP_PIPE_IDLE_NR_FLOW=1 skips the neural-size flow adaptation while
+// nothing reads it (engine::pipeIdleNrFlowSkippable, docs/NEURAL_RENDERING.md section 9). Read once.
+bool pipeIdleNrFlowSwitch(){
+    static const bool on=[]{
+        const bool set=srSwitchText(L"VEYRA_EXP_PIPE_IDLE_NR_FLOW")=="1";
+        if(set)veyra::log::info("pipeline-exp","VEYRA_EXP_PIPE_IDLE_NR_FLOW=1: the neural-size flow adaptation is skipped while no neural layer or reuse pass reads it");
+        return set;
+    }();
+    return on;
+}
+// Written by noteSrTimings (VEYRA_EXP_SR_BUDGET_MS), read when the pass is recorded; 0 = the user's level.
+std::atomic<uint32_t>& srBudgetLevel(){static std::atomic<uint32_t> level{0};return level;}
+// The level evaluated by the single standard RTX Video SR pass (any other choice is returned unchanged).
+engine::PushSrLevel srLevelFor(uint32_t configured){
+    return engine::pushSrEffectiveLevel(configured,engine::pushSrLevelRequest().load(std::memory_order_relaxed),srFixedLevel(),
+        srBudgetLevel().load(std::memory_order_relaxed));
 }
 
 // N1 packed capture ingress helpers. Codes match pipeline::packedInputCode:
@@ -228,6 +290,15 @@ float EnhanceGraph::outputDitherStep() const{
     if(hdr10Output())return 1.0f/1023.0f;
     if(desc_.hdrOutput)return 0.0f;   // FP16 target: nothing to quantise
     return 1.0f/255.0f;
+}
+// PushFPS restoration: a debanded gradient bands again when the final 8- or 10-bit write rounds it, so a
+// frame the clean-up stage changed is written with the ordered dither that keeps black exact (ScaleBlit.hlsl
+// OrderedDitherRound, after libplacebo's sh_dither). 0 = the write is exactly as without the stage.
+float EnhanceGraph::cleanDitherSteps() const{
+    if(!cleanRanLast_)return 0.0f;
+    if(hdr10Output())return 1023.0f;
+    if(desc_.hdrOutput)return 0.0f;   // FP16 target: nothing to quantise here
+    return 255.0f;
 }
 void EnhanceGraph::refreshColorTables(){
     auto effective=desc_.color;
@@ -773,7 +844,8 @@ bool EnhanceGraph::initialize(const EnhanceGraphDesc& desc)
     const bool videoRestore=!desc.stillImage&&desc.videoSrQuality>=1&&desc.videoSrQuality<=4;
     srEnabled_ = desc.enableSr && (srcW_ != workW_ || srcH_ != workH_ || videoRestore || srPrescaleActive() || srResolveActive());
     lmxxfNr_ = context_.adapter().vendorId == 0x1002 || desc.nrRuntime == engine::NrRuntime::LmxxfAmd;
-    if(context_.adapter().vendorId==0x1002 && desc_.opticalFlowBackend==engine::OpticalFlowBackend::Nvidia)
+    // PushFPS: any non-NVIDIA adapter (AMD as before, now also Intel and unknown vendors) uses FidelityFX flow.
+    if(!context_.adapter().isNvidia && desc_.opticalFlowBackend==engine::OpticalFlowBackend::Nvidia)
         desc_.opticalFlowBackend=engine::OpticalFlowBackend::AmdFidelityFx;
     nrEnabled_ = desc.enableNr && !desc.noFeatures && (!desc.noNgx || lmxxfNr_);
     fgEnabled_ = desc.enableFg && !desc.noFeatures && !desc.stillImage &&
@@ -860,7 +932,10 @@ bool EnhanceGraph::initialize(const EnhanceGraphDesc& desc)
     const bool reuseRequested=desc_.nrReusePreview&&desc_.enableNr&&desc_.nrReuse!=engine::NrReuseMode::Off;
     const uint64_t reuseBytes=reuseRequested?uint64_t(desc_.finalNrAfterSr()?workW_:srcW_)*(desc_.finalNrAfterSr()?workH_:srcH_)*16u+
         uint64_t(nvofW_)*nvofH_*20u:0;
-    const uint64_t estimate=reuseBytes+temporalHdrBytes+dlaaBytes+vfxSrBytes+dualBytes+supersampleBytes+uint64_t(workW_)*workH_*(76u+4u*generatedTextures)+vfgSharedBytes
+    // Stream "s12-hud" (review SHOULD 7): HUD Guard's textures with Live HUD Lock (change, state, mask, the cleaned copy).
+    const uint64_t hudGuardBytes=desc_.hudLock&&desc_.enableFg?PushHudGuardPass::textureBytes(workW_,workH_,true)+
+        2u*uint64_t(workW_)*workH_*(desc_.hdrOutput&&!hdr10Output()?8u:4u):0;   // + the lock's two private real-frame copies
+    const uint64_t estimate=hudGuardBytes+reuseBytes+temporalHdrBytes+dlaaBytes+vfxSrBytes+dualBytes+supersampleBytes+uint64_t(workW_)*workH_*(76u+4u*generatedTextures)+vfgSharedBytes
         +nrTextureBytes+fullLayerBytes
         +uint64_t(srcW_)*srcH_*(32u+(desc_.protectionBeforeSr()?8u:0u))+temporalBytes+tailColorBytes+interProtectionBytes
         +(flowRefine_?uint64_t(nvofW_)*nvofH_*(flowConsistency_?13u:flowClaims_?18u:12u)+uint64_t(workW_)*workH_*4u:0)
@@ -905,11 +980,13 @@ bool EnhanceGraph::initialize(const EnhanceGraphDesc& desc)
     if (!initNvof()) { failedBackend_=engine::FailedBackend::OpticalFlow; return false; }
     if (!initFsrSr()) return false;
     if (!initNis()) return false;
+    if (!initClean()) return false;
     if (!initFsrFg()) return false;
     if (!initVfg()) return false;
     if (!initAmfFrc()) return false;
     if (!initPushFlow()) return false;
     if (!initHudLock()) return false;
+    if (!initPredict()) return false;   // stream "predict": nothing unless the Lower delay row or VEYRA_EXP_RP_FG_SCHEDULE=onepredicted
     if(nrEnabled_&&GetEnvironmentVariableW(L"VEYRA_TEST_NR_INIT_FAILURE",nullptr,0)){
         failedBackend_=engine::FailedBackend::Nr;
         veyra::log::error("backend-recovery-test","test-only NR initialization rejection before SDK call; not a hardware failure");return false;
@@ -923,6 +1000,7 @@ bool EnhanceGraph::initialize(const EnhanceGraphDesc& desc)
         if(firstTemporal&&!createSignedHdrRestore(firstSrHdrRestore_,desc_.firstSrWidth,desc_.firstSrHeight))return false;
     }
     if (!createComputePasses()) return false;
+    (void)initStreamChange();   // PushFPS experiment VEYRA_EXP_RP_STREAM_DEDUP; nothing unless the switch is set
 
     initialized_ = true;
     failedBackend_=engine::FailedBackend::None;
@@ -1098,6 +1176,9 @@ bool EnhanceGraph::createResources()
     if(!createBeautyShared())return false;
     videoFrame_[0] = makeTexture(context_.device(), workW_, workH_, outputFormat(), true);
     videoFrame_[1] = makeTexture(context_.device(), workW_, workH_, outputFormat(), true);
+    // Debug names (stream "s12-hud", D3D12_1047.md): the debug layer and DRED name the resource in their messages.
+    if(videoFrame_[0])videoFrame_[0]->SetName(L"Veyra real frame 0");
+    if(videoFrame_[1])videoFrame_[1]->SetName(L"Veyra real frame 1");
     if(desc_.exclusion.enabled){
         for(auto& texture:exclusionVideo_){
             texture=makeTexture(context_.device(),workW_,workH_,outputFormat(),true);
@@ -1122,6 +1203,7 @@ bool EnhanceGraph::createResources()
         const bool used=fgEnabled_&&i<usedCount;
         genFrame_[i]=makeTexture(context_.device(),used?workW_:1,used?workH_:1,outputFormat(),true);
         if(!genFrame_[i])return false;
+        genFrame_[i]->SetName((L"Veyra generated frame "+std::to_wstring(i)).c_str());
     }
     nrZeroMotion_ = makeTexture(context_.device(), workW_, workH_, DXGI_FORMAT_R16G16_FLOAT, false);
     nrZeroDepth_ = makeTexture(context_.device(), workW_, workH_, DXGI_FORMAT_R32_FLOAT, false);
@@ -1551,10 +1633,191 @@ bool EnhanceGraph::initNis() {
     return true;
 }
 
+// PushFPS: restoration of the compressed stream (PushCleanPass, engine/PushClean.h, docs/RESTORATION.md).
+// The stage and its one texture exist only when EnhancementSettings::clean is above 0; a pass that cannot
+// be created leaves the picture as decoded rather than failing the graph. Unverified on Windows.
+bool EnhanceGraph::initClean() {
+    cleanPass_.reset();cleanFrame_=0;cleanKeptReference_=false;cleanRanLast_=false;
+    if(!desc_.clean)return true;
+    auto pass=std::make_unique<PushCleanPass>();
+    if(!pass->initialize(context_.device(),srcW_,srcH_,desc_.hdrWorking())){
+        veyra::log::error("clean",std::format("restoration unavailable at {}x{}; the picture stays as decoded",srcW_,srcH_));
+        return true;
+    }
+    cleanPass_=std::move(pass);
+    return true;
+}
+// Runs on the converted picture (srcRgba_), in place, before anything reads it: every upscaler, neural
+// layer and frame generator sees the cleaned picture. Strength, HUD protection and parts are read live
+// (engine::pushCleanLive); at strength 0 nothing is dispatched. The comparison reference (the console's
+// own picture) is taken first when this frame keeps one.
+void EnhanceGraph::runClean(ID3D12GraphicsCommandList* list,unsigned parity,bool retainReferences){
+    cleanKeptReference_=false;cleanRanLast_=false;
+    const auto live=engine::pushCleanLive();
+    engine::PushCleanSettings settings;
+    settings.strength=live.strength;settings.hudProtect=live.hudProtect;settings.parts=live.parts;
+    settings.seed=engine::pushCleanFrameSeed(live.parts,cleanFrame_++);
+    if(!cleanPass_||settings.strength<=0||(settings.parts&engine::kPushCleanAllParts)==0)return;
+    if(retainReferences&&!colorGradeActive()&&!desc_.exclusion.enabled){
+        tracker_.transition(list,srcRgba_.Get(),D3D12_RESOURCE_STATE_COPY_SOURCE);
+        tracker_.transition(list,sourceReferences_[parity].Get(),D3D12_RESOURCE_STATE_COPY_DEST);
+        list->CopyResource(sourceReferences_[parity].Get(),srcRgba_.Get());
+        tracker_.transition(list,sourceReferences_[parity].Get(),D3D12_RESOURCE_STATE_COMMON);
+        cleanKeptReference_=true;
+    }
+    gpuTimer_.mark(list,GpuStage::Clean);
+    cleanRanLast_=cleanPass_->dispatch(list,tracker_,settings);
+    gpuTimer_.mark(list,GpuStage::Clean,true);
+    tracker_.transition(list,srcRgba_.Get(),D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+}
+
 // PushFPS: Live HUD Lock (PushHudLock). Graph frame generation only (XeSS generates
 // inside its presenter); a pass that cannot be created leaves frame generation as it was.
+// Stream "predict" (PushPredict.h, PushPredictPass.h): the predicted-frame pass and its flow, created only when the
+// "Lower delay" row is on (desc_.lowDelay: switching it with VFG at 3X rebuilds the graph, requiresGraphRebuild) or
+// VEYRA_EXP_RP_FG_SCHEDULE=onepredicted (environment, read once per process: the test kit), and VFG generates at 3X in a
+// format its buffers carry. Neither: returns at once, creates and logs nothing. A pass that cannot be created never
+// fails the graph: every pair then runs today's schedule (refusal pass-unavailable).
+bool EnhanceGraph::initPredict() {
+    predict_.reset();
+    predictDeclined_=PushPredictRefusal::Ok;
+    predictCheck_.reset();
+    static const PushPairSchedule fromSwitch=[]{
+        wchar_t value[32]{};const DWORD n=GetEnvironmentVariableW(L"VEYRA_EXP_RP_FG_SCHEDULE",value,32);
+        return n>0&&n<32?pushFgScheduleFromSwitch(std::wstring_view(value,n)):PushPairSchedule::Interpolate;
+    }();
+    const PushPairSchedule asked=pushPredictAsked(fromSwitch,desc_.lowDelay);
+    predictAsked_=asked==PushPairSchedule::OnePredicted;
+    predictFromSwitch_=fromSwitch==PushPairSchedule::OnePredicted;
+    predictBuiltAtMs_=steadyMs();earlyRetryUsed_=false;earlyRetryAtMs_=-1;
+    seenRetryEpoch_=engine::pushLowDelayShared().retryEpoch.load(std::memory_order_relaxed);
+    if(asked!=PushPairSchedule::OnePredicted)return true;
+    const auto format=outputFormat();
+    const bool formatOk=format==DXGI_FORMAT_R8G8B8A8_UNORM||format==DXGI_FORMAT_R10G10B10A2_UNORM;
+    predictDeclined_=pushPredictCreateRefusal(asked,fgEnabled_,vfgBackend_!=nullptr,pushFlow_||amfFrc_,presentSinkFg(),desc_.fgMultiplier,formatOk);
+    if(!pushPredictCreate(asked,fgEnabled_,vfgBackend_!=nullptr,pushFlow_||amfFrc_,presentSinkFg(),desc_.fgMultiplier,formatOk)){
+        veyra::log::info("push-predict",std::format("not created: vfg={} multiplier={} format={} presentSink={} (the Lower delay row or VEYRA_EXP_RP_FG_SCHEDULE=onepredicted needs VFG at 3X in RGBA8 or RGB10A2)",
+            vfgBackend_!=nullptr,desc_.fgMultiplier,unsigned(format),presentSinkFg()));
+        return true;
+    }
+    auto pass=std::make_unique<PushPredictPass>();
+    const auto flow=pushPredictFlowExtent(workW_,workH_);
+    // The motion source's self-check runs inside initializeFlow (once per run for this device and size): the row says so.
+    engine::pushLowDelayShared().checking.store(true,std::memory_order_relaxed);
+    const bool passMade=pass->initialize(context_.device(),workW_,workH_,format)&&pass->initializeFlow(context_.device(),flow.width,flow.height);
+    engine::pushLowDelayShared().checking.store(false,std::memory_order_relaxed);
+    if(!passMade){
+        // REL16 delta MUST 2: a self-check frame may still be on the GPU using the pass's own objects: kept, never destroyed.
+        if(pass->gpuMayStillUse()){(void)pass.release();veyra::log::warn("push-predict","the predicted-frame pass is kept for the rest of this run (a self-check frame may still be on the GPU)");}
+        veyra::log::warn("push-predict","pass or flow not created; every pair keeps today's schedule");
+        return true;
+    }
+    // Package 16, item 2: with Live HUD Lock, P's locked pixels come from a copy of B (PushHudLock::kPredictedHeld), so
+    // P's lists never touch the real frame's own texture: one more working-size texture (about 33 MB at 3840x2160 in
+    // RGBA8 or RGB10A2), only with HUD Lock and the pass.
+    if(hudLock_&&!hudLock_->enablePredictedHeld(context_.device())){
+        veyra::log::warn("push-predict","the Live HUD Lock copy for predicted frames could not be created; every pair keeps today's schedule");
+        return true;
+    }
+    predict_=std::move(pass);
+    {   // Package 16, item 7: what keeping the pass costs in memory (arithmetic on its own allocations; GPU DIS's internal
+        // pyramids and buffers are not counted). Kept for the rest of the run once created (pushLowDelayKeepPass).
+        const double flowBytes=double(flow.width)*double(flow.height)*(2.0*2.0*4.0+2.0*4.0+2.0*1.0);   // per slot: 2 BGRA8 pictures, RG16F flow, R8 trust
+        const double heldBytes=hudLock_&&hudLock_->predictedHeld()?double(workW_)*double(workH_)*4.0:0.0;
+        veyra::log::info("push-predict",std::format("kept: about {:.1f} MB of textures (flow {:.1f} MB at {}x{}, HUD Lock copy {:.1f} MB; GPU DIS internals not counted); no GPU work while the row is off",
+            (flowBytes+heldBytes)/1048576.0,flowBytes/1048576.0,flow.width,flow.height,heldBytes/1048576.0));
+    }
+    // Package 16, item 2: the test-only check (PushPredictCheck.h), never created without its switch.
+    static const bool checkSwitch=GetEnvironmentVariableW(L"VEYRA_TEST_PREDICT_CHECK",nullptr,0)>0||GetEnvironmentVariableW(L"VEYRA_TEST_FAKE_VFG",nullptr,0)>0;
+    if(checkSwitch){
+        auto check=std::make_unique<PredictCheck>();
+        auto* device=context_.device();
+        const auto readback=[&](UINT64 bytes){
+            ComPtr<ID3D12Resource> r;
+            D3D12_RESOURCE_DESC bd{};bd.Dimension=D3D12_RESOURCE_DIMENSION_BUFFER;bd.Width=bytes;bd.Height=1;bd.DepthOrArraySize=1;bd.MipLevels=1;bd.SampleDesc.Count=1;bd.Layout=D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+            D3D12_HEAP_PROPERTIES hp{};hp.Type=D3D12_HEAP_TYPE_READBACK;
+            if(FAILED(device->CreateCommittedResource(&hp,D3D12_HEAP_FLAG_NONE,&bd,D3D12_RESOURCE_STATE_COPY_DEST,nullptr,IID_PPV_ARGS(&r))))r.Reset();
+            return r;
+        };
+        D3D12_RESOURCE_DESC td{};td.Dimension=D3D12_RESOURCE_DIMENSION_TEXTURE2D;td.Width=workW_;td.Height=workH_;td.DepthOrArraySize=1;td.MipLevels=1;td.Format=format;td.SampleDesc.Count=1;
+        UINT64 bytes=0;device->GetCopyableFootprints(&td,0,1,0,&check->colour,nullptr,nullptr,&bytes);
+        check->p=readback(bytes);check->b=readback(bytes);
+        bool ok=check->p&&check->b;
+        if(hudLock_){
+            td.Format=DXGI_FORMAT_R16G16_FLOAT;UINT64 stateBytes=0;
+            device->GetCopyableFootprints(&td,0,1,0,&check->stateFootprint,nullptr,nullptr,&stateBytes);
+            check->state=readback(stateBytes);check->hud=true;ok=ok&&check->state;
+        }
+        check->tenBit=format==DXGI_FORMAT_R10G10B10A2_UNORM;
+        check->boxes.enabled=desc_.exclusion.enabled;check->boxes.feather=desc_.exclusion.featherPixels;
+        for(unsigned i=0;i<4;++i)check->boxes.regions[i]=engine::protectionConstants(desc_.exclusion.regions[i]);
+        if(ok){predictCheck_=std::move(check);veyra::log::info("push-predict",std::format("test-only check on (VEYRA_TEST_PREDICT_CHECK / VEYRA_TEST_FAKE_VFG): one predicted frame in {} is read back with its real frame; a checked pair's real frame waits for the whole pair",kPushPredictCheckEvery));}
+        else veyra::log::warn("push-predict","test-only check: readback buffers not created");
+    }
+    return true;
+}
+
+// Package 16, item 2 (test-only): copy the final P, the presented B and the HUD Lock state into readback buffers. The
+// caller lets this pair's real frame wait for the whole pair (it reads B's texture here).
+bool EnhanceGraph::recordPredictCheck(ID3D12GraphicsCommandList* list,unsigned predictedSlot,ID3D12Resource* presentedReal){
+    if(!predictCheck_||!list||!presentedReal)return false;
+    auto& c=*predictCheck_;
+    const auto copy=[&](ID3D12Resource* texture,ID3D12Resource* readback,const D3D12_PLACED_SUBRESOURCE_FOOTPRINT& footprint){
+        tracker_.transition(list,texture,D3D12_RESOURCE_STATE_COPY_SOURCE);
+        D3D12_TEXTURE_COPY_LOCATION src{};src.pResource=texture;src.Type=D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;src.SubresourceIndex=0;
+        D3D12_TEXTURE_COPY_LOCATION dst{};dst.pResource=readback;dst.Type=D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;dst.PlacedFootprint=footprint;
+        list->CopyTextureRegion(&dst,0,0,0,&src,nullptr);
+        tracker_.transition(list,texture,D3D12_RESOURCE_STATE_COMMON);
+    };
+    copy(genFrame_[predictedSlot].Get(),c.p.Get(),c.colour);
+    copy(presentedReal,c.b.Get(),c.colour);
+    if(c.hud&&hudLock_&&hudLock_->state())copy(hudLock_->state(),c.state.Get(),c.stateFootprint);
+    c.inFlight=true;
+    return true;
+}
+
+// Package 16, item 2 (test-only): compare a completed readback and log it (PushPredictCheck.h).
+void EnhanceGraph::collectPredictCheck(){
+    if(!predictCheck_||!predictCheck_->inFlight||context_.fence()->GetCompletedValue()<predictCheck_->fence)return;
+    auto& c=*predictCheck_;
+    c.inFlight=false;
+    void *p=nullptr,*b=nullptr,*state=nullptr;
+    const D3D12_RANGE none{0,0};
+    const bool mapped=SUCCEEDED(c.p->Map(0,nullptr,&p))&&p&&SUCCEEDED(c.b->Map(0,nullptr,&b))&&b&&(!c.hud||(SUCCEEDED(c.state->Map(0,nullptr,&state))&&state));
+    if(mapped){
+        PushHudLockStateView view;
+        if(c.hud&&hudLock_){view.data=static_cast<const uint8_t*>(state)+c.stateFootprint.Offset;view.rowPitch=c.stateFootprint.Footprint.RowPitch;view.width=workW_;view.height=workH_;view.outputMode=hudLock_->outputMode();}
+        const auto counts=pushPredictCheck(static_cast<const uint8_t*>(p)+c.colour.Offset,c.colour.Footprint.RowPitch,static_cast<const uint8_t*>(b)+c.colour.Offset,c.colour.Footprint.RowPitch,
+            workW_,workH_,c.tenBit,view,c.boxes);
+        ++c.checks;c.total.hudLocked+=counts.hudLocked;c.total.hudLockMismatch+=counts.hudLockMismatch;c.total.excluded+=counts.excluded;c.total.exclusionMismatch+=counts.exclusionMismatch;
+        veyra::log::info("push-predict",std::format("hudLockMismatch={} hudLocked={} exclusionMismatch={} excluded={} checks={} totalHudLockMismatch={} totalExclusionMismatch={} hudLock={} boxes={} tenBit={} (test-only: fully locked / excluded pixels of a predicted frame that differ from its real frame)",
+            counts.hudLockMismatch,counts.hudLocked,counts.exclusionMismatch,counts.excluded,c.checks,c.total.hudLockMismatch,c.total.exclusionMismatch,c.hud,c.boxes.enabled,c.tenBit));
+    }else veyra::log::warn("push-predict","test-only check: readback not mapped");
+    if(p)c.p->Unmap(0,&none);
+    if(b)c.b->Unmap(0,&none);
+    if(state)c.state->Unmap(0,&none);
+}
+
+const char* EnhanceGraph::predictAloneModeName()const{return vfgBackend_?pushVfgAloneModeName(vfgBackend_->aloneMode()):"none";}
+
+PushPredictRefusal EnhanceGraph::predictStaticRefusal(unsigned multiplier)const{
+    // e2e scenario m2: no pass because of the graph's shape (configured 2X, not VFG, format, present sink): that reason.
+    if(!predict_&&predictAsked_&&predictDeclined_!=PushPredictRefusal::Ok&&predictDeclined_!=PushPredictRefusal::SwitchOff)return predictDeclined_;
+    PushPredictEligibility pe;
+    pe.requested=predict_?PushPairSchedule::OnePredicted:PushPairSchedule::Interpolate;
+    pe.vfg=vfgBackend_&&!pushFlow_&&!amfFrc_;
+    pe.multiplier=multiplier;
+    pe.hudLock=hudLock_!=nullptr;pe.exclusion=desc_.exclusion.enabled;pe.presentSinkFg=presentSinkFg();
+    pe.formatSupported=predict_&&predict_->format()==outputFormat();
+    pe.passReady=predictAvailable();
+    pe.vfgRefused=engine::pushLowDelayShared().vfgRefused.load(std::memory_order_relaxed);
+    return pushPredictStaticRefusal(pe);
+}
+
 bool EnhanceGraph::initHudLock() {
+    hudGuard_.reset();
     hudLock_.reset();
+    hudReal_[0].Reset();hudReal_[1].Reset();
     if(!desc_.hudLock||!fgEnabled_||presentSinkFg())return true;
     auto pass=std::make_unique<PushHudLock>();
     if(!pass->initialize(context_.device(),workW_,workH_,outputFormat(),hdr10Output()?2u:desc_.hdrOutput?1u:0u)){
@@ -1562,11 +1825,116 @@ bool EnhanceGraph::initHudLock() {
         return true;
     }
     hudLock_=std::move(pass);
+    // Stream "s12-hud" (D3D12_1047.md): the lock and the guard read the real frames from private copies made in each real
+    // frame's own base list. They read the PREVIOUS real frame A in the next pair's lists, while the presentation queue may
+    // still be showing A from the graph's own texture: two queues using one non-simultaneous-access texture without a
+    // fence (debug layer id=1047 in every e2e run with Live HUD Lock). The copies are used by the graph's queue only.
+    for(unsigned i=0;i<2;++i){
+        hudReal_[i]=makeTexture(context_.device(),workW_,workH_,outputFormat(),false);
+        if(hudReal_[i])hudReal_[i]->SetName((L"PushFPS HUD Lock real copy "+std::to_wstring(i)).c_str());
+    }
+    if(!hudReal_[0]||!hudReal_[1]){
+        hudReal_[0].Reset();hudReal_[1].Reset();
+        veyra::log::warn("hud-lock","the private copies of the real frames could not be created: the lock reads the real frames themselves (as Package 16)");
+    }
+    // Stream "s12-hud": HUD Guard, part of Live HUD Lock (no row of its own). VEYRA_TEST_RP_LEGACY_HUD_GUARD = 1 (or
+    // PACKAGE16 = 1): the lock alone, as Package 16; _HUD_GUARD_CLEAN = 1: compose only, no pre-clean of VFG's input.
+    const auto env=engine::pushEnvironment();
+    if(engine::pushLegacyRestored(engine::PushLegacyPart::HudGuard17,env)){
+        veyra::log::info("hud-guard","not created: VEYRA_TEST_RP_LEGACY_HUD_GUARD (or PACKAGE16) restores Package 16's Live HUD Lock");
+        return true;
+    }
+    auto guard=std::make_unique<PushHudGuardPass>();
+    const bool preClean=!engine::pushLegacyRestored(engine::PushLegacyPart::HudGuardClean17,env);
+    if(!guard->initialize(context_.device(),workW_,workH_,outputFormat(),hdr10Output()?2u:desc_.hdrOutput?1u:0u,preClean)){
+        veyra::log::error("hud-guard",std::format("HUD Guard unavailable at {}x{}; Live HUD Lock runs as in Package 16",workW_,workH_));
+        return true;
+    }
+    hudGuard_=std::move(guard);
     return true;
+}
+// PushFPS experiment VEYRA_EXP_RP_STREAM_DEDUP: the change of a hardware-decoded picture against
+// the one measured before it, read back as result words (pipeline/StreamChangePass.h). The pass
+// and its stores are created with the graph when the switch is set (initStreamChange), never on a
+// live frame. The engine thread calls measureStreamChange before EnhanceGraph::process for the
+// same frame; the wait inside ends at deadline100ns at the latest. Unverified on Windows.
+bool EnhanceGraph::initStreamChange(){
+    wchar_t value[4]{};
+    const DWORD length=GetEnvironmentVariableW(L"VEYRA_EXP_RP_STREAM_DEDUP",value,4);
+    if(length==0||length>=4||!engine::PushStreamDedup::switchedOn(std::wstring_view(value,length)))return true;   // off: nothing exists
+    if(desc_.wideYuvInput()){
+        // 10-bit and HDR pictures are refused: the classifier's thresholds were chosen on 8-bit SDR only.
+        streamChangeFailed_=true;
+        veyra::log::warn("stream-change","10-bit / HDR input is not supported by VEYRA_EXP_RP_STREAM_DEDUP; decoded pictures are not numbered");
+        return true;
+    }
+    auto runner=std::make_unique<StreamChangeRunner>();
+    if(!runner->initialize(context_.device(),ring_.queue(),desc_.sourceWidth,desc_.sourceHeight)){
+        streamChangeFailed_=true;
+        veyra::log::warn("stream-change","the measurement pass could not be created; decoded pictures are not numbered");
+        return true;   // the graph works without it
+    }
+    streamChange_=std::move(runner);
+    return true;
+}
+void EnhanceGraph::settleStreamChange(){
+    // A decoder picture held for a measurement that timed out is let go as soon as its list has
+    // finished, also when no further picture is measured.
+    if(streamChangeFrame_&&(!streamChange_||!streamChange_->reading()))streamChangeFrame_.reset();
+}
+StreamChangeOutcome EnhanceGraph::measureStreamChange(const AVFrame* frame,int64_t deadline100ns){
+    StreamChangeOutcome outcome;
+    if(!initialized_||streamChangeFailed_||!streamChange_||!frame||frame->format!=AV_PIX_FMT_D3D12||frame->width<=0||frame->height<=0)return outcome;
+    auto* d3dFrame=reinterpret_cast<AVD3D12VAFrame*>(frame->data[0]);
+    if(d3dFrame==nullptr||d3dFrame->texture==nullptr)return outcome;
+    if(!streamChange_->ready()){
+        streamChangeFailed_=true;settleStreamChange();
+        veyra::log::warn("stream-change","the measurement stopped (see the line above); decoded pictures are not numbered until the graph is rebuilt");
+        return outcome;
+    }
+    if(d3dFrame->texture->GetDesc().Format!=DXGI_FORMAT_NV12){
+        // P010 / P016: 10-bit or HDR. Refused, said once.
+        streamChangeFailed_=true;settleStreamChange();
+        veyra::log::warn("stream-change","the decoder's pictures are not 8-bit NV12 (10-bit / HDR): not supported by VEYRA_EXP_RP_STREAM_DEDUP; decoded pictures are not numbered");
+        return outcome;
+    }
+    if(streamChangeWaitLeft(deadline100ns,StreamChangeRunner::now100ns())<=0){
+        // No time (a presentation is due): nothing is cloned, recorded or dispatched for this picture.
+        outcome=streamChange_->noTime();
+        settleStreamChange();
+        return outcome;
+    }
+    // The list reads the decoder's texture until its fence, and the caller's frame only covers this
+    // call. So a reference of our own is taken on every call, before anything is submitted, and it
+    // is kept whenever a list that reads this picture may still run (a wait that timed out, or an
+    // error after the list was submitted): a decoder surface is never released or reused under a
+    // list. It replaces the reference held before only then: a new list is recorded only after the
+    // earlier one was seen to finish. Held no longer than that: a surface kept back is one the
+    // decoder cannot reuse.
+    AVFrame* cloned=av_frame_clone(frame);
+    if(!cloned)return outcome;
+    std::shared_ptr<AVFrame> held(cloned,[](AVFrame* value){av_frame_free(&value);});
+    outcome=streamChange_->measure(ring_.queue(),d3dFrame->texture,static_cast<UINT>(d3dFrame->subresource_index),
+        uint32_t(frame->width),uint32_t(frame->height),d3dFrame->sync_ctx.fence,d3dFrame->sync_ctx.fence_value,deadline100ns);
+    if(outcome.reading)streamChangeFrame_=std::move(held);
+    else settleStreamChange();
+    return outcome;
+}
+void EnhanceGraph::streamChangeCounters(uint64_t& measured,uint64_t& timeouts,uint64_t& failures,double& waitMsMax,double& waitMsMean) const{
+    measured=timeouts=failures=0;waitMsMax=waitMsMean=0;
+    if(!streamChange_)return;
+    const auto& counters=streamChange_->counters();
+    measured=counters.measured;timeouts=counters.timeouts+counters.skipped+counters.notDispatched;failures=counters.failures;waitMsMax=counters.waitMsMax;
+    const uint64_t waited=counters.measured+counters.timeouts;
+    waitMsMean=waited?counters.waitMsSum/double(waited):0.0;
 }
 void EnhanceGraph::composeHudLock(ID3D12GraphicsCommandList* list,unsigned generatedSlot,unsigned heldParity){
     if(hudLock_&&!hudLock_->compose(list,tracker_,generatedSlot,heldParity))
         veyra::log::warn("hud-lock",std::format("compose skipped slot={} held={}",generatedSlot,heldParity));
+}
+void EnhanceGraph::composeHudGuard(ID3D12GraphicsCommandList* list,unsigned generatedSlot,unsigned parity,float t,unsigned source){
+    if(hudGuard_&&!hudGuard_->compose(list,tracker_,generatedSlot,parity,t,source))
+        veyra::log::warn("hud-guard",std::format("compose skipped slot={} parity={} source={}",generatedSlot,parity,source));
 }
 
 bool EnhanceGraph::fsrActive() const { return fsrFgBackend_&&fsrFgBackend_->available(); }
@@ -1809,6 +2177,7 @@ bool EnhanceGraph::initNgxFeatures()
         veyra::log::error("graph", std::format("NR snippet init failed 0x{:X}", nrResult_));
         return false;
     }
+    nrSnippetInitialized_ = true;
     }
     failedBackend_=engine::FailedBackend::NgxCore;
     ngxParams_ = coreHost_->allocateParameters(st);
@@ -2093,7 +2462,7 @@ bool EnhanceGraph::createAutoNrPool() {
     const bool admitted=nrEnabled_&&!srEnabled_&&!fgEnabled_&&!lmxxfNr_&&!desc_.hdrWorking()&&!desc_.stillImage&&
         !desc_.noFeatures&&!desc_.noNgx&&!desc_.runtimeNodeOrder&&!desc_.nrTemporal&&desc_.nrHoldStrength==0&&
         engine::currentNrRuntime(desc_.nrRuntime)==engine::NrRuntime::Ampere&&desc_.opticalFlowBackend==engine::OpticalFlowBackend::Nvidia&&
-        context_.adapter().deviceId==0x2f04&&context_.adapter().isNvidia&&index<nrInstances_.size()&&nrInstances_.size()+4<=8&&
+        (context_.adapter().deviceId==0x2f04||[]{wchar_t v[4]{};return GetEnvironmentVariableW(L"VEYRA_EXP_NR_AUTO_CAPABILITY",v,4)==1&&v[0]==L'1';}())&&context_.adapter().isNvidia&&index<nrInstances_.size()&&nrInstances_.size()+4<=8&&   // PushFPS: other cards only with the experiment switch =1 exactly (as the bridge); the measured headroom check below still decides
         workW_==1920&&workH_==1080&&desc_.nrLayersExtent[index]==Extent{1920,1080}&&
         std::none_of(nrInstances_.begin(),nrInstances_.end(),[](const auto& layer){return layer->temporalEnabled;});
     if(!admitted){failedBackend_=engine::FailedBackend::Nr;log::error("nr-auto-pool","experimental admission refused; product entry points do not request this pool");return false;}
@@ -2307,6 +2676,14 @@ bool EnhanceGraph::createComputePasses()
     return true;
 }
 
+void EnhanceGraph::notePredictSessionEnd(bool deviceRemoved,bool engineError){
+    const bool rowOn=predictFromSwitch_||engine::pushLowDelayShared().wanted.load(std::memory_order_relaxed);
+    if(!predict_||!rowOn)return;
+    const std::int64_t age=lastPredictWorkMs_<0?-1:steadyMs()-lastPredictWorkMs_;
+    const auto action=engine::pushPlayFaultAction(deviceRemoved,engineError,true,rowOn,age,PushPredictPass::priorSuspect());
+    PushPredictPass::noteSessionEnd(int(action),deviceRemoved?"graphics device removed":"normal end");
+}
+
 bool EnhanceGraph::submitGraph(uint32_t slot) {
     if(!ring_.submitAndSignal(slot))return false;
     for(auto& layer:nrInstances_)if(layer->amd && !layer->amd->retireSubmitted()) { failedBackend_=engine::FailedBackend::Nr; return false; }
@@ -2318,11 +2695,13 @@ bool EnhanceGraph::createViews()
     bindSignedHdrRestore(firstSrHdrRestore_,srStageInput(),firstSrLinear_.Get());
     bindSignedHdrRestore(srHdrRestore_,desc_.dualSr?srPrescaled_.Get():srStageInput(),workRgba_.Get());
     if(nisPass_)nisPass_->createViews(context_.device(),stager_,srStageInput(),workRgba_.Get());
+    if(cleanPass_)cleanPass_->createViews(context_.device(),stager_,srcRgba_.Get());
     if(hudLock_){
-        ID3D12Resource* const real[2]={videoFrame_[0].Get(),videoFrame_[1].Get()};
+        ID3D12Resource* const real[2]={hudReal_[0]?hudReal_[0].Get():videoFrame_[0].Get(),hudReal_[1]?hudReal_[1].Get():videoFrame_[1].Get()};
         std::array<ID3D12Resource*,kGeneratedPoolSlots> generated{};
         for(size_t i=0;i<kGeneratedPoolSlots;++i)generated[i]=genFrame_[i].Get();
         hudLock_->createViews(context_.device(),stager_,real,generated.data(),unsigned(generated.size()));
+        if(hudGuard_)hudGuard_->createViews(context_.device(),stager_,real,generated.data(),unsigned(generated.size()),hudLock_->predictedHeld());
     }
     // Descriptor initialization is DEFAULT ON since the RAW-upload-SRV removal
     // (2026-09-06): texture SRV/UAV views keep the device alive and NVOF
@@ -2724,6 +3103,7 @@ bool EnhanceGraph::composeExclusion(ID3D12GraphicsCommandList* list,unsigned out
 
 bool EnhanceGraph::process(const AVFrame* frame, double ptsMs, bool reset, FrameOutputs& out, uint64_t sourceFrameId, const ColorDescription* color, const HardwareSurfaceInput* hardwareSurface, bool retainReferences, const FgAdmission& admitFg, unsigned previewMultiplier, bool pausedResidualRefresh, const std::function<void()>& previewCheckpoint)
 {
+    settleStreamChange();   // PushFPS experiment: a decoder picture held for a finished measurement is let go
     retainReferences=retainReferences||desc_.exclusion.enabled;
     reset=reset||nrAutoResetPending_;nrAutoResetPending_=false;
     frameFlowValid_=false;
@@ -2892,6 +3272,7 @@ bool EnhanceGraph::process(const AVFrame* frame, double ptsMs, bool reset, Frame
         if(auto* upload=(packed||desc_.yuy2Input)?captureUploadFrame(frame):nullptr;upload&&upload->direct&&upload->proxyValid&&upload->planes==1&&
            upload->device.Get()==context_.device()&&frame->data[0]==upload->mapped&&upload->width==srcW_&&upload->height==srcH_&&
            upload->pitch>=ingressTexels*4&&upload->pixelBytes==(packed&&desc_.packedInput>=6?4u:packed&&desc_.packedInput==1?3u:2u))gpuDirectFrame=upload;
+        if(!gpuDirectFrame)if(const auto* fallback=captureUploadFrame(frame);fallback&&!fallback->direct)++metrics_.captureUploadCpuCopies;   // stream "delay90"
         if(!gpuDirectFrame)for(uint32_t y=0;y<srcH_;++y){
             auto* dst=mappedRgb_[parity]+y*rgbPitch_;const auto* src=frame->data[0]+ptrdiff_t(y)*frame->linesize[0];
             if(packed||desc_.yuy2Input||frame->format==AV_PIX_FMT_RGBA)std::memcpy(dst,src,size_t(ingressRowBytes));
@@ -3012,6 +3393,7 @@ bool EnhanceGraph::process(const AVFrame* frame, double ptsMs, bool reset, Frame
         // CPU copy at all, the GPU copies from the frame's own buffer.
         if(auto* upload=sameLayout?captureUploadFrame(frame):nullptr;upload&&upload->direct&&upload->proxyValid&&upload->device.Get()==context_.device()&&
            frame->data[0]==upload->mapped&&upload->width==srcW_&&upload->height==srcH_&&upload->planes==2&&upload->pixelBytes==sampleBytes)gpuDirectFrame=upload;
+        if(!gpuDirectFrame)if(const auto* fallback=sameLayout?captureUploadFrame(frame):nullptr;fallback&&!fallback->direct)++metrics_.captureUploadCpuCopies;   // stream "delay90"
         if(gpuDirectFrame){
         }else if(sameLayout){
             // Native semiplanar capture already matches the upload textures.
@@ -3151,6 +3533,8 @@ bool EnhanceGraph::process(const AVFrame* frame, double ptsMs, bool reset, Frame
         tracker_.transition(list, nv12Texture, D3D12_RESOURCE_STATE_COMMON);
     }
     gpuTimer_.mark(list,GpuStage::Color,true);
+    gpuTimer_.mark(list,GpuStage::BaseTail);   // Package 16: the base passes after Color, up to the hand-over to generation
+    if(cleanPass_)runClean(list,parity,retainReferences);
     if (desc_.stageMark) desc_.stageMark("yuv");
     cpuTrace.mark("color");
     if(previewCheckpoint&&!reset)previewCheckpoint();
@@ -3247,7 +3631,7 @@ bool EnhanceGraph::process(const AVFrame* frame, double ptsMs, bool reset, Frame
         blitPass_.bind(list,enc,gpuHandleOf(blitPass_,prescaled?21:desc_.nrBeforeSr||sourcePostOutput_?18:0).ptr,gpuHandleOf(blitPass_,16).ptr);list->Dispatch((srInW_+15)/16,(srInH_+15)/16,1);tracker_.uavBarrier(list,videoSrInput_.Get());
         tracker_.transition(list,videoSrInput_.Get(),D3D12_RESOURCE_STATE_COMMON);tracker_.transition(list,videoSrOutput_.Get(),D3D12_RESOURCE_STATE_COMMON);
         if(vfxSrBackend_){if(!runVfx(*vfxSrBackend_,videoSrInput_.Get(),videoSrOutput_.Get()))return false;}
-        else if(!videoSrBackend_->evaluate(list,videoSrInput_.Get(),videoSrOutput_.Get(),desc_.dualSr?desc_.dualSrQuality:desc_.videoSrQuality)){failedBackend_=engine::FailedBackend::Sr;return false;}
+        else if(!videoSrBackend_->evaluate(list,videoSrInput_.Get(),videoSrOutput_.Get(),desc_.dualSr?desc_.dualSrQuality:srLevelFor(desc_.videoSrQuality).level)){failedBackend_=engine::FailedBackend::Sr;return false;}
         tracker_.uavBarrier(list,videoSrOutput_.Get());tracker_.transition(list,videoSrOutput_.Get(),D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);tracker_.transition(list,workRgba_.Get(),D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         // HDR restore and the resolve take the base that was encoded.
         const UINT restoreSet=prescaled?7:desc_.nrBeforeSr||sourcePostOutput_?4:0;
@@ -3404,7 +3788,8 @@ bool EnhanceGraph::process(const AVFrame* frame, double ptsMs, bool reset, Frame
             flowAdaptPass_.bind(list,c,gpuHandleOf(flowAdaptPass_,0).ptr,gpuHandleOf(flowAdaptPass_,descriptor).ptr);
             list->Dispatch((w+15)/16,(h+15)/16,1);tracker_.uavBarrier(list,output);tracker_.transition(list,output,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         };
-        adapt(nrFlow_.Get(),nrW_,nrH_,1);adapt(baseFlow_.Get(),workW_,workH_,2);
+        if(!engine::pipeIdleNrFlowSkippable(pipeIdleNrFlowSwitch(),nrInstances_.size(),nrReusePass_!=nullptr))adapt(nrFlow_.Get(),nrW_,nrH_,1);
+        adapt(baseFlow_.Get(),workW_,workH_,2);
         // Double SR temporal passes: a first DLSS SR pass in first-result pixels,
         // a second FSR pass in SR-input (render) pixels.
         if(firstSrFlow_)adapt(firstSrFlow_.Get(),desc_.firstSrWidth,desc_.firstSrHeight,firstSrFlowSet());
@@ -3631,7 +4016,7 @@ bool EnhanceGraph::process(const AVFrame* frame, double ptsMs, bool reset, Frame
         // Comparison references belong to this real-frame lease. Avoid the two
         // full-frame copies when comparison is disabled.
         auto retain=[&](ID3D12Resource* src,ID3D12Resource* dst){tracker_.transition(list,src,D3D12_RESOURCE_STATE_COPY_SOURCE);tracker_.transition(list,dst,D3D12_RESOURCE_STATE_COPY_DEST);list->CopyResource(dst,src);tracker_.transition(list,dst,D3D12_RESOURCE_STATE_COMMON);tracker_.transition(list,src,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);};
-        if(!colorGradeActive()&&!desc_.exclusion.enabled)retain(srcRgba_.Get(),sourceReferences_[parity].Get());
+        if(!colorGradeActive()&&!desc_.exclusion.enabled&&!cleanKeptReference_)retain(srcRgba_.Get(),sourceReferences_[parity].Get());
         if(baseReferences_[parity].Get()!=sourceReferences_[parity].Get())retain(workRgba_.Get(),baseReferences_[parity].Get());
     }
 
@@ -3992,7 +4377,7 @@ bool EnhanceGraph::process(const AVFrame* frame, double ptsMs, bool reset, Frame
         tracker_.transition(list, videoFrame_[parity].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         const float constants[8] = {
             uintBits(workW_), uintBits(workH_),
-            uintBits(workW_), uintBits(workH_), hdr10Output()?2.0f:desc_.hdrOutput?0.0f:1.0f, outputDitherStep(), 0, 0 };
+            uintBits(workW_), uintBits(workH_), hdr10Output()?2.0f:desc_.hdrOutput?0.0f:1.0f, outputDitherStep(), cleanDitherSteps(), 0 };
         blitPass_.bind(list, constants, gpuHandleOf(blitPass_, srcSlot).ptr, gpuHandleOf(blitPass_, uavSlot).ptr);
         list->Dispatch((workW_ + 15) / 16, (workH_ + 15) / 16, 1);
         tracker_.uavBarrier(list, videoFrame_[parity].Get());
@@ -4061,16 +4446,50 @@ bool EnhanceGraph::process(const AVFrame* frame, double ptsMs, bool reset, Frame
     // evaluation after it was the lone over-budget probe described at FgCostSettling.
     const bool pushFlowKeepsHistory=pushFlow_&&fgBackendAvailable&&!runFg&&historyValid;
     if(fgBackendAvailable&&!runFg){out.fgSkippedBeforeEval=out.fgCandidates;fgHistorySkipped_=!vfgRecordOnly&&!pushFlowKeepsHistory;}
+    gpuTimer_.mark(list,GpuStage::BaseTail,true);
+    // Stream "s12-hud": HUD Guard learns from this real frame (past frames only) BEFORE VFG's input copy, and with VFG
+    // cleans the copy VFG reads (the crosshair replaced by its background estimate): VFG then draws no copies of it; every
+    // generated frame gets the console's own pixels back in composeHudGuard. Not with "Lower delay" (its predicted frame
+    // and the HUD Lock copy are read from VFG's input buffers) and not for other generators (compose only).
+    ID3D12Resource* vfgSource=videoFrame_[parity].Get();
+    hudGuardCleanedPair_=false;
+    if(hudLock_&&hudReal_[parity]){
+        // The private copy of this real frame (see initHudLock): B is final here and not yet handed to the presenter.
+        tracker_.transition(list,videoFrame_[parity].Get(),D3D12_RESOURCE_STATE_COPY_SOURCE);
+        tracker_.transition(list,hudReal_[parity].Get(),D3D12_RESOURCE_STATE_COPY_DEST);
+        list->CopyResource(hudReal_[parity].Get(),videoFrame_[parity].Get());
+        tracker_.transition(list,hudReal_[parity].Get(),D3D12_RESOURCE_STATE_COMMON);
+        tracker_.transition(list,videoFrame_[parity].Get(),D3D12_RESOURCE_STATE_COMMON);
+    }
+    if(hudGuard_){
+        gpuTimer_.mark(list,GpuStage::HudGuard);
+        if(!hudGuard_->update(list,tracker_,parity,!prevValid_))veyra::log::warn("hud-guard","update skipped");
+        const bool vfgPair=(runFg||vfgRecordOnly)&&vfgBackend_&&!pushFlow_&&!amfFrc_;
+        // Review SHOULD 5: off only while a predicted pair is possible (the row is on, or the schedule asked), not for the
+        // whole run once the pass exists (it is kept after the first switch-on).
+        const bool lowerDelayNow=predict_&&(requestedSchedule_==PushPairSchedule::OnePredicted||predictFromSwitch_||
+                                            engine::pushLowDelayShared().wanted.load(std::memory_order_relaxed));
+        hudGuardPreClean_=!hudGuard_->preClean()?"off-switch":!vfgPair?(vfgBackend_?"off-no-pair":"off-not-vfg"):lowerDelayNow?"off-lower-delay":"on";
+        if(vfgPair&&hudGuard_->preClean()&&!lowerDelayNow){
+            if(hudGuard_->clean(list,tracker_,parity)){vfgSource=hudGuard_->cleaned();hudGuardCleanedPair_=true;}
+            else hudGuardPreClean_="off-failed";
+        }
+        gpuTimer_.mark(list,GpuStage::HudGuard,true);
+    }
     if((runFg||vfgRecordOnly)&&vfgBackend_){
         // First timestamp precedes the producer signal/CUDA dependency wait;
         // the matching end follows the consumer copy. The direct-queue span
         // therefore includes actual cross-queue work, not CPU wall time.
         if(runFg){gpuTimer_.mark(list,GpuStage::FgBatch);gpuTimer_.mark(list,GpuStage::Fg1);}
-        tracker_.transition(list,videoFrame_[parity].Get(),D3D12_RESOURCE_STATE_COPY_SOURCE);
+        tracker_.transition(list,vfgSource,D3D12_RESOURCE_STATE_COPY_SOURCE);
         // The same list tests A/B for a shot change on the GPU (VfgBackend);
-        // a reset pair has no valid A and is bypassed by ShotChange instead.
-        if(!vfgBackend_->capture(list,videoFrame_[parity].Get(),parity,!resetFg)){failedBackend_=engine::FailedBackend::Fg;return false;}
-        tracker_.transition(list,videoFrame_[parity].Get(),D3D12_RESOURCE_STATE_COMMON);
+        // a reset pair has no valid A and is bypassed by the shot-change test instead.
+        // Package 16: the copy into VFG's input and the cut test have their own stage; Fg1 still starts before them
+        // (unchanged, so gpu_fg1 stays comparable with earlier logs: VfgCapture is a part of it).
+        gpuTimer_.mark(list,GpuStage::VfgCapture);
+        if(!vfgBackend_->capture(list,vfgSource,parity,!resetFg)){failedBackend_=engine::FailedBackend::Fg;return false;}
+        gpuTimer_.mark(list,GpuStage::VfgCapture,true);
+        tracker_.transition(list,vfgSource,D3D12_RESOURCE_STATE_COMMON);
     }
     if(runFg&&amfFrc_){
         // As for VFG, the span from here to the copy back brackets AMF's own queue work.
@@ -4079,17 +4498,171 @@ bool EnhanceGraph::process(const AVFrame* frame, double ptsMs, bool reset, Frame
         if(!amfFrc_->capture(list,videoFrame_[parity].Get())){failedBackend_=engine::FailedBackend::Fg;return false;}
         tracker_.transition(list,videoFrame_[parity].Get(),D3D12_RESOURCE_STATE_COMMON);
     }
+    gpuTimer_.mark(list,GpuStage::RealCompose);   // Package 16
     if(!composeExclusion(list,parity,parity,presentSinkFg()))return false;
     // Live HUD Lock learns from this real frame against the previous one (enhanced colours).
     if(hudLock_&&!hudLock_->update(list,tracker_,parity,!prevValid_))veyra::log::warn("hud-lock","update skipped");
+    gpuTimer_.mark(list,GpuStage::RealCompose,true);
     if(!runFg)gpuTimer_.resolve(list);
+    noteBaseSubmit(sourceFrameId);   // Package 16: CPU submit time of the base list, against its GPU start (submitToGpuStartMs)
     if (!submitGraph(slot)) return false;
+    if(hudGuard_){   // stream "s12-hud": the counters of this update are readable once this list's fence completes
+        hudGuard_->submitted(ring_.lastSignaledValue());
+        const auto& g=gpuTimer_.last().gpu[size_t(GpuStage::HudGuard)];
+        hudGuard_->report(context_.fence()->GetCompletedValue(),g.milliseconds?*g.milliseconds:-1.0,hudGuardPreClean_);
+    }
+    // Review 1 MUST 2 / release review REL16 SHOULD 9: the clock calibration (at most once a second) runs when this
+    // function returns, after the pair's LAST submitGraph (the I and P lists are not delayed by it).
+    struct CalibrateOnReturn { EnhanceGraph* graph; ~CalibrateOnReturn() { graph->calibrateAfterSubmit(); } } calibrateOnReturn{this};
     if(!runFg)gpuTimer_.submitted(ring_.lastSignaledValue());
     out.videoFenceValue = ring_.lastSignaledValue();
     out.videoFenceObject = context_.fence();
+    // P's motion (FidelityFX, 25 Nov 2026): a real frame VFG captured goes into the flow in a list of its own after the
+    // base list (VFG's input buffer is read in COMMON there) while the schedule is active or within its last calm pairs
+    // before it may enter (below), whether or not this pair is predicted: FidelityFX keeps history and needs 7 frames
+    // after a reset, so it is warm when the schedule enters. Nothing while the row is off.
+    // Release review REL16 SHOULD 3: only while the schedule is active or about to enter (PushLowDelayShared::flowWanted,
+    // pushLowDelayFlowWanted), or for a pair asked to run predicted; a frame after one that was not fed restarts the
+    // flow's history (its warm-up is inside the lead of calm pairs before an entry).
+    const bool flowThisFrame=runFg&&predict_&&predict_->fidelityFlow()&&vfgBackend_&&vfgBackend_->inputBuffer(parity)&&
+       (requestedSchedule_==PushPairSchedule::OnePredicted||((predictFromSwitch_||engine::pushLowDelayShared().wanted.load(std::memory_order_relaxed))&&
+                                                             engine::pushLowDelayShared().flowWanted.load(std::memory_order_relaxed)));
+    const bool flowResume=engine::pushFlowResume(flowThisFrame,runFg,flowFedLastFrame_);   // REL16 delta MUST 1: a skipped pair is a gap
+    if(flowThisFrame){
+        lastPredictWorkMs_=steadyMs();
+        auto* flist=ring_.acquireNext(slot,st);if(!flist)return false;
+        gpuTimer_.mark(flist,GpuStage::Flow);
+        if(!predict_->recordFlowFrame(flist,parity,vfgBackend_->inputBuffer(parity),vfgBackend_->inputRowPitch(),realFrameIndex_+1,reset||!prevValid_||flowResume)&&!predictFailLogged_){
+            predictFailLogged_=true;veyra::log::warn("push-predict","the flow of a real frame was not recorded; pairs without it keep today's schedule (logged once per graph)");
+        }
+        gpuTimer_.mark(flist,GpuStage::Flow,true);
+        if(!submitGraph(slot))return false;
+    }
 
     // FG reads enhanced SDR color, not the pre-NR guidance input.
-    if (runFg && fgCreated()) {
+    // Stream "predict": decided before anything of the pair's generation is recorded (PushPredict.h). Without the
+    // switch predict_ is null, the request reads as Interpolate and this pair is exactly today's.
+    std::optional<BatchFrame> predictedFrame;
+    bool predictPair=false,predictCheckThisPair=false;
+    {
+        // Review 2, SHOULD 9: VFG refused or failed an earlier FrameIndex-2-only request (VfgBackend: the backend itself
+        // stays usable). Unavailable for the session: one log line, no retries until the row is switched again.
+        collectPredictCheck();   // Package 16: test-only, nothing without its switch
+        auto& ldShared=engine::pushLowDelayShared();
+        if(predict_&&vfgBackend_){
+            const std::int64_t nowMs=steadyMs();
+            // Review 1 SHOULD 6 (a): a real off -> on of the row lets the ladder start over (at most once in 10 s).
+            const auto epoch=ldShared.retryEpoch.load(std::memory_order_relaxed);
+            if(epoch!=seenRetryEpoch_){
+                seenRetryEpoch_=epoch;
+                ladderResetPending_=true;
+                if(!pushVfgLadderResetDue(nowMs,lastLadderResetMs_))
+                    veyra::log::info("push-predict","the row was switched on again within 10 s of the last retry: VFG's FrameIndex-2-only ladder is reset when those 10 s have passed");
+            }
+            // REL16 NOTES: a switch-on within the 10 s is not lost: the reset waits until it is due.
+            // REL16 delta SHOULD 2: the reset also clears the refusal, so the next pair asks the fresh ladder.
+            if(ladderResetPending_&&pushVfgLadderResetDue(nowMs,lastLadderResetMs_)){vfgBackend_->resetAloneLadder();lastLadderResetMs_=nowMs;ladderResetPending_=false;ldShared.vfgRefused.store(false,std::memory_order_relaxed);}
+            // (b) the one retry after an early refusal.
+            if(earlyRetryAtMs_>=0&&nowMs>=earlyRetryAtMs_){
+                earlyRetryAtMs_=-1;vfgBackend_->resetAloneLadder();lastLadderResetMs_=nowMs;ldShared.vfgRefused.store(false,std::memory_order_relaxed);
+                veyra::log::info("push-predict","retrying VFG's FrameIndex-2-only request once, 2 s after a refusal right after the rebuild");
+            }
+            if(vfgBackend_->takePredictRefused()){
+                if(pushVfgEarlyRefusal(nowMs-predictBuiltAtMs_,earlyRetryUsed_)){
+                    earlyRetryUsed_=true;earlyRetryAtMs_=nowMs+kPushVfgEarlyRetryMs;ldShared.vfgRefused.store(true,std::memory_order_relaxed);
+                    veyra::log::warn("push-predict","VFG refused a FrameIndex-2-only request within 1 s of the rebuild: not taken as final, one retry in 2 s; frame generation goes on as before");
+                }else if(!ldShared.vfgRefused.exchange(true))
+                    veyra::log::warn("push-predict","VFG refused or failed a FrameIndex-2-only request: Lower delay is unavailable for this session and frame generation goes on as before (switch the row off and on to try once more)");
+            }
+        }
+        PushPredictEligibility pe;
+        pe.requested=predict_?requestedSchedule_:PushPairSchedule::Interpolate;
+        pe.vfg=vfgBackend_&&!pushFlow_&&!amfFrc_;
+        pe.multiplier=runFg&&!reduced?outputMultiplier:0;
+        pe.historyValid=!resetFg;
+        pe.hudLock=hudLock_!=nullptr;pe.exclusion=desc_.exclusion.enabled;pe.presentSinkFg=presentSinkFg();
+        pe.formatSupported=predict_&&predict_->format()==outputFormat();
+        pe.passReady=predictAvailable()&&vfgBackend_&&vfgBackend_->inputBuffer(parity)&&vfgBackend_->inputBuffer(1-parity);
+        pe.motionReady=predict_&&predict_->motionReady(parity,realFrameIndex_+1);   // FidelityFX: this frame's motion recorded and usable
+        // REL16 delta SHOULD 2: a ladder still refused while its reset waits for the 10 s gap is not asked meanwhile.
+        pe.vfgRefused=engine::pushLowDelayShared().vfgRefused.load(std::memory_order_relaxed)||
+                      (ladderResetPending_&&vfgBackend_&&vfgBackend_->aloneMode()==PushVfgAloneMode::Refused);
+        lastPredictRefusal_=pushPredictPairRefusal(pe);
+        // Stream "s12-hud": a pair whose VFG input was cleaned is never predicted (P and its HUD Lock copy read that input).
+        predictPair=lastPredictRefusal_==PushPredictRefusal::Ok&&runFg&&fgCalls==2&&fgCreated()&&!hudGuardCleanedPair_;
+        if(predictPair)lastPredictWorkMs_=steadyMs();
+    }
+    if(predictPair){
+        // I(2/3), B, P (docs/drafts/PREDICT_GPU.md section 3). I: VFG FrameIndex 2 of FrameMultiplier 3, exactly the
+        // call today's second subframe makes (same effect, same multiplier: no rebuild), into its usual slot.
+        const auto plan=pushOnePredictedPlan(parity);
+        if(!vfgBackend_->generate(parity,plan.vfgFrameIndex,plan.vfgMultiplier,false,out.fgFast,true)){failedBackend_=engine::FailedBackend::Fg;return false;}
+        auto* ilist=ring_.acquireNext(slot,st);if(!ilist)return false;
+        tracker_.transition(ilist,genFrame_[plan.interpolatedSlot].Get(),D3D12_RESOURCE_STATE_COPY_DEST);
+        if(!vfgBackend_->copyOutput(ilist,genFrame_[plan.interpolatedSlot].Get(),plan.interpolatedSlot)){failedBackend_=engine::FailedBackend::Fg;return false;}
+        // Package 16, item 2: I is an interpolated frame of a valid pair: HUD Lock and boxes from A, as today's frames
+        // (the lock's state was updated with B in the base list, as for today's I(1/3) and I(2/3)).
+        const auto fromI=pushPredictComposeSources(false,parity),fromP=pushPredictComposeSources(true,parity);
+        composeHudLock(ilist,plan.interpolatedSlot,fromI.hudHeld);
+        composeHudGuard(ilist,plan.interpolatedSlot,parity,float(plan.vfgFrameIndex)/float(plan.vfgMultiplier));
+        if(!composeExclusion(ilist,plan.interpolatedSlot+2,fromI.exclusionRaw,false))return false;
+        tracker_.transition(ilist,genFrame_[plan.interpolatedSlot].Get(),D3D12_RESOURCE_STATE_COMMON);
+        gpuTimer_.mark(ilist,GpuStage::Fg1,true);gpuTimer_.mark(ilist,GpuStage::Fg2);   // Fg2 = the predicted frame
+        if(!submitGraph(slot))return false;
+        if(previewCheckpoint&&!reset)previewCheckpoint();
+        ++out.fgEvaluated;out.hasGenerated=true;out.genSlot=parity;
+        out.genFenceValue=ring_.lastSignaledValue();out.genFenceObject=context_.fence();out.generatedPtsMs=(prevPtsMs_+ptsMs)*0.5;
+        ++metrics_.fgSubmittedCandidates;
+        {
+            BatchFrame f;f.identity=out.batch.identity;f.kind=FrameKind::Generated;f.validity=GenerationValidity::Pending;f.subframe=plan.interpolatedSubframe;
+            f.pts100ns=FrameBatch::interpolate(out.batch.a100ns,out.batch.b100ns,plan.vfgFrameIndex,plan.vfgMultiplier);
+            f.lease=std::make_shared<FrameLease>();f.lease->texture=genFrame_[plan.interpolatedSlot];f.lease->slot=plan.interpolatedSlot;
+            f.lease->readyFence=out.genFenceValue;f.lease->readyFenceObject=out.genFenceObject;generatedLeases_[plan.interpolatedSlot]=f.lease;out.batch.append(std::move(f));
+        }
+        // P: flow A -> B on the enhanced real frames as VFG holds them (CUDA has finished with this pair: the list
+        // above waited for its completion), then the warp into the slot FrameIndex 1 would have used. Reads only VFG's
+        // buffers and writes only genFrame_: the real frame's texture is not touched (its presentation wait stays its own).
+        auto* plist=ring_.acquireNext(slot,st);if(!plist)return false;
+        auto* previousBuffer=vfgBackend_->inputBuffer(1-parity);auto* currentBuffer=vfgBackend_->inputBuffer(parity);
+        const uint32_t pitch=vfgBackend_->inputRowPitch();
+        const bool predictRecorded=
+            predict_->recordMotion(plist,ring_.queue(),context_.fence(),ring_.lastSignaledValue()+1,parity,previousBuffer,currentBuffer,pitch,realFrameIndex_,realFrameIndex_+1)&&
+            predict_->recordPredict(plist,parity,previousBuffer,currentBuffer,pitch,predict_->motion(parity),predict_->trust(parity),genFrame_[plan.predictedSlot].Get(),pushPredictStep(plan.vfgMultiplier));
+        // Package 15 review: P is B where the pass gives nothing better. A cut seen by VFG's GPU test: B, predicated on
+        // that result (the warp across a cut is meaningless). P not recorded after I was submitted: B unconditionally,
+        // logged once, and the pair counts as unusable; frame generation goes on (the real frame is never touched).
+        tracker_.transition(plist,genFrame_[plan.predictedSlot].Get(),D3D12_RESOURCE_STATE_COPY_DEST);
+        if(!predictRecorded&&!predictFailLogged_){predictFailLogged_=true;veyra::log::warn("push-predict","predicted frame not recorded; this pair shows the real frame in its place (logged once per graph)");}
+        if(!vfgBackend_->copyInput(plist,genFrame_[plan.predictedSlot].Get(),parity,predictRecorded)){failedBackend_=engine::FailedBackend::Fg;return false;}
+        tracker_.transition(plist,genFrame_[plan.predictedSlot].Get(),D3D12_RESOURCE_STATE_COMMON);
+        // Package 16, item 2: P follows B, so its HUD-locked pixels come from B (a copy taken from VFG's input buffer, the
+        // same bytes as B's texture: P's list never touches the texture B is presented from) and its boxes from raw B.
+        // The lock's state is not updated here (only real frames update it, in their base list).
+        if(hudLock_&&hudLock_->predictedHeld()){
+            tracker_.transition(plist,hudLock_->predictedHeld(),D3D12_RESOURCE_STATE_COPY_DEST);
+            if(!vfgBackend_->copyInput(plist,hudLock_->predictedHeld(),parity,false)){failedBackend_=engine::FailedBackend::Fg;return false;}
+            tracker_.transition(plist,hudLock_->predictedHeld(),D3D12_RESOURCE_STATE_COMMON);
+            composeHudLock(plist,plan.predictedSlot,fromP.hudHeld);
+            composeHudGuard(plist,plan.predictedSlot,parity,1.0f,PushHudGuardPass::kHeld);   // P follows B: from the copy of B
+        }
+        if(!composeExclusion(plist,plan.predictedSlot+2,fromP.exclusionRaw,false))return false;
+        tracker_.transition(plist,genFrame_[plan.predictedSlot].Get(),D3D12_RESOURCE_STATE_COMMON);
+        predictCheckThisPair=predictCheck_&&pushPredictCheckDue(true,true,predictCheck_->inFlight,metrics_.predictedPairs+1)&&
+            recordPredictCheck(plist,plan.predictedSlot,exclusionVideo_[parity]?exclusionVideo_[parity].Get():videoFrame_[parity].Get());
+        gpuTimer_.mark(plist,GpuStage::Fg2,true);gpuTimer_.mark(plist,GpuStage::FgBatch,true);gpuTimer_.resolve(plist);
+        if(!submitGraph(slot))return false;
+        gpuTimer_.submitted(ring_.lastSignaledValue());
+        if(previewCheckpoint&&!reset)previewCheckpoint();
+        ++out.fgEvaluated;out.genFenceValue=ring_.lastSignaledValue();
+        if(predictCheckThisPair)predictCheck_->fence=out.genFenceValue;
+        ++metrics_.fgSubmittedCandidates;++metrics_.predictedPairs;out.predictedPair=true;out.predictSequence=predictRecorded?predict_->lastSequence():0;out.predictFailed=!predictRecorded;
+        BatchFrame p;p.identity=out.batch.identity;p.kind=FrameKind::Generated;p.validity=GenerationValidity::Pending;p.subframe=plan.predictedSubframe;
+        p.pts100ns=pushPredictedPts(out.batch.a100ns,out.batch.b100ns,plan.vfgMultiplier);
+        p.lease=std::make_shared<FrameLease>();p.lease->texture=genFrame_[plan.predictedSlot];p.lease->slot=plan.predictedSlot;p.lease->predicted=true;
+        p.lease->readyFence=out.genFenceValue;p.lease->readyFenceObject=out.genFenceObject;generatedLeases_[plan.predictedSlot]=p.lease;
+        predictedFrame=std::move(p);   // appended after the real frame: display order I, B, P
+    }
+    if (runFg && fgCreated() && !predictPair) {
       for(uint32_t sub=1;sub<=fgCalls;++sub){
         const uint32_t generatedSlot=parity+(sub-1)*2;
         if(pushFlow_){
@@ -4121,6 +4694,7 @@ bool EnhanceGraph::process(const AVFrame* frame, double ptsMs, bool reset, Frame
             tracker_.transition(flist,videoFrame_[1-parity].Get(),D3D12_RESOURCE_STATE_COMMON);
             tracker_.transition(flist,videoFrame_[parity].Get(),D3D12_RESOURCE_STATE_COMMON);
             composeHudLock(flist,generatedSlot,1-parity);
+            composeHudGuard(flist,generatedSlot,parity,float(sub)/float(outputMultiplier));
             if(!composeExclusion(flist,generatedSlot+2,1-parity,false))return false;
             tracker_.transition(flist,genFrame_[generatedSlot].Get(),D3D12_RESOURCE_STATE_COMMON);
             if(sub==fgCalls){gpuTimer_.mark(flist,GpuStage::Fg1,true);gpuTimer_.mark(flist,GpuStage::FgBatch,true);gpuTimer_.resolve(flist);}
@@ -4145,6 +4719,7 @@ bool EnhanceGraph::process(const AVFrame* frame, double ptsMs, bool reset, Frame
             const bool copied=amfFrc_->copyOutput(flist,genFrame_[generatedSlot].Get());
             if(!copied&&!resetFg){veyra::log::error("amf-frc","AMF returned no interpolated frame for this pair");failedBackend_=engine::FailedBackend::Fg;return false;}
             composeHudLock(flist,generatedSlot,resetFg?parity:1-parity);
+            if(!resetFg)composeHudGuard(flist,generatedSlot,parity,float(sub)/float(outputMultiplier));
             if(!composeExclusion(flist,generatedSlot+2,resetFg?parity:1-parity,false))return false;
             tracker_.transition(flist,genFrame_[generatedSlot].Get(),D3D12_RESOURCE_STATE_COMMON);
             gpuTimer_.mark(flist,GpuStage::Fg1,true);gpuTimer_.mark(flist,GpuStage::FgBatch,true);gpuTimer_.resolve(flist);
@@ -4171,6 +4746,7 @@ bool EnhanceGraph::process(const AVFrame* frame, double ptsMs, bool reset, Frame
             tracker_.transition(flist,genFrame_[generatedSlot].Get(),D3D12_RESOURCE_STATE_COPY_DEST);
             if(!vfgBackend_->copyOutput(flist,genFrame_[generatedSlot].Get(),generatedSlot)){failedBackend_=engine::FailedBackend::Fg;return false;}
             composeHudLock(flist,generatedSlot,resetFg?parity:1-parity);
+            if(!resetFg)composeHudGuard(flist,generatedSlot,parity,float(sub)/float(outputMultiplier));
             if(!composeExclusion(flist,generatedSlot+2,resetFg?parity:1-parity,false))return false;
             tracker_.transition(flist,genFrame_[generatedSlot].Get(),D3D12_RESOURCE_STATE_COMMON);
             const auto timingStage=GpuStage(unsigned(GpuStage::Fg1)+sub-1);gpuTimer_.mark(flist,timingStage,true);
@@ -4254,6 +4830,7 @@ bool EnhanceGraph::process(const AVFrame* frame, double ptsMs, bool reset, Frame
         flist->CopyBufferRegion(fgDisableReadback_[generatedSlot].Get(),0,fgDisable_[parity].Get(),0,4);
         }
         composeHudLock(flist,generatedSlot,resetFg?parity:1-parity);
+        if(!resetFg)composeHudGuard(flist,generatedSlot,parity,float(sub)/float(fgCalls+1));
         if(!composeExclusion(flist,generatedSlot+2,resetFg?parity:1-parity,false))return false;
         tracker_.transition(flist,videoFrame_[parity].Get(),D3D12_RESOURCE_STATE_COMMON);
         tracker_.transition(flist,genFrame_[generatedSlot].Get(),D3D12_RESOURCE_STATE_COMMON);
@@ -4282,7 +4859,39 @@ bool EnhanceGraph::process(const AVFrame* frame, double ptsMs, bool reset, Frame
     uploadFences_[parity]=ring_.lastSignaledValue();
     // The capture callback must not rewrite this frame's buffer before the
     // lists submitted above have read it.
-    if(gpuDirectFrame)gpuDirectFrame->gpuRead(context_.fence(),uploadFences_[parity]);
+    // PushFPS stream "delay90": VEYRA_EXP_RP_UPLOAD_EARLY_RELEASE=1 (exactly 1, read once) releases the buffer at the
+    // fence of the base list that copied from it (out.videoFenceValue, signalled before any generated frame's list),
+    // not at the last list of the pair: every read of the upload buffer is the base list's CopyTextureRegion at its
+    // start, so the callback may write it once that list is done instead of falling back to its CPU planes (and this
+    // graph copying 12-25 MB again on the engine thread, counted in metrics_.captureUploadCpuCopies). Unset: as before.
+    // Stream "gpupath" (PushGpuPath.h, 24 Nov 2026): this is now the default; VEYRA_TEST_UPLOAD_LATE_RELEASE=1 (exactly
+    // 1, read once) restores the release at the pair's last list; the experiment switch above is only logged.
+    // - Unfinished work: the base list's CopyTextureRegion (above, at its start) is the buffer's only GPU reader and
+    //   out.videoFenceValue follows it; the callback writes the buffer only after that fence (gpuBusy).
+    // - Order and picture: nothing is presented or composed differently; the callback writes the same bytes into the
+    //   upload buffer instead of its CPU planes, which this graph would otherwise copy into its own upload buffer.
+    // With the capture mailbox's three frames and the pickup gate the buffer is normally free by then anyway
+    // (GPU_PATH_MAP.md C3): expected effect 0 in steady state, never a cost.
+    if(gpuDirectFrame)gpuDirectFrame->gpuRead(context_.fence(),pushUploadReleaseFence(out.videoFenceValue,uploadFences_[parity],pushGpuPathRestore().uploadLate));
+    // Stream "gpupath" (PushGpuPath.h, on by default; VEYRA_TEST_GPU_REAL_WAITS_GROUP=1 restores the group wait): the
+    // presentation queue waits for the real frame's own lists (out.videoFenceValue) instead of the pair's last list,
+    // only where no later list of the pair touches its texture: VFG, no HUD Lock, no exclusion, no present-sink FG.
+    // - Unfinished work: every list that writes or transitions videoFrame_[parity] (and the references the comparison
+    //   view and PresentCapture read) is at or before out.videoFenceValue; the VFG lists above only write genFrame_ and
+    //   read CUDA's buffers.
+    // - Order: the CPU presents in the engine's order and the presentation queue is FIFO, so a real frame's blit still
+    //   follows the blits of its generated frames when they are shown; the value only ever goes down (never above
+    //   uploadFences_[parity]).
+    // - Picture: the same texture with the same contents; nothing is copied or composed differently.
+    {
+        PushRealPresentFenceInputs realWait;
+        realWait.backend=pushFgPathKindOf(vfgBackend_!=nullptr,pushFlow_!=nullptr,amfFrc_!=nullptr,fgCreated());
+        realWait.hudLock=hudLock_!=nullptr;realWait.exclusion=desc_.exclusion.enabled;realWait.presentSinkFg=presentSinkFg();
+        realWait.realFence=out.videoFenceValue;realWait.pairFence=uploadFences_[parity];realWait.restore=pushGpuPathRestore().realWaitsGroup;
+        realWait.predictedPair=predictPair&&!predictCheckThisPair;   // Package 16: B never waits for P (a test-only checked pair excepted)
+        realPresentFences_[parity]=pushRealPresentFence(realWait);
+        if(realPresentFences_[parity]!=uploadFences_[parity])++metrics_.realPresentOwnFence;
+    }
 
     prevPtsMs_ = ptsMs;
     prevValid_ = true;
@@ -4290,6 +4899,7 @@ bool EnhanceGraph::process(const AVFrame* frame, double ptsMs, bool reset, Frame
     out.realFrameIndex = realFrameIndex_;
     out.videoSlot = parity;
     BatchFrame real;real.identity=out.batch.identity;real.pts100ns=out.batch.b100ns;real.lease=std::make_shared<FrameLease>();real.lease->texture=exclusionVideo_[parity]?exclusionVideo_[parity]:videoFrame_[parity];real.lease->sourceReference=sourceReferences_[parity];real.lease->baseReference=baseReferences_[parity];real.lease->slot=parity;real.lease->readyFence=out.videoFenceValue;real.lease->readyFenceObject=out.videoFenceObject;real.lease->referencesValid=retainReferences;realLeases_[parity]=real.lease;out.batch.append(std::move(real));
+    if(predictedFrame)out.batch.append(std::move(*predictedFrame));   // stream "predict": P after B
     if(veyra::log::verboseFrameLogs())veyra::log::info("frame-batch",std::format("batch={} epoch={} revision={} source={} a={} b={} count={} realSlot={} realFence={} genSlot={} genFence={}",out.batch.batchId,epoch_,out.batch.identity.settingsRevision,out.batch.identity.sourceFrameId,out.batch.a100ns,out.batch.b100ns,out.batch.count,parity,out.videoFenceValue,out.genSlot,out.genFenceValue));
     if(pausedEligible&&lastAppliedSettings_){
         pausedNrCacheValid_=true;pausedNrFrame_=frame;pausedNrSourceId_=sourceFrameId;pausedNrPts_=ptsMs;
@@ -4310,11 +4920,13 @@ bool EnhanceGraph::resolveFrame(FrameOutputs& out,uint32_t index)
     auto& frame=out.batch.frames[index];
     if(!frame.lease||!frame.lease->ready())return false;
     if(frame.kind!=FrameKind::Generated||frame.validity!=GenerationValidity::Pending)return true;
-    if(vfgBackend_){
+    if(vfgBackend_&&!frame.lease->predicted){   // a predicted frame is our own pass, not a VFG submission
         const auto state=vfgBackend_->submissionState(frame.lease->slot);
         if(state==VfgBackend::SubmissionState::Pending)return false;
         if(state==VfgBackend::SubmissionState::Failed){
-            frame.validity=GenerationValidity::Failed;failedBackend_=engine::FailedBackend::Fg;
+            // A predicted pair's I is VFG's FrameIndex 2 alone (review 2, SHOULD 9): its failure is the experiment's, the
+            // backend stays usable, so it does not mark frame generation as failed.
+            frame.validity=GenerationValidity::Failed;if(!out.predictedPair)failedBackend_=engine::FailedBackend::Fg;
             return true;
         }
     }
@@ -4388,7 +5000,7 @@ bool EnhanceGraph::applySettings(const engine::EnhancementSettings& s){
     // but has this NGX-only stage explicitly disabled in the graph. Do not
     // reject unrelated live settings in that degraded, playable state.
     if(s.nr&&desc_.enableNr&&!nrCreated())return false;
-    const auto requestedFlow=context_.adapter().vendorId==0x1002&&s.opticalFlowBackend==engine::OpticalFlowBackend::Nvidia
+    const auto requestedFlow=!context_.adapter().isNvidia&&s.opticalFlowBackend==engine::OpticalFlowBackend::Nvidia
         ?engine::OpticalFlowBackend::AmdFidelityFx:s.opticalFlowBackend;
     const bool usesSharedFlow=dlaaRequested()||nvofStandalone_||(desc_.enableFg&&desc_.fgUsesFlow())||
         (srEnabled_&&desc_.srUsesFlow()&&temporalSrPass(desc_));
@@ -4543,10 +5155,68 @@ void EnhanceGraph::setNrEnabled(bool on)
 
 ID3D12Fence* EnhanceGraph::contextFence()const{return context_.fence();}
 uint32_t EnhanceGraph::actualFlowPerf()const{return nvof_?nvof_->caps().actualPerfLevel:0;}
+// PushFPS sprint 4 (stream "sr"): the SR stage's own GPU time from the timestamps the graph already takes
+// (GpuStage::Sr), one window per 5 s or per configuration, as [slipstream-sr] (VEYRA_EXP_RP_STATS=1), and the
+// same windows feed VEYRA_EXP_SR_BUDGET_MS. Called from takeGpuTimings (EngineController's collectTimings, the
+// engine thread). SR runs once per real frame (runSr), never on generated frames: generatedToo=0. Unverified
+// on Windows.
+void EnhanceGraph::noteSrTimings(const std::vector<diagnostics::GpuFrameTiming>& timings){
+    const bool stats=srStatsSwitch();
+    const double budgetMs=srBudgetMs();
+    if((!stats&&budgetMs<=0.0)||!srEnabled_)return;
+    struct SrStatsState{
+        std::mutex mutex;engine::PushSrWindow window;engine::PushSrStatsInfo info;bool haveInfo=false;
+        std::chrono::steady_clock::time_point start{};engine::PushSrBudget budget;
+    };
+    static SrStatsState state;
+    const bool dual=desc_.dualSr;
+    const uint32_t configured=dual?desc_.dualSrQuality:desc_.videoSrQuality;
+    const bool ngxSingle=!dual&&engine::ngxVideoSr(desc_.videoSrQuality);
+    const engine::PushSrLevel level=ngxSingle?srLevelFor(desc_.videoSrQuality):engine::PushSrLevel{configured,engine::PushSrLevelSource::User};
+    engine::PushSrStatsInfo info;
+    info.choice=int(desc_.videoSrQuality);
+    info.quality=ngxSingle?int(level.level):engine::rtxVideoSr(configured)?int(engine::videoSrTier(configured)):-1;
+    info.inW=srInW_;info.inH=srInH_;info.outW=srOutW_;info.outH=srOutH_;info.workW=workW_;info.workH=workH_;
+    info.generatedToo=false;info.hdr=desc_.hdrWorking();info.dual=dual;info.levelSource=level.source;info.budgetMs=budgetMs;
+    const auto now=std::chrono::steady_clock::now();
+    std::lock_guard lock(state.mutex);
+    if(state.budget.config().budgetMs!=budgetMs){engine::PushSrBudgetConfig c;c.budgetMs=budgetMs;state.budget=engine::PushSrBudget(c);}
+    if(!state.haveInfo){state.info=info;state.haveInfo=true;state.start=now;}
+    const auto flush=[&]{
+        const auto& w=state.window;
+        if(w.frames()){
+            if(stats)veyra::log::info("slipstream-sr",engine::pushSrStatsLine(w,state.info));
+            // The budget only steers the user's own standard RTX Video SR level, never an autorun hold or the fixed switch.
+            const bool steerable=budgetMs>0.0&&!state.info.dual&&state.info.choice>=1&&state.info.choice<=4&&
+                (state.info.levelSource==engine::PushSrLevelSource::User||state.info.levelSource==engine::PushSrLevelSource::Budget);
+            if(steerable){
+                const auto now100ns=std::chrono::duration_cast<std::chrono::duration<int64_t,std::ratio<1,10000000>>>(now.time_since_epoch()).count();
+                const double p95=w.percentile(95.0);
+                // The shared level follows the budget after every window (also when the user chose another level).
+                if(engine::pushSrBudgetObserve(state.budget,srBudgetLevel(),p95,w.frames(),uint32_t(state.info.choice),now100ns)){
+                    veyra::log::info("slipstream-sr",std::format("event=budget level={} user={} gpuP95={:.3f} budgetMs={:.2f} changes={}",
+                        state.budget.level()?state.budget.level():uint32_t(state.info.choice),state.info.choice,p95,budgetMs,state.budget.changes()));
+                }else if(state.budget.overAtFloor()&&stats){
+                    veyra::log::info("slipstream-sr",std::format("event=budget-floor level=1 gpuP95={:.3f} budgetMs={:.2f}",p95,budgetMs));
+                }
+            }
+        }
+        state.window.clear();state.start=now;
+    };
+    if(!state.info.equals(info)){flush();state.info=info;}
+    for(const auto& sample:timings){
+        const auto& sr=sample.gpu[size_t(GpuStage::Sr)];
+        if(sr.state==diagnostics::SampleState::Measured&&sr.milliseconds)state.window.add(*sr.milliseconds);
+    }
+    if(now-state.start>=std::chrono::seconds(5))flush();
+}
 bool EnhanceGraph::vfgFastReady() const { return vfgBackend_&&vfgBackend_->fastReady(); }
 bool EnhanceGraph::fgCreated() const
 {
-    return (vfgBackend_&&vfgBackend_->created()) || fsrActive() || amfFrcActive() || (fgBackend_ && fgBackend_->created());
+    // PushFlow too: at f306f570 it was missing here, so fgCandidates stayed 0 and a live PushFlow session
+    // presented no generated frame (PS Remote Play window, RTX 4090, 2026-11-18; the GPU tests drive
+    // PushFlowBackend directly, not through the graph).
+    return (vfgBackend_&&vfgBackend_->created()) || fsrActive() || amfFrcActive() || pushFlowActive() || (fgBackend_ && fgBackend_->created());
 }
 
 uint64_t EnhanceGraph::lastNvofSignal() const
@@ -4583,6 +5253,11 @@ ID3D12Resource* EnhanceGraph::generatedFrameResource(uint32_t slot) const
 // ---------------------------------------------------------------------------
 void EnhanceGraph::shutdown()
 {
+    // Its own list and fence: wait for it (bounded) before the decoder picture it reads is let go.
+    // A list still running after that wait keeps its GPU objects and its picture: both are left
+    // alone (leaked) instead of released under it.
+    if(streamChange_&&!streamChange_->shutdown()&&streamChangeFrame_)(void)new std::shared_ptr<AVFrame>(std::move(streamChangeFrame_));
+    streamChange_.reset();streamChangeFrame_.reset();streamChangeFailed_=false;
     pausedNrCacheValid_=pausedNrResidualOnly_=false;pausedNrFrame_=nullptr;
     lastAppliedSettings_.reset();pausedNrSettings_.reset();
     if (!initialized_ && !coreHost_ && !nrAdapter_ && !nvof_ && !srcRgba_) return;
@@ -4675,6 +5350,16 @@ void EnhanceGraph::shutdown()
         ngxParams_ = nullptr;
     }
     if (nrAdapter_) {
+        // Veyra f68c72dd, same order as nr_harness: features and parameter blocks are gone, so the
+        // snippet shuts down before its IAT shim is restored and the DLL is freed.
+        // VEYRA_TEST_RP_LEGACY_NR_TEARDOWN=1 keeps the earlier order (no Shutdown1).
+        if (nrSnippetInitialized_ && GetEnvironmentVariableW(L"VEYRA_TEST_RP_LEGACY_NR_TEARDOWN", nullptr, 0) == 0) {
+            uint64_t result = 0;
+            uint32_t seh = 0;
+            if (!nrAdapter_->snippetShutdown1(context_.device(), result, seh) || result != uint64_t(NVSDK_NGX_Result_Success))
+                veyra::log::error("graph", std::format("NR snippet Shutdown1 failed result=0x{:X} seh=0x{:X}", result, seh));
+        }
+        nrSnippetInitialized_ = false;
         nrAdapter_->restoreCallerCompatibility();
         nrAdapter_->unload();
     }
@@ -4756,7 +5441,8 @@ void EnhanceGraph::shutdown()
     neuralTex_.Reset();
     proxyTex_.Reset();
     exclusionPass_={};exclusionScratch_.Reset();
-    hudLock_.reset();
+    hudGuard_.reset();hudLock_.reset();hudReal_[0].Reset();hudReal_[1].Reset();
+    cleanPass_.reset();
     for(auto& r:exclusionVideo_)r.Reset();
     for(auto& r:exclusionUi_)r.Reset();
     for(auto& r:sourceReferences_)r.Reset();for(auto& r:baseReferences_)r.Reset();workRgba_.Reset();
@@ -4783,6 +5469,38 @@ void EnhanceGraph::shutdown()
     gpuTimer_.close();initialized_ = false;
     veyra::log::info("graph", "shutdown complete (ordered)");
     (void)st;
+}
+
+// Package 16: the CPU time (QPC) the real frame's base list is submitted, with a GPU / CPU clock calibration taken at the
+// same moment (ID3D12CommandQueue::GetClockCalibration), so that its first GPU timestamp can be placed on the CPU clock.
+void EnhanceGraph::noteBaseSubmit(uint64_t sourceFrameId){
+    LARGE_INTEGER now{};QueryPerformanceCounter(&now);
+    baseSubmits_[sourceFrameId%baseSubmits_.size()]={sourceFrameId,uint64_t(now.QuadPart)};
+}
+void EnhanceGraph::calibrateAfterSubmit(){
+    LARGE_INTEGER now{},frequency{};QueryPerformanceCounter(&now);QueryPerformanceFrequency(&frequency);
+    if(!engine::pushClockCalibrationDue(now.QuadPart,int64_t(calibrationQpc_),frequency.QuadPart))return;
+    UINT64 gpu=0,cpu=0;
+    if(FAILED(ring_.queue()->GetClockCalibration(&gpu,&cpu)))gpu=cpu=0;
+    calibrationQpc_=uint64_t(now.QuadPart);gpuCalibration_=gpu;cpuCalibration_=cpu;
+}
+std::optional<double> EnhanceGraph::submitToGpuStartMs(const diagnostics::GpuFrameTiming& timing)const{
+    const auto& m=baseSubmits_[timing.identity.sourceFrameId%baseSubmits_.size()];
+    if(m.sourceFrameId!=timing.identity.sourceFrameId||!m.qpc||!gpuCalibration_||!cpuCalibration_)return {};
+    uint64_t begin=UINT64_MAX,frequency=0;   // the record's first GPU timestamp (as graphExecutionSpanMs)
+    for(size_t i=0;i<size_t(GpuStage::Blit);++i){
+        const auto& s=timing.gpu[i];
+        if(s.state!=diagnostics::SampleState::Measured||!s.frequency)continue;
+        frequency=s.frequency;begin=std::min(begin,s.begin);
+    }
+    LARGE_INTEGER qpcFrequency{};QueryPerformanceFrequency(&qpcFrequency);
+    if(!frequency||begin==UINT64_MAX||qpcFrequency.QuadPart<=0)return {};
+    // The latest calibration (taken after a submission, at most once a second: calibrateAfterSubmit).
+    const double gpuMsFromCalibration=(double(begin)-double(gpuCalibration_))*1000.0/double(frequency);
+    const double submitMsFromCalibration=(double(m.qpc)-double(cpuCalibration_))*1000.0/double(qpcFrequency.QuadPart);
+    const double ms=gpuMsFromCalibration-submitMsFromCalibration;
+    if(!std::isfinite(ms)||ms<-50.0||ms>1000.0)return {};
+    return ms;
 }
 
 } // namespace veyra::pipeline
