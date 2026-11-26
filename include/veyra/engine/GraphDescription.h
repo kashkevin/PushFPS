@@ -1,8 +1,11 @@
 #pragma once
 #include "veyra/engine/EnhancementSettings.h"
 #include "veyra/engine/ExportFeaturePolicy.h"
+#include "veyra/engine/PushSmoothness.h"
 #include "veyra/pipeline/EnhanceGraph.h"
 #include "veyra/pipeline/ResolutionPlan.h"
+#include "veyra/Log.h"
+#include <atomic>
 
 namespace veyra::engine {
 // Shared by graph creation and drained live-parameter updates. Disabled list
@@ -64,6 +67,9 @@ struct StageRequest {
     // Raw capture-card or screen frames: nothing compressed for native-size RTX Video SR to repair.
     bool uncompressedSource=false;
     const ChainRuntimeOrder* nodeOrder=nullptr; // paired with this settings transaction
+    // PushFPS experiment VEYRA_EXP_RP_SMOOTH_SR_DISPLAY (PushSmoothHook.h): the monitor's size; 0 = not asked (the
+    // SR target is used as saved). Set only for live preview by EngineController.
+    uint32_t displayWidth=0,displayHeight=0;
 };
 
 // Double SR (user 2026-11-08): each pass uses DLSS SR, FSR or any RTX Video SR
@@ -86,6 +92,21 @@ inline pipeline::SrOutput runningSrOutput(const EnhancementSettings& s,bool nvid
     return nvidiaAdapter&&rtxVideoSr(s.videoSrQuality)&&!s.dualSrEnabled?s.srOutput:pipeline::SrOutput::Target;
 }
 
+// PushFPS experiment VEYRA_EXP_RP_SMOOTH_SR_DISPLAY (PushSmoothness.h pushSmoothSrTarget): the SR target live playback
+// evaluates, lowered to the smallest box that covers the monitor (displayWidth/Height; 0 = not asked: the saved target).
+// Not with double SR: its second pass has its own target and the first pass's size feeds it, so lowering only the base
+// target would change what the second pass reads (said once in the log). Also what the snapshot reports as resolution.
+inline pipeline::SrTarget runningSrTarget(const EnhancementSettings& s,bool sr,bool stillImage,bool nvidiaAdapter,uint32_t displayWidth,uint32_t displayHeight){
+    if(!sr||stillImage||!displayWidth||!displayHeight||!pipeline::validSrTarget(s.srTarget))return s.srTarget;
+    const auto lowered=pipeline::SrTarget(pushSmoothSrTarget(uint32_t(s.srTarget),displayWidth,displayHeight));
+    if(lowered==s.srTarget)return s.srTarget;
+    if(dualSrRuns(s,nvidiaAdapter,stillImage)){
+        static std::atomic<bool> said{false};
+        if(!said.exchange(true))veyra::log::info("slipstream-smooth","srDisplay: not applied while double SR runs (its second pass keeps its own target); the saved SR target is used");
+        return s.srTarget;
+    }
+    return lowered;
+}
 // Fills the stage, size and parameter fields of `desc` from `settings`.
 // Source-format fields (hdrInput, rgbInput, packedInput, ...), hdrOutput and
 // host hooks are left untouched: the caller owns those.
@@ -100,7 +121,16 @@ inline pipeline::ResolutionPlan describeStages(const StageRequest& request,const
     }
     std::optional<EnhancementSettings> exportSettings;
     if(request.exportJob)exportSettings=freezeExportSettings(savedSettings);
-    const auto& settings=exportSettings?*exportSettings:savedSettings;
+    const auto& frozenSettings=exportSettings?*exportSettings:savedSettings;
+    // VEYRA_EXP_RP_SMOOTH_SR_DISPLAY: SR evaluates into the smallest target box that covers the monitor (never larger
+    // than the saved one), so SR, frame generation and presentation work at the size that is shown. Saved settings
+    // are not changed; export and still images never take it.
+    std::optional<EnhancementSettings> followSettings;
+    if(!request.exportJob){
+        const auto lowered=runningSrTarget(frozenSettings,request.sr,request.stillImage,request.nvidiaAdapter,request.displayWidth,request.displayHeight);
+        if(lowered!=frozenSettings.srTarget){followSettings=frozenSettings;followSettings->srTarget=lowered;}
+    }
+    const auto& settings=followSettings?*followSettings:frozenSettings;
     auto chain=toChain(settings);
     bool lowLatency=!request.exportJob&&settings.lowLatency&&request.nr;
     if(request.nodeOrder){
@@ -187,7 +217,7 @@ inline pipeline::ResolutionPlan describeStages(const StageRequest& request,const
     desc.flowQuality=settings.flow;
     desc.contentRate=settings.content;
     desc.opticalFlowBackend=settings.opticalFlowBackend;
-    desc.amdFlowHalfResolution=settings.amdFlowHalfResolution;desc.fgMotionRefine=settings.fgMotionRefine;desc.dlssgLite=settings.dlssgLite;desc.hudLock=settings.hudLock;desc.vfgAutoRegulate=settings.vfgAutoRegulate;
+    desc.amdFlowHalfResolution=settings.amdFlowHalfResolution;desc.fgMotionRefine=settings.fgMotionRefine;desc.dlssgLite=settings.dlssgLite;desc.hudLock=settings.hudLock;desc.lowDelay=settings.lowDelay;desc.lowDelayOwnWarp=settings.lowDelayOwnWarp;desc.clean=settings.clean;desc.vfgAutoRegulate=settings.vfgAutoRegulate;
     desc.nrLayersExtent.clear();
     for(uint32_t i=0;i<chain.nodeCount;++i){
         auto& node=chain.nodes[i];

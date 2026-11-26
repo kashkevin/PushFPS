@@ -37,14 +37,16 @@ public:
     void start(uint32_t samples = 12, uint32_t intervalMs = 350);
     void cancel();
     Status status();
+    bool running() { std::lock_guard lock(m_); return running_; }   // cheap (no copy, no detection): "Lower delay" pauses
 
     bool record(ID3D12GraphicsCommandList* list, const Frame& frame) override;
+    bool capturing() const override { std::lock_guard lock(m_); return running_ || pending_ || inFlight_ || reading_; }
     void submitted(ID3D12Fence* fence, uint64_t value) override;
     void discarded() override;
 
 private:
     void finishLocked();
-    std::mutex m_;
+    mutable std::mutex m_;
     bool running_ = false, done_ = false, failed_ = false, pending_ = false, inFlight_ = false, reading_ = false;
     uint32_t target_ = 0, intervalMs_ = 350;
     uint64_t revision_ = 0;

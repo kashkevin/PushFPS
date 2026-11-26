@@ -35,6 +35,7 @@ constexpr bool displayFgMultiplierSelectable(FrameGenerationBackend backend,unsi
     case FrameGenerationBackend::Anr: return multiplier>=2&&multiplier<=6;
     case FrameGenerationBackend::Vfg: return multiplier>=2&&multiplier<=8;
     case FrameGenerationBackend::PushFlow: return multiplier>=2&&multiplier<=4;
+    case FrameGenerationBackend::PushWarp: return multiplier>=2&&multiplier<=4;   // stream "ownfg" step 3
     case FrameGenerationBackend::Fsr:
     case FrameGenerationBackend::Fsr4:
     case FrameGenerationBackend::AmdFrc: return multiplier==2;

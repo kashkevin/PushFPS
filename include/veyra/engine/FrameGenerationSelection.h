@@ -5,6 +5,7 @@
 namespace veyra::engine {
 struct FrameGenerationAvailability {
     bool dlss = false, xess = false, fsr = false, fsr4 = false, vfg = false, anr = false, amdFrc = false, pushFlow = false;
+    bool pushWarp = false;   // stream "ownfg" step 3 (a separate line: aggregate initialisers above keep their order)
     constexpr bool supports(FrameGenerationBackend backend) const {
         switch (backend) {
         case FrameGenerationBackend::Dlss: return dlss;
@@ -15,6 +16,7 @@ struct FrameGenerationAvailability {
         case FrameGenerationBackend::Anr: return anr;
         case FrameGenerationBackend::AmdFrc: return amdFrc;
         case FrameGenerationBackend::PushFlow: return pushFlow;
+        case FrameGenerationBackend::PushWarp: return pushWarp;
         }
         return false;
     }
