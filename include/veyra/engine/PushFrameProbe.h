@@ -14,7 +14,11 @@
 //                        motion); a motion-correct frame differs from the cross-fade wherever something moves
 // Everything is also kept per generated POSITION (1 = first generated frame of the group, 2 = second, ...): at his VFG
 // quality 5 the frame at 1/3 comes from the Low model and the one at 2/3 from the Medium model.
-// Only groups with motion (d(A, B) above kMotionFloor) count. Honest limits: 16 point taps per cell sample the picture, they do
+// Only groups with motion (d(A, B) above kMotionFloor) count; and only groups whose own real-frame difference d(A, B) is at least
+// kJudgeMotion are JUDGED (item 4 of the pacing stream): below that, the 16 point taps per cell move in lumps (a 2-3 px camera pan flips
+// a few taps, so one step reads 0 and the next the whole difference: a "near duplicate" that is only the sampling), so such a group is
+// reported as not judged (slowNotJudged), never as a duplicate, blend or uneven step. The duplicate test itself already scales with
+// the pair's own difference (kDuplicateShare x d(A, B)). Honest limits: 16 point taps per cell sample the picture, they do
 // not average it, so very small moving things (a crosshair) weigh little; L1 distance is not linear in displacement; the probe
 // ranks frames, it does not judge quality.
 // Pure, fixed memory except the assembler's frame store; tests: tests/remoteplay/OnScreenCadenceTests.inc.
@@ -61,7 +65,9 @@ public:
     static constexpr std::size_t kPositions = kMaxGroup - 2;   // generated positions 1 .. kMaxGroup - 2
     // Review 2 SHOULD 3: a group counts as motion only above max(kMotionFloor, 3 x the 10th percentile of recent real-pair
     // distances) (capture noise, grain); motion groups are also counted by size (small < kLargeMotion <= large).
-    static constexpr double kMotionFloor = 0.01, kLargeMotion = 0.03, kDuplicateShare = 0.10;
+    static constexpr double kMotionFloor = 0.01, kLargeMotion = 0.03, kDuplicateShare = 0.10, kJudgeMotion = 0.02;
+    // judgeMotion: groups below it are not judged (tests pass 0 to show what the unguarded verdicts did on a slow pan).
+    explicit PushFrameProbe(double judgeMotion = kJudgeMotion) : judgeMotion_(judgeMotion) {}
     static constexpr std::size_t kNoiseRing = 256;
 
     static double distance(const float* x, const float* y) {
@@ -90,6 +96,7 @@ public:
         if (!(d > floor)) { ++stillGroups_; return; }
         ++motionGroups_;
         ++(d > kLargeMotion ? largeMotionGroups_ : smallMotionGroups_);
+        if (d < judgeMotion_) { ++slowGroups_; return; }   // too little motion to judge: neither duplicates nor blend nor steps are scored
         const std::size_t multiplier = count - 1;
         if (multiplier != lastMultiplier_) {   // shares of another multiplier are not comparable
             for (auto& s : stepShare_) s.count = 0;
@@ -128,7 +135,7 @@ public:
     struct Position { std::uint64_t generated = 0, nearDuplicates = 0; double blendLikeP50 = -1; };
     struct Summary {
         std::uint64_t groups = 0, motionGroups = 0, generated = 0, nearDuplicates = 0, skipped = 0, brokenGroups = 0;
-        std::uint64_t stillGroups = 0, smallMotionGroups = 0, largeMotionGroups = 0;
+        std::uint64_t stillGroups = 0, smallMotionGroups = 0, largeMotionGroups = 0, slowNotJudged = 0;
         double motionFloor = -1;
         double nearDuplicatePct = -1, evennessP50 = -1, evennessMin = -1, blendLikeP50 = -1;
         std::size_t multiplier = 0;
@@ -146,6 +153,7 @@ public:
         s.stillGroups = stillGroups_;
         s.smallMotionGroups = smallMotionGroups_;
         s.largeMotionGroups = largeMotionGroups_;
+        s.slowNotJudged = slowGroups_;
         s.motionFloor = motionFloor();
         s.multiplier = lastMultiplier_;
         s.nearDuplicatePct = generated_ ? 100.0 * double(nearDuplicates_) / double(generated_) : -1.0;
@@ -159,7 +167,7 @@ public:
             s.positions[i].blendLikeP50 = positions_[i].blend.median(scratch_);
         }
         groups_ = motionGroups_ = generated_ = nearDuplicates_ = skipped_ = brokenGroups_ = 0;
-        stillGroups_ = smallMotionGroups_ = largeMotionGroups_ = 0;
+        stillGroups_ = smallMotionGroups_ = largeMotionGroups_ = slowGroups_ = 0;
         evenness_.count = blend_.count = 0;
         for (auto& r : stepShare_) r.count = 0;
         for (auto& p : positions_) { p.generated = p.nearDuplicates = 0; p.blend.count = 0; }
@@ -187,7 +195,8 @@ private:
     std::array<PositionRing, kPositions> positions_{};
     std::size_t lastMultiplier_ = 0;
     std::uint64_t groups_ = 0, motionGroups_ = 0, generated_ = 0, nearDuplicates_ = 0, skipped_ = 0, brokenGroups_ = 0;
-    std::uint64_t stillGroups_ = 0, smallMotionGroups_ = 0, largeMotionGroups_ = 0;
+    std::uint64_t stillGroups_ = 0, smallMotionGroups_ = 0, largeMotionGroups_ = 0, slowGroups_ = 0;
+    double judgeMotion_ = kJudgeMotion;
     std::array<double, kNoiseRing> noise_{};
     std::size_t noiseNext_ = 0, noiseCount_ = 0;
     std::vector<double> scratch_ = std::vector<double>(kRing);
@@ -261,19 +270,19 @@ inline std::string formatPushFrameProbe(const PushFrameProbe::Summary& s) {
         positions += (positions.empty() ? "" : ";") + std::to_string(i + 1) + ":n=" + std::to_string(p.generated) + ",dupPct=" +
                      num(100.0 * double(p.nearDuplicates) / double(p.generated), 1) + ",blendP50=" + num(p.blendLikeP50, 3);
     }
-    char line[900];
+    char line[1000];
     std::snprintf(line, sizeof line,
-        "groups=%llu stillGroups=%llu motionGroups=%llu smallMotion=%llu largeMotion=%llu motionFloor=%s multiplier=%zu generated=%llu nearDuplicatePct=%s evennessP50=%s evennessMin=%s stepShareP50=%s "
+        "groups=%llu stillGroups=%llu motionGroups=%llu slowNotJudged=%llu smallMotion=%llu largeMotion=%llu motionFloor=%s multiplier=%zu generated=%llu nearDuplicatePct=%s evennessP50=%s evennessMin=%s stepShareP50=%s "
         "blendLikeP50=%s byPosition=%s skippedFrames=%llu brokenGroups=%llu",
         static_cast<unsigned long long>(s.groups), static_cast<unsigned long long>(s.stillGroups), static_cast<unsigned long long>(s.motionGroups),
-        static_cast<unsigned long long>(s.smallMotionGroups), static_cast<unsigned long long>(s.largeMotionGroups), num(s.motionFloor, 4).c_str(), s.multiplier,
+        static_cast<unsigned long long>(s.slowNotJudged), static_cast<unsigned long long>(s.smallMotionGroups), static_cast<unsigned long long>(s.largeMotionGroups), num(s.motionFloor, 4).c_str(), s.multiplier,
         static_cast<unsigned long long>(s.generated), num(s.nearDuplicatePct, 1).c_str(), num(s.evennessP50, 3).c_str(), num(s.evennessMin, 3).c_str(),
         shares.empty() ? "-1" : shares.c_str(), num(s.blendLikeP50, 3).c_str(), positions.empty() ? "none" : positions.c_str(),
         static_cast<unsigned long long>(s.skipped), static_cast<unsigned long long>(s.brokenGroups));
     return std::string(line) +
         " (every presented frame reduced to a 128x72 luma thumbnail on the GPU, 16 point taps per cell, read back asynchronously; per group "
         "A, generated, B with motion above motionFloor (max(0.01, 3 x the 10th percentile of recent real-pair distances): grain and capture "
-        "noise are not motion; small motion < 0.03 <= large): nearDuplicate = a generated frame within 10 % of d(A,B) of a neighbour; evenness = smallest / largest "
+        "noise are not motion; small motion < 0.03 <= large; slowNotJudged = motion groups whose A-to-B difference is under 0.02: too little to judge, the 16 taps per cell move in lumps, so no duplicate / blend / step verdict is given for them): nearDuplicate = a generated frame within 10 % of d(A,B) of a neighbour; evenness = smallest / largest "
         "step; stepShare = each step / all steps, ideal 1/multiplier; blendLike = distance to the cross-fade of A and B / d(A,B), near 0 "
         "= ghosting instead of motion; byPosition = per generated frame of the group, 1 = first; thumbnails, not a quality judgement)";
 }

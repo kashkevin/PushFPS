@@ -139,9 +139,13 @@ bool VideoPresenter::open(gfx::D3D12DeviceContext& ctx,HWND window,pipeline::Enh
         reflexGuardLegacy_=pushLegacyRestored(PushLegacyPart::ReflexSleep,pushEnvironment());
         thumbSwitch_=!pushLegacyRestored(PushLegacyPart::FrameProbe17,pushEnvironment());   // stream "s12-pace": the frame probe (PushFrameThumb.h)
         downscaleArea_=!pushLegacyRestored(PushLegacyPart::PresentDownscale17,pushEnvironment());   // stream "s12-pace": the fine-detail choice is allowed
-        {   // stream "s12-pace": the kernel the choice uses (area + mild sharpening; VEYRA_EXP_RP_SHRINK_KERNEL=area for the cheaper box, to compare gpu_blit)
+        {   // stream "s12-pace": the kernel the choice uses (default area + mild sharpening + clamp). A/B with gpu_blit and the eye:
+            // VEYRA_EXP_RP_SHRINK_KERNEL = area | sharp | clamp | catmull | catmull-clamp | lanczos | lanczos-clamp (anything else: the default)
             const auto kernel=pushReadEnvironment("VEYRA_EXP_RP_SHRINK_KERNEL");
-            shrinkKernelChoice_=(kernel&&*kernel=="area")?PushShrinkKernel::Area:PushShrinkKernel::AreaSharp;
+            const std::string name=kernel?*kernel:std::string();
+            shrinkKernelChoice_=name=="area"?PushShrinkKernel::Area:name=="sharp"?PushShrinkKernel::AreaSharp:name=="catmull"?PushShrinkKernel::CatmullRom
+                :name=="catmull-clamp"?PushShrinkKernel::CatmullRomClamp:name=="lanczos"?PushShrinkKernel::Lanczos2:name=="lanczos-clamp"?PushShrinkKernel::Lanczos2Clamp
+                :PushShrinkKernel::AreaSharpClamp;
             shrinkLogged_={};
         }
         statsReadings_=!pushLegacyRestored(PushLegacyPart::StatsReadings17,pushEnvironment());   // stream "s12-pace": one statistics reading per refresh
@@ -683,7 +687,7 @@ void VideoPresenter::noteShrink(PushShrinkKernel kernel,PushTransfer transfer,Pu
     const bool active=kernel!=PushShrinkKernel::Bilinear1&&pushShrinkApplies(kernel,std::max(footprint.x,footprint.y));
     veyra::log::info("present-path",std::format("shrink={} transfer={} footprint={:.2f}x{:.2f} active={} choice={} allowed={} (\"Steadier fine detail\": "
         "per-texel decode and exact box weights when the picture shrinks; package16 = one bilinear tap on the codes; compare [fg-health] gpu_blit before and after this line)",
-        kernel==PushShrinkKernel::AreaSharp?"area+sharpen":kernel==PushShrinkKernel::Area?"area":"package16",
+        pushShrinkKernelName(kernel),
         transfer==PushTransfer::Pq?"pq":transfer==PushTransfer::Srgb?"srgb":"linear",footprint.x,footprint.y,active?1:0,pushSteadyDetail()?1:0,downscaleArea_?1:0));
 }
 

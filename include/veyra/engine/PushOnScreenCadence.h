@@ -15,8 +15,9 @@
 //     are known; the even share is therefore reported as a range evenPctMin..evenPctMax over every covered frame, and the
 //     interface shows evenPctMin only, only when at least 90 % of the frames are covered.
 //   - the expected hold k = the Present-call median interval / the refresh period, rounded (2 at 90 on 180 Hz, 3 at 60);
-//     even = held exactly k; judderPct = mean |hold - k| / k x 100, comparable between 2X and 3X (0 = perfect; a frame one
-//     refresh off = 50 % at 3X, 33 % at 2X).
+//     even = held exactly k; judderPct = mean |hold - k| / k x 100: relative to the frame's own length
+//     (a frame one refresh off = 50 % at 3X, 33 % at 2X), so NOT a fair comparison between multipliers; the fair ones are in
+//     milliseconds: showJitterMs, holdSdMs, judderMs (same display jitter = same number at 2X and 3X, test onscreen_unbiased_*).
 //   - the refresh clock: under variable refresh / independent flip his logs show SyncRefreshCount standing still for
 //     seconds. Readings whose sync count did not move while 1.5 or more refreshes passed are counted; when most do,
 //     refreshClock=frozen and holds cannot be dated: the Present-call spacing (spacingEven = within 1 ms of the median) is
@@ -106,7 +107,7 @@ public:
         if (n == 1) {
             if (holdCount_ < kHolds)
                 holds_[holdCount_++] = Hold{static_cast<std::uint8_t>(std::min<std::int64_t>(total, std::int64_t(kMaxHold))), previous.generated, previous.id,
-                                            previous.phaseBin, previous.late};
+                                            previous.phaseBin, previous.late, previous.callMs, previous.refresh};
             return;
         }
         if (gapCount_ < kGaps) gaps_[gapCount_++] = Gap{n, static_cast<std::uint32_t>(std::min<std::int64_t>(total, 100000))};
@@ -163,6 +164,14 @@ public:
         // evenPctMin / Max: of every covered frame (own hold known or inside a gap with a known total): the true share lies between.
         double evenPct = -1, evenPctMin = -1, evenPctMax = -1, shortPct = -1, longPct = -1, judderPct = -1, evenRealPct = -1, evenGeneratedPct = -1;
         double measuredPct = -1, coveredPct = -1;
+        // UNBIASED scores (item 1 of the pacing stream; docs/drafts/PACE_DOWNSCALE.md section 1): in milliseconds, so the same display
+        // jitter gives the same number at 2X and at 3X. judderPct above is relative to the frame's own length (a one-refresh error is
+        // 50 % at 3X and 33 % at 2X): it answers "how large is the error against the step", not "which multiplier is steadier".
+        //   showJitterMs: standard deviation of (vblank that first showed the frame - the frame's Present call) after removing the
+        //                 linear drift of the period estimate: the display-side delay jitter, independent of the expected hold.
+        //   holdSdMs:     standard deviation of the measured hold times (ms).
+        //   judderMs:     mean |hold - expected hold| in ms (expected = whole refreshes of the Present spacing), -1 when no even hold exists.
+        double showJitterMs = -1, holdSdMs = -1, judderMs = -1;
         std::uint64_t longEvents = 0, shortEvents = 0, longestUnevenRun = 0;
         double beatSeconds = -1;                        // window seconds per long hold, -1 none
         double beatFloorPerS = -1;                      // |refresh - k x outFps|: long (or short) holds per second no schedule can avoid
@@ -248,14 +257,21 @@ public:
 
 private:
     struct Frame { std::uint32_t id = 0; bool generated = false; double callMs = 0; std::int64_t refresh = -1; std::int8_t phaseBin = -1; bool late = false; };
-    struct Hold { std::uint8_t refreshes = 0; bool generated = false; std::uint32_t id = 0; std::int8_t phaseBin = -1; bool late = false; };
+    struct Hold { std::uint8_t refreshes = 0; bool generated = false; std::uint32_t id = 0; std::int8_t phaseBin = -1; bool late = false; double callMs = 0; std::int64_t refresh = -1; };
     struct Gap { std::uint32_t frames = 0, refreshes = 0; };
     void summariseHolds(Summary& s) {
         std::uint64_t even = 0, shorter = 0, longer = 0, evenReal = 0, evenGen = 0, run = 0, deviation = 0;
+        double holdMsSum = 0, holdMsSq = 0, dn = 0, dx = 0, dy = 0, dxx = 0, dxy = 0, dyy = 0;
         std::uint32_t lastId = 0;
         for (std::size_t i = 0; i < holdCount_; ++i) {
             const auto& h = holds_[i];
             ++s.histogram[h.refreshes];
+            holdMsSum += double(h.refreshes) * periodMs_;
+            holdMsSq += double(h.refreshes) * periodMs_ * double(h.refreshes) * periodMs_;
+            if (h.refresh >= 0 && h.callMs > 0) {
+                const double x = h.callMs, y = double(h.refresh) * periodMs_ - h.callMs;
+                ++dn; dx += x; dy += y; dxx += x * x; dxy += x * y; dyy += y * y;
+            }
             if (h.refreshes == 0) { ++s.replaced; continue; }
             ++s.holds;
             ++(h.generated ? s.holdsGenerated : s.holdsReal);
@@ -274,6 +290,15 @@ private:
             }
             ++(d < 0 ? shorter : longer);
             s.longestUnevenRun = std::max(s.longestUnevenRun, ++run);
+        }
+        if (holdCount_ > 1 && periodMs_ > 0) {
+            const double n = double(holdCount_), mean = holdMsSum / n;
+            s.holdSdMs = std::sqrt(std::max(0.0, holdMsSq / n - mean * mean));
+            if (s.k && s.holds) s.judderMs = double(deviation) * periodMs_ / double(s.holds);
+        }
+        if (dn > 2) {   // residual standard deviation of y = (first shown vblank time - Present call) against the call time: a line removes the period drift
+            const double vx = dxx - dx * dx / dn, vy = dyy - dy * dy / dn, cxy = dxy - dx * dy / dn;
+            s.showJitterMs = std::sqrt(std::max(0.0, vy - (vx > 1e-9 ? cxy * cxy / vx : 0.0)) / dn);
         }
         std::uint64_t consistentGapFrames = 0;   // gap frames that MAY be even
         for (std::size_t i = 0; i < gapCount_; ++i) {
@@ -384,7 +409,8 @@ inline std::string formatPushCadence(const PushOnScreenCadence::Summary& s, cons
         "judderPct=%s evenRealPct=%s evenGeneratedPct=%s longestUnevenRun=%llu longHolds=%llu shortHolds=%llu beatS=%s replaced=%llu "
         "holdHistogram=%s holdsByPhase=%s lateFrameHolds=%llu lateFrameUneven=%llu spacingEvenPct=%s phaseAfterVblank=%s capacityWaits=%llu "
         "capacityWaitP99Ms=%s lock=%d earlyPresents=%llu lockMissed=%llu earlyMeanAdvanceMs=%s extraReadings=%llu extraReadingMaxUs=%s lateOver1ms=%llu lateReadySeenLate=%llu lateCapacity=%llu "
-        "lateOther=%llu lateBySubframe=real:%llu,g1:%llu,g2:%llu,g3+:%llu directFlip=%d driverVrr=%d foreground=%d reflex=%d syncInterval=%d",
+        "lateOther=%llu lateBySubframe=real:%llu,g1:%llu,g2:%llu,g3+:%llu directFlip=%d driverVrr=%d foreground=%d reflex=%d syncInterval=%d "
+        "showJitterMs=%s holdSdMs=%s judderMs=%s",
         s.seconds, pushCadencePath(s, c), s.clockFrozen ? "frozen" : s.clockStillPct >= 0 ? "fixed" : "unknown", num(s.clockStillPct, 1).c_str(),
         num(s.outFps, 2).c_str(), num(s.periodMs, 3).c_str(), num(s.intervalP50Ms, 3).c_str(), s.k, num(s.beatFloorPerS, 2).c_str(),
         static_cast<unsigned long long>(s.holds), num(s.measuredPct, 1).c_str(), static_cast<unsigned long long>(s.gaps),
@@ -399,7 +425,7 @@ inline std::string formatPushCadence(const PushOnScreenCadence::Summary& s, cons
         static_cast<unsigned long long>(s.extraReadings), num(s.extraReadingMaxUs, 1).c_str(), static_cast<unsigned long long>(s.late), static_cast<unsigned long long>(s.lateReadySeenLate), static_cast<unsigned long long>(s.lateCapacity),
         static_cast<unsigned long long>(s.lateOther), static_cast<unsigned long long>(s.lateBySubframe[0]), static_cast<unsigned long long>(s.lateBySubframe[1]),
         static_cast<unsigned long long>(s.lateBySubframe[2]), static_cast<unsigned long long>(s.lateBySubframe[3]), c.directPath, c.driverVrr, c.foreground,
-        c.reflex, c.syncInterval);
+        c.reflex, c.syncInterval, num(s.showJitterMs, 3).c_str(), num(s.holdSdMs, 3).c_str(), num(s.judderMs, 3).c_str());
     return std::string(line) +
         " (how long each frame stayed on the screen, from DXGI frame statistics, not photons: PresentRefreshCount of two shown presents named by "
         "consecutive readings; one reading per Present, so short holds are named less often: evenPct (frames with their own hold) is biased "
@@ -412,7 +438,7 @@ inline std::string formatPushCadence(const PushOnScreenCadence::Summary& s, cons
         "or independent flip, not reported): no hold can be dated (holdHistogram n/a), spacingEvenPct = Present intervals within 1 ms of their "
         "median, a measure before the screen; capacityWaits = generated frames that waited for display-queue capacity; late* = paced Presents "
         "over 1 ms after their deadline: GPU work first seen done after the deadline (a late thread wake looks the same), a capacity wait over "
-        "0.5 ms, or neither)";
+        "0.5 ms, or neither; showJitterMs / holdSdMs / judderMs = the same evenness in milliseconds, the figures to compare 2X with 3X: the display-side delay jitter, the spread of hold times and the mean hold error, none of them relative to the frame length)";
 }
 
 // The last window's result for the interface (written by the presenter, read by the bridge once a second).

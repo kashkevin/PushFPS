@@ -11,7 +11,7 @@ cbuffer PresentBlitConstants : register(b0)
 {
     float4 srcDims; // z flags: 1=sRGB encode, 2=fine, 4=PQ encode, 8=SDR white, 16=HDR curve, 32=PQ decode,
                     //   s12-pace shrink (engine/PushDownscale.h): 512=per-texel box when shrinking, 2048=+ mild sharpening, 1024=source holds PQ
-                    //   codes, 4096=source holds sRGB codes
+                    //   codes, 4096=source holds sRGB codes, 8192=clamp to the texels under the pixel's own box, 16384=Catmull-Rom, 32768=Lanczos-2 weights
     float4 dstDims; // x/y=client extent z/w=view center
     // Custom: static HDR brightness curve, applied on absolute nits before the PQ
     // encode. See veyra/engine/HdrOutputTuning.h for the contract; every field is
@@ -127,36 +127,49 @@ float3 LinearToPq(float3 l) {
 float3 SrgbToLinear(float3 c) { c = saturate(c); return lerp(pow((c + 0.055) / 1.055, 2.4), c / 12.92, step(c, 0.04045)); }
 float3 LinearToSrgb(float3 l) { l = saturate(l); return lerp(1.055 * pow(l, 1.0 / 2.4) - 0.055, l * 12.92, step(l, 0.0031308)); }
 float ShrinkBox(float i, float a, float b) { return max(0.0, min(i + 1.0, b) - max(i, a)); }
-float ShrinkWeight(float c, float f, float i, bool sharpen)
+float ShrinkCentre(float c, float f, float i) { return ShrinkBox(i, c - 0.5 * f, c + 0.5 * f); }
+float ShrinkSinc(float x) { const float p = 3.14159265358979323846 * x; return abs(x) < 1e-5 ? 1.0 : sin(p) / p; }
+// kind 0: exact box (+ the mild unsharp mask with `sharpen`), 1: Catmull-Rom, 2: Lanczos-2 (texel-centre weights in screen-pixel units, as the reference).
+float ShrinkWeight(float c, float f, float i, bool sharpen, uint kind)
 {
-    const float centre = ShrinkBox(i, c - 0.5 * f, c + 0.5 * f);
+    if (kind == 1u || kind == 2u) {
+        const float x = abs((i + 0.5 - c) / f);
+        if (kind == 1u) return x < 1.0 ? (1.5 * x - 2.5) * x * x + 1.0 : x < 2.0 ? ((-0.5 * x + 2.5) * x - 4.0) * x + 2.0 : 0.0;
+        return x < 2.0 ? ShrinkSinc(x) * ShrinkSinc(0.5 * x) : 0.0;
+    }
+    const float centre = ShrinkCentre(c, f, i);
     if (!sharpen) return centre;
     return (1.0 + 2.0 * kShrinkSharpen) * centre - kShrinkSharpen * (ShrinkBox(i, c - 1.5 * f, c - 0.5 * f) + ShrinkBox(i, c + 0.5 * f, c + 1.5 * f));
 }
 float4 ShrinkSample(float2 uv, float2 footprint, uint flags)
 {
     uint width, height; sourceTex.GetDimensions(width, height);
-    const bool sharpen = (flags & 2048) != 0, pq = (flags & 1024) != 0, srgb = (flags & 4096) != 0;
+    const bool sharpen = (flags & 2048) != 0, pq = (flags & 1024) != 0, srgb = (flags & 4096) != 0, clampRing = (flags & 8192) != 0;
+    const uint kind = (flags & 16384) != 0 ? 1u : (flags & 32768) != 0 ? 2u : 0u;
     const float2 f = max(footprint, 1.0);
     const float2 c = uv * float2(width, height);           // continuous source coordinates: texel i covers [i, i + 1)
-    const float2 r = (sharpen ? 1.5 : 0.5) * f;
+    const float2 r = (kind != 0u ? 2.0 : sharpen ? 1.5 : 0.5) * f;
     const int2 lo = int2(floor(c - r)), hi = min(int2(ceil(c + r)) - 1, lo + 63);   // at most 64 per axis (a footprint near 21)
     const int2 last = int2(width, height) - 1;
     float4 sum = 0; float weights = 0;
+    float3 minL = 1e30, maxL = -1e30;   // the texels under the screen pixel's own box (flag 8192)
     [loop] for (int y = lo.y; y <= hi.y; ++y) {
-        const float wy = ShrinkWeight(c.y, f.y, float(y), sharpen);
+        const float wy = ShrinkWeight(c.y, f.y, float(y), sharpen, kind);
         if (wy == 0.0) continue;
+        const float ownY = ShrinkCentre(c.y, f.y, float(y));
         [loop] for (int x = lo.x; x <= hi.x; ++x) {
-            const float w = wy * ShrinkWeight(c.x, f.x, float(x), sharpen);
+            const float w = wy * ShrinkWeight(c.x, f.x, float(x), sharpen, kind);
             if (w == 0.0) continue;
             float4 t = sourceTex.Load(int3(clamp(int2(x, y), int2(0, 0), last), 0));
             if (pq) t.rgb = PqToLinear(t.rgb);
             else if (srgb) t.rgb = SrgbToLinear(t.rgb);
+            if (clampRing && ownY > 1e-3 && ShrinkCentre(c.x, f.x, float(x)) > 1e-3) { minL = min(minL, t.rgb); maxL = max(maxL, t.rgb); }
             sum += w * t;
             weights += w;
         }
     }
     sum /= max(weights, 1e-6);
+    if (clampRing && all(minL <= maxL)) sum.rgb = clamp(sum.rgb, minL, maxL);
     if (pq) sum.rgb = LinearToPq(sum.rgb);
     else if (srgb) sum.rgb = LinearToSrgb(sum.rgb);
     sum.a = saturate(sum.a);

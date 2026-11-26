@@ -14,6 +14,9 @@
 // turn: its light on screen pulses (spread 1.4 of its mean in HDR10, 0.9 in SDR). At f = 2.63 (his 1462x884 window) one tap per
 // screen pixel skips whole 4K columns: thin lines vanish outright at some positions (spread 3.8).
 //
+// Variant chosen when the choice is on: AreaSharpClamp (area + the mild unsharp mask + clamp to the box's own texels); the others stay
+// selectable for A/B with VEYRA_EXP_RP_SHRINK_KERNEL (area | sharp | clamp (default) | catmull | catmull-clamp | lanczos |
+// lanczos-clamp). Table: docs/drafts/PACE_DOWNSCALE.md (SIMULATED, tools/pace_downscale/downscale_ref.py).
 // THE FIX, a visible choice "Steadier fine detail" (pushSteadyDetail, default off): every 4K texel under the screen pixel's
 // footprint is decoded to linear light first (PQ, sRGB, or nothing for scRGB), weighted exactly, summed, normalised, coded again.
 // Kernel chosen by numbers (tests/remoteplay/OnScreenCadenceTests.inc downscale_kernel_table): AreaSharp = the exact coverage box
@@ -28,7 +31,20 @@
 
 namespace veyra::engine {
 
-enum class PushShrinkKernel : int { Bilinear1 = 0, Area = 1, CatmullRom = 2, Mitchell = 3, Lanczos2 = 4, AreaSharp = 5 };
+// The *Clamp kernels (stream s12-pace, item 3 of the owner's list): the same weights, then the result is clamped, per channel in
+// linear light, to the range of the texels under the screen pixel's OWN box (weight of the exact area box > 0). A sharpening lobe
+// can then never ring past the source: no overshoot beyond a 1000-nit highlight, no negative light (a negative scRGB / BT.2020
+// channel is clipped by the display and shifts the hue). Mitchell is table-only (not in the shader).
+enum class PushShrinkKernel : int { Bilinear1 = 0, Area = 1, CatmullRom = 2, Mitchell = 3, Lanczos2 = 4, AreaSharp = 5, AreaSharpClamp = 6, CatmullRomClamp = 7, Lanczos2Clamp = 8 };
+// A texel belongs to the screen pixel's own box when the box covers more than this much of it (per axis): a float rounding of the
+// footprint's edge must not decide the clamp's range (the shader and this reference must agree).
+inline constexpr double kPushShrinkOwnBox = 1e-3;
+inline bool pushShrinkClamps(PushShrinkKernel k) { return k == PushShrinkKernel::AreaSharpClamp || k == PushShrinkKernel::CatmullRomClamp || k == PushShrinkKernel::Lanczos2Clamp; }
+// The weights' family without the clamp.
+inline PushShrinkKernel pushShrinkBase(PushShrinkKernel k) {
+    return k == PushShrinkKernel::AreaSharpClamp ? PushShrinkKernel::AreaSharp : k == PushShrinkKernel::CatmullRomClamp ? PushShrinkKernel::CatmullRom
+         : k == PushShrinkKernel::Lanczos2Clamp ? PushShrinkKernel::Lanczos2 : k;
+}
 // AreaSharp: the exact coverage box plus a mild unsharp mask made of the two neighbouring screen pixels' boxes:
 // (1 + 2s) box(centre) - s box(left) - s box(right). s = kPushShrinkSharpen, chosen so contrast at 4 / 3 / 2.5 screen-pixel
 // periods is not below Package 16's single tap at 1.5x while the overshoot stays under 3 % (table in the tests).
@@ -51,6 +67,7 @@ inline double pushEncode(double light, PushTransfer t) { return t == PushTransfe
 
 // The kernel in screen-pixel units x (0 = the screen pixel's centre), and its radius.
 inline double pushShrinkRadius(PushShrinkKernel k) {
+    k = pushShrinkBase(k);
     return k == PushShrinkKernel::Area ? 0.5 : k == PushShrinkKernel::AreaSharp ? 1.5 : k == PushShrinkKernel::Bilinear1 ? 0.0 : 2.0;
 }
 inline double pushCubic(double x, double b, double c) {   // Mitchell-Netravali family (B, C)
@@ -73,11 +90,25 @@ inline double pushShrinkKernel(PushShrinkKernel k, double x) {
 // AreaSharp = the same with the neighbouring boxes subtracted; the others = the kernel at the texel's centre, in screen-pixel
 // units. Unnormalised.
 inline double pushShrinkWeight(PushShrinkKernel k, double c, double f, int i) {
+    k = pushShrinkBase(k);
     const auto box = [&](double a, double b) { return std::max(0.0, std::min(double(i) + 1, b) - std::max(double(i), a)); };
     if (k == PushShrinkKernel::Area) return box(c - f / 2, c + f / 2);
     if (k == PushShrinkKernel::AreaSharp)
         return (1 + 2 * kPushShrinkSharpen) * box(c - f / 2, c + f / 2) - kPushShrinkSharpen * (box(c - 1.5 * f, c - f / 2) + box(c + f / 2, c + 1.5 * f));
     return pushShrinkKernel(k, (double(i) + 0.5 - c) / f);
+}
+inline const char* pushShrinkKernelName(PushShrinkKernel k) {
+    switch (k) {
+    case PushShrinkKernel::Area: return "area";
+    case PushShrinkKernel::AreaSharp: return "area+sharpen";
+    case PushShrinkKernel::AreaSharpClamp: return "area+sharpen+clamp";
+    case PushShrinkKernel::CatmullRom: return "catmull-rom";
+    case PushShrinkKernel::CatmullRomClamp: return "catmull-rom+clamp";
+    case PushShrinkKernel::Mitchell: return "mitchell";
+    case PushShrinkKernel::Lanczos2: return "lanczos2";
+    case PushShrinkKernel::Lanczos2Clamp: return "lanczos2+clamp";
+    default: return "package16";
+    }
 }
 inline bool pushShrinkApplies(PushShrinkKernel k, double footprint) { return k != PushShrinkKernel::Bilinear1 && footprint > 1.001; }
 
@@ -107,18 +138,24 @@ inline double pushShrinkSample(const PushPlane& src, unsigned outW, unsigned out
     if (!pushShrinkApplies(k, std::max(fx, fy))) return src.bilinear(cx, cy);
     const double gx = std::max(fx, 1.0), gy = std::max(fy, 1.0), rx = pushShrinkRadius(k) * gx, ry = pushShrinkRadius(k) * gy;
     const int x0 = int(std::floor(cx - rx)), x1 = int(std::ceil(cx + rx)) - 1, y0 = int(std::floor(cy - ry)), y1 = int(std::ceil(cy + ry)) - 1;
-    double sum = 0, weights = 0;
+    double sum = 0, weights = 0, lo = 1e300, hi = -1e300;
+    const bool clamps = pushShrinkClamps(k);
     for (int y = y0; y <= y1; ++y) {
         const double wy = pushShrinkWeight(k, cy, gy, y);
         if (wy == 0) continue;
+        const double ownY = clamps ? pushShrinkWeight(PushShrinkKernel::Area, cy, gy, y) : 0.0;
         for (int x = x0; x <= x1; ++x) {
             const double w = wy * pushShrinkWeight(k, cx, gx, x);
             if (w == 0) continue;
-            sum += w * pushDecode(src.at(x, y), t);
+            const double v = pushDecode(src.at(x, y), t);
+            sum += w * v;
             weights += w;
+            if (clamps && ownY > kPushShrinkOwnBox && pushShrinkWeight(PushShrinkKernel::Area, cx, gx, x) > kPushShrinkOwnBox) { lo = std::min(lo, v); hi = std::max(hi, v); }
         }
     }
-    return pushEncode(weights != 0 ? sum / weights : 0.0, t);
+    double light = weights != 0 ? sum / weights : 0.0;
+    if (clamps && lo <= hi) light = std::clamp(light, lo, hi);
+    return pushEncode(light, t);
 }
 
 // 1D helpers for the kernel table (a picture constant along y): one row of codes in, one row of codes out.
@@ -130,14 +167,18 @@ inline std::vector<double> pushShrinkRow(const std::vector<double>& codes, unsig
         const double c = (o + 0.5) * f;
         if (!pushShrinkApplies(k, f)) { out[o] = p.bilinear(c, 0.5); continue; }
         const double r = pushShrinkRadius(k) * f;
-        double sum = 0, weights = 0;
+        double sum = 0, weights = 0, lo = 1e300, hi = -1e300;
         for (int x = int(std::floor(c - r)); x <= int(std::ceil(c + r)); ++x) {
             const double w = pushShrinkWeight(k, c, f, x);
             if (w == 0) continue;
-            sum += w * pushDecode(p.at(x, 0), t);
+            const double v = pushDecode(p.at(x, 0), t);
+            sum += w * v;
             weights += w;
+            if (pushShrinkClamps(k) && pushShrinkWeight(PushShrinkKernel::Area, c, f, x) > kPushShrinkOwnBox) { lo = std::min(lo, v); hi = std::max(hi, v); }
         }
-        out[o] = pushEncode(weights != 0 ? sum / weights : 0.0, t);
+        double light = weights != 0 ? sum / weights : 0.0;
+        if (pushShrinkClamps(k) && lo <= hi) light = std::clamp(light, lo, hi);
+        out[o] = pushEncode(light, t);
     }
     return out;
 }
@@ -151,10 +192,14 @@ inline std::atomic<bool>& pushSteadyDetailStore() {
 }
 inline void setPushSteadyDetail(bool on) { pushSteadyDetailStore().store(on); }
 inline bool pushSteadyDetail() { return pushSteadyDetailStore().load(); }
-inline constexpr unsigned kPushShrinkFlagOn = 512, kPushShrinkFlagPq = 1024, kPushShrinkFlagSharpen = 2048, kPushShrinkFlagSrgb = 4096;
+// 8192 = clamp to the texels under the screen pixel's own box (the *Clamp kernels), 16384 = Catmull-Rom weights, 32768 = Lanczos-2 weights.
+inline constexpr unsigned kPushShrinkFlagOn = 512, kPushShrinkFlagPq = 1024, kPushShrinkFlagSharpen = 2048, kPushShrinkFlagSrgb = 4096,
+                          kPushShrinkFlagClamp = 8192, kPushShrinkFlagCatmull = 16384, kPushShrinkFlagLanczos = 32768;
 inline unsigned pushShrinkFlags(PushShrinkKernel k, PushTransfer t) {
-    if (k != PushShrinkKernel::Area && k != PushShrinkKernel::AreaSharp) return 0;
-    return kPushShrinkFlagOn + (k == PushShrinkKernel::AreaSharp ? kPushShrinkFlagSharpen : 0) +
+    const PushShrinkKernel b = pushShrinkBase(k);
+    if (b != PushShrinkKernel::Area && b != PushShrinkKernel::AreaSharp && b != PushShrinkKernel::CatmullRom && b != PushShrinkKernel::Lanczos2) return 0;
+    return kPushShrinkFlagOn + (b == PushShrinkKernel::AreaSharp ? kPushShrinkFlagSharpen : 0) + (b == PushShrinkKernel::CatmullRom ? kPushShrinkFlagCatmull : 0) +
+           (b == PushShrinkKernel::Lanczos2 ? kPushShrinkFlagLanczos : 0) + (pushShrinkClamps(k) ? kPushShrinkFlagClamp : 0) +
            (t == PushTransfer::Pq ? kPushShrinkFlagPq : t == PushTransfer::Srgb ? kPushShrinkFlagSrgb : 0);
 }
 // Source pixels per back-buffer pixel along the SOURCE's x and y (the picture shown renderW x renderH client pixels, the back

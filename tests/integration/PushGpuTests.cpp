@@ -966,10 +966,11 @@ void testPresentShrink(Gpu& gpu, bool hdr10) {
     };
     struct Size { uint32_t w, h; const char* name; };
     for (const Size size : {Size{320, 32, "1.5x"}, Size{183, 18, "2.63x"}}) {
-        for (const auto kernel : {engine::PushShrinkKernel::Area, engine::PushShrinkKernel::AreaSharp, engine::PushShrinkKernel::Bilinear1}) {
+        for (const auto kernel : {engine::PushShrinkKernel::Area, engine::PushShrinkKernel::AreaSharp, engine::PushShrinkKernel::AreaSharpClamp, engine::PushShrinkKernel::CatmullRom,
+                                  engine::PushShrinkKernel::CatmullRomClamp, engine::PushShrinkKernel::Lanczos2, engine::PushShrinkKernel::Lanczos2Clamp, engine::PushShrinkKernel::Bilinear1}) {
             std::vector<double> got;
             const unsigned flags = engine::pushShrinkFlags(kernel, transfer);
-            const std::string what = tag + " " + size.name + (kernel == engine::PushShrinkKernel::Area ? " area" : kernel == engine::PushShrinkKernel::AreaSharp ? " area+sharpen" : " package16");
+            const std::string what = tag + " " + size.name + " " + engine::pushShrinkKernelName(kernel);
             const auto start = std::chrono::steady_clock::now();
             if (!draw(size.w, size.h, flags, got)) { check(false, what + ": drawn"); continue; }
             const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();

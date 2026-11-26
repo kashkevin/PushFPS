@@ -251,7 +251,7 @@ private:
     // Stream "s12-pace": "Steadier fine detail" (PushDownscale.h): allowed unless PushLegacyPart::PresentDownscale17 restores
     // Package 16; used only while the user's choice (pushSteadyDetail) is on; the kernel; the last state logged ([present-path] shrink).
     bool downscaleArea_=true;
-    PushShrinkKernel shrinkKernelChoice_=PushShrinkKernel::AreaSharp;
+    PushShrinkKernel shrinkKernelChoice_=PushShrinkKernel::AreaSharpClamp;
     struct ShrinkLogged { int kernel=-1,transfer=-1,fx100=-1,fy100=-1; } shrinkLogged_;
     void noteShrink(PushShrinkKernel kernel,PushTransfer transfer,PushShrinkFootprint footprint);
     bool statsReadings_=true;int64_t lastReading100ns_=0;   // stream "s12-pace": extra readings (PushLegacyPart::StatsReadings17)

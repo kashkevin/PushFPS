@@ -473,6 +473,82 @@ TEST(onscreen_even_share_range_contains_the_truth_at_2x_and_3x_and_any_report_de
         }
 }
 
+// ITEM 1, the UNBIASED measurement. The same display-side jitter (one shared sequence of delays, 0 or 1 refresh after the ideal
+// vblank, drawn once) is applied to a 2X timeline (3 refreshes per frame at 179.952 Hz: 60 FPS) and a 3X timeline (2 refreshes:
+// 90 FPS); statistics read once per refresh, as the presenter does. The scores in milliseconds (showJitterMs, holdSdMs, judderMs) must
+// agree, and the old judderPct (relative to the frame length) is shown to differ by exactly k3/k2 = 1.5: a bias by construction, now
+// documented. A delay of two refreshes is left out of the equality: at 3X a frame cannot be shown before its predecessor, so two
+// refreshes of delay are squeezed (a property of the multiplier, not of the estimator). SIMULATED: a model, not a Windows trace.
+namespace onscreen_tests {
+inline veyra::engine::PushOnScreenCadence::Summary unbiasedTimeline(int k, const std::vector<int>& delays, std::size_t frames) {
+    veyra::engine::PushOnScreenCadence c;
+    const double period = 1000.0 / 179.952;
+    std::vector<std::int64_t> shown(frames);
+    for (std::size_t n = 0; n < frames; ++n) {
+        const std::int64_t ideal = 1000 + std::int64_t(n) * k + delays[n];
+        shown[n] = n ? std::max(shown[n - 1] + 1, ideal) : ideal;
+    }
+    std::size_t nextCall = 0, named = 0;
+    const std::int64_t end = shown.back() + 4;
+    for (std::int64_t v = 1000 - 1; v < end; ++v) {
+        while (nextCall < frames && std::int64_t(1000) + std::int64_t(nextCall) * k - 1 == v) {   // the Present call, 0.3 refresh after vblank v
+            c.presented(std::uint32_t(nextCall + 1), nextCall % std::size_t(k == 2 ? 3 : 2) != 0, (double(v) + 0.3) * period, double(v) * period, period);
+            ++nextCall;
+        }
+        while (named < frames && shown[named] <= v) ++named;   // present ids 1 .. named are on screen by vblank v
+        if (named > 0 && shown[named - 1] <= v) c.statistics(std::uint32_t(named), std::uint32_t(shown[named - 1]), std::uint32_t(v), (double(v) + 0.9) * period);
+    }
+    return c.take((double(end) + 1) * period);
+}
+}  // namespace onscreen_tests
+
+TEST(onscreen_unbiased_scores_are_identical_at_2x_and_3x_for_identical_jitter) {
+    using namespace onscreen_tests;
+    Lcg rng{4242};
+    std::vector<int> delays(3000);
+    for (auto& d : delays) d = rng.next() < 0.3 ? 1 : 0;   // 30 % of the frames are shown one refresh late
+    const auto s3 = unbiasedTimeline(2, delays, delays.size());   // 3X: 2 refreshes per frame
+    const auto s2 = unbiasedTimeline(3, delays, delays.size());   // 2X: 3 refreshes per frame
+    if (std::getenv("ONSCREEN_SIM_PRINT"))
+        std::printf("unbiased 3X: k=%d holds=%llu covered %.1f %% even %.2f..%.2f %% judderMs %.4f holdSdMs %.4f showJitterMs %.4f judderPct %.2f | 2X: k=%d holds=%llu covered %.1f %% even %.2f..%.2f %% judderMs %.4f holdSdMs %.4f showJitterMs %.4f judderPct %.2f
+",
+                    s3.k, static_cast<unsigned long long>(s3.holds), s3.coveredPct, s3.evenPctMin, s3.evenPctMax, s3.judderMs, s3.holdSdMs, s3.showJitterMs, s3.judderPct,
+                    s2.k, static_cast<unsigned long long>(s2.holds), s2.coveredPct, s2.evenPctMin, s2.evenPctMax, s2.judderMs, s2.holdSdMs, s2.showJitterMs, s2.judderPct);
+    CHECK(s3.k == 2 && s2.k == 3);
+    CHECK(s3.coveredPct > 99.0 && s2.coveredPct > 99.0 && s3.holds == s2.holds);
+    CHECK(s3.judderMs > 0.5 && s3.holdSdMs > 0.5 && s3.showJitterMs > 0.5);   // the jitter is really measured
+    CHECK(std::abs(s3.judderMs - s2.judderMs) < 1e-6);
+    CHECK(std::abs(s3.holdSdMs - s2.holdSdMs) < 1e-6);
+    CHECK(std::abs(s3.showJitterMs - s2.showJitterMs) < 0.03 * s2.showJitterMs);   // the drift-removing line fit sees a different spread of times
+    CHECK(std::abs(s3.evenPctMax - s2.evenPctMax) < 1.0 && std::abs(s3.evenPctMin - s2.evenPctMin) < 1.0);
+    // The old figure is relative to the frame's length: 1.5 times larger at 3X for the very same jitter (what "unbiased" removes).
+    CHECK(std::abs(s3.judderPct / s2.judderPct - 1.5) < 0.01);
+}
+
+TEST(onscreen_unbiased_scores_do_not_depend_on_the_window_length_or_which_frames_are_real) {
+    using namespace onscreen_tests;
+    Lcg rng{9001};
+    std::vector<int> delays(3000);
+    for (auto& d : delays) d = rng.next() < 0.3 ? 1 : 0;
+    // The same refresh grid, 10 s of 3X (900 frames at 90 FPS) against 10 s of 2X (600 frames): prefixes of one jitter sequence.
+    const auto long3 = unbiasedTimeline(2, delays, 900), long2 = unbiasedTimeline(3, delays, 600);
+    const auto whole3 = unbiasedTimeline(2, delays, 3000), whole2 = unbiasedTimeline(3, delays, 3000);
+    // Sampling error only: within 15 % of the long-window value at either multiplier, and 2X against 3X within 15 % of each other.
+    const auto close = [](double a, double b) { return std::abs(a - b) <= 0.15 * std::max(a, b); };
+    CHECK(close(long3.judderMs, whole3.judderMs) && close(long2.judderMs, whole2.judderMs) && close(long3.judderMs, long2.judderMs));
+    CHECK(close(long3.holdSdMs, whole3.holdSdMs) && close(long2.holdSdMs, whole2.holdSdMs) && close(long3.holdSdMs, long2.holdSdMs));
+    CHECK(close(long3.showJitterMs, whole3.showJitterMs) && close(long2.showJitterMs, whole2.showJitterMs) && close(long3.showJitterMs, long2.showJitterMs));
+    // No jitter: both read exactly zero (a perfect schedule scores perfectly at either multiplier).
+    const std::vector<int> none(1000, 0);
+    for (int k : {2, 3}) {
+        const auto s = unbiasedTimeline(k, none, none.size());
+        CHECK(s.judderMs == 0.0 && s.holdSdMs < 1e-9 && s.showJitterMs < 1e-6);
+    }
+    // The line carries the new fields.
+    const auto line = veyra::engine::formatPushCadence(whole3, veyra::engine::PushCadenceContext{});
+    CHECK(field(line, "judderMs") != "-1" && field(line, "holdSdMs") != "-1" && field(line, "showJitterMs") != "-1");
+}
+
 // Stream "s12-pace": the present blit's downscale (engine/PushDownscale.h, CPU reference of shaders/PresentBlit.hlsl PushShrink).
 // OFFLINE NUMBERS on synthetic pictures at his ratios: 3840 -> 2560 (f = 1.5, full screen) and 3840 -> 1462 (f = 2.63, his
 // window), HDR10 (PQ codes) and SDR (sRGB codes). Not the GPU: the shader itself is compared with this in PushGpuTests
@@ -571,10 +647,7 @@ inline Numbers measure(PushShrinkKernel k, const Case& c) {
     r.overshoot *= 100;
     return r;
 }
-inline const char* kernelName(PushShrinkKernel k) {
-    switch (k) { case PushShrinkKernel::Bilinear1: return "package16"; case PushShrinkKernel::Area: return "area"; case PushShrinkKernel::CatmullRom: return "catmull-rom";
-    case PushShrinkKernel::Mitchell: return "mitchell"; case PushShrinkKernel::AreaSharp: return "area+sharpen"; default: return "lanczos2"; }
-}
+inline const char* kernelName(PushShrinkKernel k) { return pushShrinkKernelName(k); }
 // Texel loads per screen pixel (2D): the shader's loop bounds for the footprint.
 inline int loads(PushShrinkKernel k, double f) {
     if (!pushShrinkApplies(k, f)) return 4;
@@ -685,7 +758,8 @@ TEST(downscale_kernel_table) {
     using namespace veyra::engine;
     using namespace downscale_tests;
     const Case cases[] = {{"1.5x HDR10", 1.5, PushTransfer::Pq}, {"1.5x SDR", 1.5, PushTransfer::Srgb}, {"2.63x HDR10", 3840.0 / 1462.0, PushTransfer::Pq}, {"2.63x SDR", 3840.0 / 1462.0, PushTransfer::Srgb}};
-    const PushShrinkKernel kernels[] = {PushShrinkKernel::Bilinear1, PushShrinkKernel::Area, PushShrinkKernel::AreaSharp, PushShrinkKernel::CatmullRom, PushShrinkKernel::Mitchell, PushShrinkKernel::Lanczos2};
+    const PushShrinkKernel kernels[] = {PushShrinkKernel::Bilinear1, PushShrinkKernel::Area, PushShrinkKernel::AreaSharp, PushShrinkKernel::AreaSharpClamp, PushShrinkKernel::CatmullRom,
+                                        PushShrinkKernel::CatmullRomClamp, PushShrinkKernel::Mitchell, PushShrinkKernel::Lanczos2, PushShrinkKernel::Lanczos2Clamp};
     const bool print = std::getenv("ONSCREEN_SIM_PRINT") != nullptr;
     if (print) std::printf("| case | kernel | stroke mean | stroke worst | pulse | contrast 4 | contrast 3 | contrast 2.5 | overshoot %% | moire | loads/px |\n");
     for (const auto& c : cases) {
@@ -695,7 +769,15 @@ TEST(downscale_kernel_table) {
             if (print)
                 std::printf("| %s | %s | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.1f | %.3f | %d |\n", c.name, kernelName(k), r.strokeMean, r.strokeWorst, r.pulse,
                             r.contrast4, r.contrast3, r.contrast25, r.overshoot, r.moire, loads(k, c.f));
-            if (k == PushShrinkKernel::AreaSharp) {   // THE CHOICE (PushDownscale.h), against the bar set for default-on
+            if (pushShrinkClamps(k)) {   // the clamped variants: no ringing at all, whatever the weights
+                CHECK(r.overshoot < 1e-6);
+                CHECK(r.strokeWorst > 3 * p16.strokeWorst && r.strokeWorst > 0.2);
+            }
+            if (k == PushShrinkKernel::AreaSharpClamp) {   // THE DEFAULT KERNEL of the choice: Package 16's contrast, no overshoot, no pulse
+                CHECK(r.pulse < 0.1);
+                if (c.f < 2) CHECK(r.contrast4 >= p16.contrast4 - 0.01 && r.contrast3 >= p16.contrast3 - 0.01 && r.contrast25 >= p16.contrast25 - 0.01);
+            }
+            if (k == PushShrinkKernel::AreaSharp) {   // the unclamped one (PushDownscale.h), against the bar set for default-on
                 CHECK(r.strokeWorst > 3 * p16.strokeWorst && r.strokeWorst > 0.2);   // the thin-stroke collapse is gone
                 CHECK(r.pulse < 0.05 && p16.pulse > 0.9);            // the energy pulse is gone
                 CHECK(r.overshoot < 3.0);
@@ -706,6 +788,38 @@ TEST(downscale_kernel_table) {
             }
         }
     }
+}
+
+// HDR accuracy of the choice (SIMULATED, PQ, 1.5x): a flat 1000-nit patch keeps its nits exactly with every kernel; a 1000-nit step edge
+// never goes past the source peak with a clamped kernel (the unclamped sharpening lobes do: tools/pace_downscale/downscale_ref.py prints
+// 20-52 nits), and a thin highlight's neighbours never go negative (a negative channel would shift the hue on the display).
+TEST(downscale_hdr_accuracy_and_no_overshoot_beyond_the_source_peak) {
+    using namespace veyra::engine;
+    const double peakCode = pushLinearToPq(0.1), darkCode = pushLinearToPq(5.0 / 10000.0);
+    for (auto k : {PushShrinkKernel::Area, PushShrinkKernel::AreaSharp, PushShrinkKernel::AreaSharpClamp, PushShrinkKernel::CatmullRom, PushShrinkKernel::CatmullRomClamp,
+                   PushShrinkKernel::Lanczos2, PushShrinkKernel::Lanczos2Clamp}) {
+        for (double v : pushShrinkRow(std::vector<double>(480, peakCode), 320, k, PushTransfer::Pq)) CHECK(std::abs(pushPqToLinear(v) * 10000.0 - 1000.0) < 0.01);   // exact nits
+        double over = 0;
+        for (int q = 0; q < 16; ++q) {
+            std::vector<double> codes(480, darkCode);
+            const double x0 = 200 + q / 16.0;
+            for (int i = 0; i < 480; ++i) codes[std::size_t(i)] = pushLinearToPq((5.0 + 995.0 * std::clamp(x0 - i, 0.0, 1.0)) / 10000.0);
+            for (double v : pushShrinkRow(codes, 320, k, PushTransfer::Pq)) {
+                const double nits = pushPqToLinear(v) * 10000.0;
+                over = std::max(over, nits - 1000.0);
+            }
+        }
+        if (pushShrinkClamps(k)) CHECK(over < 0.05);
+        else if (k != PushShrinkKernel::Area) CHECK(over > 5.0);   // the unclamped sharpening lobes do overshoot (so the clamp is doing something)
+        else CHECK(over < 0.05);
+    }
+    // Weights keep the family: the clamp does not change the unclamped weights, only the result.
+    for (int i = 198; i < 206; ++i) CHECK(pushShrinkWeight(PushShrinkKernel::AreaSharpClamp, 201.75, 1.5, i) == pushShrinkWeight(PushShrinkKernel::AreaSharp, 201.75, 1.5, i));
+    // Flags: every selectable kernel has its own shader flags; Mitchell and Package 16 have none.
+    CHECK(pushShrinkFlags(PushShrinkKernel::AreaSharpClamp, PushTransfer::Pq) == (kPushShrinkFlagOn | kPushShrinkFlagSharpen | kPushShrinkFlagClamp | kPushShrinkFlagPq));
+    CHECK(pushShrinkFlags(PushShrinkKernel::CatmullRom, PushTransfer::Srgb) == (kPushShrinkFlagOn | kPushShrinkFlagCatmull | kPushShrinkFlagSrgb));
+    CHECK(pushShrinkFlags(PushShrinkKernel::Lanczos2Clamp, PushTransfer::Linear) == (kPushShrinkFlagOn | kPushShrinkFlagLanczos | kPushShrinkFlagClamp));
+    CHECK(pushShrinkFlags(PushShrinkKernel::Mitchell, PushTransfer::Pq) == 0 && pushShrinkFlags(PushShrinkKernel::Bilinear1, PushTransfer::Pq) == 0);
 }
 
 // Stream "s12-pace": the 2X + duplicate removal defect (engine/PushAdmissionAnchor.h), reproduced with the pure learner
