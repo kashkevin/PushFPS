@@ -35,6 +35,9 @@ ColumnLayout {
             onToggled: checked => veyra.variableRefresh = checked
         }
     }
+    // Stream "s12-settings" (review 3 MUST 2): the switch is read only with display sync Automatic; say so.
+    PushEffectBoard { id: presentationEffect; active: presentationRows.visible }
+    PushEffectNote { objectName: "presentation-note-vrr"; effect: presentationEffect.facts; setting: "vrr" }
     NvidiaVrrProfileRow { backend: presentationRows.profileTools }
     VRow {
         label: qsTr("输出上限")

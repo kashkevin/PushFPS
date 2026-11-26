@@ -1,0 +1,302 @@
+{
+ "%1 · 正在运行 %2X": {
+  "en": "%1 · %2X running",
+  "zh-TW": "%1 · 正在執行 %2X",
+  "ja": "%1 · %2X で実行中"
+ },
+ "“低”档没有更快的模型": {
+  "en": "Low has no faster model",
+  "zh-TW": "「低」檔沒有更快的模型",
+  "ja": "「低」にはより速いモデルがありません"
+ },
+ "也会开启去除重复帧": {
+  "en": "also turns on duplicate removal",
+  "zh-TW": "也會開啟去除重複幀",
+  "ja": "重複フレームの除去もオンになります"
+ },
+ "内部以 %1×%2 处理，以 %3×%4 显示": {
+  "en": "works at %1×%2 inside, shown at %3×%4",
+  "zh-TW": "內部以 %1×%2 處理，以 %3×%4 顯示",
+  "ja": "内部では %1×%2 で処理し、%3×%4 で表示"
+ },
+ "只在 2X 时有效": {
+  "en": "works at 2X only",
+  "zh-TW": "只在 2X 時有效",
+  "ja": "2X のときだけ有効"
+ },
+ "只在播放视频文件时有效，采集卡和串流不使用": {
+  "en": "only applies to video file playback; capture cards and streams do not use it",
+  "zh-TW": "只在播放影片檔時有效，擷取卡和串流不使用",
+  "ja": "動画ファイルの再生時のみ有効。キャプチャーカードとストリームでは使われません"
+ },
+ "只在显示同步为“自动”时使用；可变刷新由驱动决定": {
+  "en": "used only with display sync Automatic; variable refresh is the driver's decision",
+  "zh-TW": "只在顯示同步為「自動」時使用；可變刷新由驅動決定",
+  "ja": "表示同期が「自動」のときだけ使われます。可変リフレッシュはドライバーが決めます"
+ },
+ "只对其他补帧方式有效": {
+  "en": "only used by another frame generation method",
+  "zh-TW": "只對其他補幀方式有效",
+  "ja": "ほかのフレーム生成方式でのみ使われます"
+ },
+ "实时 HUD 锁定：未运行": {
+  "en": "Live HUD Lock: not running",
+  "zh-TW": "即時 HUD 鎖定：未執行",
+  "ja": "ライブ HUD ロック：実行されていません"
+ },
+ "实时 HUD 锁定：没能启动": {
+  "en": "Live HUD Lock: could not start",
+  "zh-TW": "即時 HUD 鎖定：未能啟動",
+  "ja": "ライブ HUD ロック：起動できませんでした"
+ },
+ "实时 HUD 锁定：运行中": {
+  "en": "Live HUD Lock: running",
+  "zh-TW": "即時 HUD 鎖定：執行中",
+  "ja": "ライブ HUD ロック：実行中"
+ },
+ "对 %1 没有作用（它自己估算运动）": {
+  "en": "no effect with %1 (it estimates motion itself)",
+  "zh-TW": "對 %1 沒有作用（它自己估算運動）",
+  "ja": "%1 では効果がありません（動きを自分で推定します）"
+ },
+ "已生效（显示同步为垂直同步时队列本来就是 1 帧）": {
+  "en": "already in force (display sync Vsync keeps a one-frame queue)",
+  "zh-TW": "已生效（顯示同步為垂直同步時佇列本來就是 1 幀）",
+  "ja": "すでに有効です（垂直同期ではキューが常に 1 フレーム）"
+ },
+ "延迟 %1 ms，其中 %2 ms 是真实帧排在 %3 个生成帧之后等待显示：%4X 时固定": {
+  "en": "of %1 ms delay, %2 ms is the real frame waiting behind %3 generated frames: fixed at %4X",
+  "zh-TW": "延遲 %1 ms，其中 %2 ms 是真實幀排在 %3 個生成幀之後等待顯示：%4X 時固定",
+  "ja": "遅延 %1 ms のうち %2 ms は、実フレームが %3 枚の生成フレームの後で表示を待つ時間です：%4X では固定"
+ },
+ "开启去除重复帧时不起作用": {
+  "en": "no effect while duplicate removal is on",
+  "zh-TW": "開啟去除重複幀時不起作用",
+  "ja": "重複フレームの除去がオンのときは効果がありません"
+ },
+ "开始播放后，这里显示实际运行的补帧": {
+  "en": "shows the frame generation that really runs once a picture plays",
+  "zh-TW": "開始播放後，這裡顯示實際執行的補幀",
+  "ja": "再生を始めると、実際に動いているフレーム生成をここに表示します"
+ },
+ "更快的模型没有加载（显存不足）": {
+  "en": "the faster model did not load (video memory)",
+  "zh-TW": "更快的模型沒有載入（顯示記憶體不足）",
+  "ja": "より速いモデルを読み込めませんでした（ビデオメモリ不足）"
+ },
+ "更改时画面会暂停约 %1 秒": {
+  "en": "the picture pauses about %1 s when this changes",
+  "zh-TW": "更改時畫面會暫停約 %1 秒",
+  "ja": "変更すると映像が約 %1 秒止まります"
+ },
+ "最近几秒：每个真实帧之后显示 %1 个生成帧": {
+  "en": "last seconds: %1 generated frames shown per real frame",
+  "zh-TW": "最近幾秒：每個真實幀之後顯示 %1 個生成幀",
+  "ja": "直近数秒：実フレームごとに生成フレームを %1 枚表示"
+ },
+ "正在运行 %1X：流畅模式（目标 %2 FPS）限制": {
+  "en": "%1X running: limited by Smoothness Mode (target %2 FPS)",
+  "zh-TW": "正在執行 %1X：流暢模式（目標 %2 FPS）限制",
+  "ja": "%1X で実行中：スムーズモード（目標 %2 FPS）による制限"
+ },
+ "正在运行 %1X：自适应倍率选择": {
+  "en": "%1X running: chosen by the adaptive multiplier",
+  "zh-TW": "正在執行 %1X：自適應倍率選擇",
+  "ja": "%1X で実行中：適応倍率が選択"
+ },
+ "正在运行 %1X：输出上限 %2 FPS 限制": {
+  "en": "%1X running: limited by the %2 FPS output cap",
+  "zh-TW": "正在執行 %1X：輸出上限 %2 FPS 限制",
+  "ja": "%1X で実行中：出力上限 %2 FPS による制限"
+ },
+ "没有可选的：%1X 已最接近目标": {
+  "en": "nothing to choose: %1X is already closest to the target",
+  "zh-TW": "沒有可選的：%1X 已最接近目標",
+  "ja": "選ぶものがありません：%1X がすでに目標に最も近いです"
+ },
+ "没有需要修复的：采集画面已是均匀的 %1 FPS": {
+  "en": "nothing to repair: the capture is an even %1 FPS signal",
+  "zh-TW": "沒有需要修復的：擷取畫面已是均勻的 %1 FPS",
+  "ja": "修正するものはありません：キャプチャーは均一な %1 FPS の信号です"
+ },
+ "没能在这台电脑上启动": {
+  "en": "could not start on this PC",
+  "zh-TW": "未能在這台電腦上啟動",
+  "ja": "この PC では起動できませんでした"
+ },
+ "流畅模式目标 %1 FPS 限制": {
+  "en": "limited by Smoothness Mode target %1 FPS",
+  "zh-TW": "流暢模式目標 %1 FPS 限制",
+  "ja": "スムーズモードの目標 %1 FPS による制限"
+ },
+ "流畅模式限制": {
+  "en": "limited by Smoothness Mode",
+  "zh-TW": "流暢模式限制",
+  "ja": "スムーズモードによる制限"
+ },
+ "混合质量档不会加载更快的模型，此开关不起作用": {
+  "en": "no effect with a mixed quality level (the faster model is never loaded)",
+  "zh-TW": "混合品質檔不會載入更快的模型，此開關不起作用",
+  "ja": "混合品質ではより速いモデルを読み込まないため、このスイッチは効果がありません"
+ },
+ "现在没有环节使用光流，这些设置不起作用": {
+  "en": "no effect now: nothing in the running pipeline uses optical flow",
+  "zh-TW": "現在沒有環節使用光流，這些設定不起作用",
+  "ja": "現在オプティカルフローを使う処理がないため、これらの設定は効果がありません"
+ },
+ "自适应倍率选择": {
+  "en": "chosen by the adaptive multiplier",
+  "zh-TW": "自適應倍率選擇",
+  "ja": "適応倍率が選択"
+ },
+ "补帧 %1X（设定 %2X，%3）· %4": {
+  "en": "Frame generation %1X (set %2X, %3) · %4",
+  "zh-TW": "補幀 %1X（設定 %2X，%3）· %4",
+  "ja": "フレーム生成 %1X（設定 %2X、%3）· %4"
+ },
+ "补帧关闭": {
+  "en": "Frame generation off",
+  "zh-TW": "補幀關閉",
+  "ja": "フレーム生成オフ"
+ },
+ "设定 %1X，流畅模式（目标 %2 FPS）限制": {
+  "en": "set %1X, limited by Smoothness Mode (target %2 FPS)",
+  "zh-TW": "設定 %1X，流暢模式（目標 %2 FPS）限制",
+  "ja": "設定 %1X、スムーズモード（目標 %2 FPS）による制限"
+ },
+ "设定 %1X，自适应倍率选择": {
+  "en": "set %1X, chosen by the adaptive multiplier",
+  "zh-TW": "設定 %1X，自適應倍率選擇",
+  "ja": "設定 %1X、適応倍率が選択"
+ },
+ "设定 %1X，输出上限 %2 FPS 限制": {
+  "en": "set %1X, limited by the %2 FPS output cap",
+  "zh-TW": "設定 %1X，輸出上限 %2 FPS 限制",
+  "ja": "設定 %1X、出力上限 %2 FPS による制限"
+ },
+ "输出上限 %1 FPS 限制": {
+  "en": "limited by the %1 FPS output cap",
+  "zh-TW": "輸出上限 %1 FPS 限制",
+  "ja": "出力上限 %1 FPS による制限"
+ },
+ "需要开启去除重复帧": {
+  "en": "needs duplicate removal on",
+  "zh-TW": "需要開啟去除重複幀",
+  "ja": "重複フレームの除去をオンにする必要があります"
+ },
+ "下面 %1 项光流设置对 %2 没有作用（它自己估算运动）": {
+  "en": "the %1 optical-flow settings below have no effect with %2 (it estimates motion itself)",
+  "zh-TW": "下面 %1 項光流設定對 %2 沒有作用（它自己估算運動）",
+  "ja": "以下の %1 項目のオプティカルフロー設定は %2 では効果がありません（動きを自分で推定します）"
+ },
+ "各生成帧的模型（按质量档）：%1": {
+  "en": "model per generated frame (from the quality level): %1",
+  "zh-TW": "各生成幀的模型（依品質檔）：%1",
+  "ja": "生成フレームごとのモデル（品質レベルによる）：%1"
+ },
+ "已开启；最近几秒没有测到它在运行": {
+  "en": "on; not measured running in the last seconds",
+  "zh-TW": "已開啟；最近幾秒沒有測到它在執行",
+  "ja": "オン。直近数秒は動作を計測できていません"
+ },
+ "最近几秒没有显示生成帧": {
+  "en": "no generated frame shown in the last seconds",
+  "zh-TW": "最近幾秒沒有顯示生成幀",
+  "ja": "直近数秒は生成フレームが表示されていません"
+ },
+ "正在应用设置…": {
+  "en": "applying the settings…",
+  "zh-TW": "正在套用設定…",
+  "ja": "設定を適用しています…"
+ },
+ "第 %1 个生成帧 %2 模型": {
+  "en": "generated frame %1: %2 model",
+  "zh-TW": "第 %1 個生成幀 %2 模型",
+  "ja": "生成フレーム %1：%2 モデル"
+ },
+ "需要高于 2X 的倍率": {
+  "en": "needs a multiplier above 2X",
+  "zh-TW": "需要高於 2X 的倍率",
+  "ja": "2X より高い倍率が必要です"
+ },
+ "（相邻的生成帧来自不同模型）": {
+  "en": " (neighbouring generated frames come from different models)",
+  "zh-TW": "（相鄰的生成幀來自不同模型）",
+  "ja": "（隣り合う生成フレームは別のモデルから）"
+ },
+ "预测帧": {
+  "en": "predicted frame",
+  "zh-TW": "預測幀",
+  "ja": "予測フレーム"
+ },
+ "第 %1 个生成帧是预测帧": {
+  "en": "generated frame %1 is the predicted frame",
+  "zh-TW": "第 %1 個生成幀是預測幀",
+  "ja": "生成フレーム %1 は予測フレーム"
+ },
+ "（部分帧对使用了更快的模型）": {
+  "en": " (some pairs used the faster model)",
+  "zh-TW": "（部分幀對使用了更快的模型）",
+  "ja": "（一部のペアはより速いモデルを使用）"
+ },
+ "已开启；PushFPS 无法测量这一项": {
+  "en": "on; PushFPS cannot measure this one",
+  "zh-TW": "已開啟；PushFPS 無法測量這一項",
+  "ja": "オン。PushFPS はこの項目を計測できません"
+ },
+ "没有重复画面可去除；仍按游戏时钟安排帧（在一次测试中：更均匀，延迟约高 2 ms）": {
+  "en": "no repeated pictures to remove; it still times frames by the game's clock (in one test: more even, about 2 ms more delay)",
+  "zh-TW": "沒有重複畫面可去除；仍依遊戲時鐘安排幀（在一次測試中：更均勻，延遲約高 2 ms）",
+  "ja": "除去する重複画像はありませんが、ゲームの時計でフレームを配置します（ある測定では：より均一、遅延は約 2 ms 増加）"
+ },
+ "已请求；NVIDIA 驱动上次报告此显示器没有启用可变刷新": {
+  "en": "asked; the NVIDIA driver last reported variable refresh off on this display",
+  "zh-TW": "已請求；NVIDIA 驅動上次回報此顯示器沒有啟用可變刷新",
+  "ja": "要求済み。NVIDIA ドライバーは前回、このディスプレイで可変リフレッシュがオフと報告しました"
+ },
+ "已开启，但 NVIDIA 驱动现在报告低延迟模式未启用（一次测试中只在 PushFPS 全屏并在最前面时启用）": {
+  "en": "On, but the NVIDIA driver reports low-latency mode off right now (in one test it was on only while PushFPS filled the screen and was in front)",
+  "zh-TW": "已開啟，但 NVIDIA 驅動現在回報低延遲模式未啟用（一次測試中只在 PushFPS 全螢幕並在最前面時啟用）",
+  "ja": "オンですが、NVIDIA ドライバーは現在低遅延モードがオフだと報告しています（ある測定では PushFPS が全画面で最前面のときだけオンでした）"
+ },
+ "正在运行 %1X，但每个真实帧之后平均只显示了 %2 个生成帧（有些被跳过）": {
+  "en": "%1X running, but only %2 generated frames on average after each real frame (some were skipped)",
+  "zh-TW": "正在執行 %1X，但每個真實幀之後平均只顯示了 %2 個生成幀（有些被跳過）",
+  "ja": "%1X で実行中ですが、実フレームごとの生成フレームは平均 %2 枚だけです（一部はスキップ）"
+ },
+ "让 NVIDIA 驱动减少显卡里排队等待的画面。在采集卡画面上的效果没有测出来。只在 NVIDIA 显卡上可用": {
+  "en": "Asks the NVIDIA driver to keep fewer frames waiting in the graphics card. No effect has been measured on a capture card picture yet. NVIDIA graphics cards only",
+  "zh-TW": "讓 NVIDIA 驅動減少顯示卡裡排隊等待的畫面。在擷取卡畫面上的效果沒有測出來。只在 NVIDIA 顯示卡上可用",
+  "ja": "NVIDIA ドライバーにグラフィックスカード内で待つフレームを減らすよう求めます。キャプチャーカードの映像での効果はまだ計測されていません。NVIDIA グラフィックスカードのみ"
+ },
+ "下面显示驱动现在的报告": {
+  "en": "the line below shows what the driver reports now",
+  "zh-TW": "下面顯示驅動現在的回報",
+  "ja": "下にドライバーの現在の報告を表示します"
+ },
+ "单帧队列和全屏已开启；显示同步为垂直同步，可变刷新只由 NVIDIA 驱动决定": {
+  "en": "One-frame queue and full screen are on; display sync is Vsync, so variable refresh is up to the NVIDIA driver",
+  "zh-TW": "單幀佇列和全螢幕已開啟；顯示同步為垂直同步，可變刷新只由 NVIDIA 驅動決定",
+  "ja": "1 フレームのキューと全画面がオンです。表示同期は垂直同期なので、可変リフレッシュは NVIDIA ドライバー次第です"
+ },
+ "可变刷新 · 垂直同步时由驱动决定": {
+  "en": "variable refresh · up to the driver under Vsync",
+  "zh-TW": "可變刷新 · 垂直同步時由驅動決定",
+  "ja": "可変リフレッシュ · 垂直同期ではドライバー次第"
+ },
+ "显示同步为垂直同步时 PushFPS 不请求可变刷新；是否可变刷新由 NVIDIA 驱动决定": {
+  "en": "With display sync Vsync PushFPS does not ask for variable refresh; whether it is used is up to the NVIDIA driver",
+  "zh-TW": "顯示同步為垂直同步時 PushFPS 不請求可變刷新；是否可變刷新由 NVIDIA 驅動決定",
+  "ja": "表示同期が垂直同期のとき PushFPS は可変リフレッシュを要求しません。使われるかは NVIDIA ドライバー次第です"
+ },
+ "一键打开不影响画质的减少等待设置：显卡只排队一帧（NVIDIA 显卡用 NVIDIA 低延迟，在采集卡画面上的效果没有测出来），连接后进入全屏（绕过桌面合成，少等一次刷新），以及平滑帧节奏（垂直同步加输出上限；可变刷新由 NVIDIA 驱动决定）。补帧、AI 增强、HUD 锁定和帧节奏修复保持不变。关闭后恢复之前的设置": {
+  "en": "One tap for the waiting-time settings that do not touch picture quality: the graphics card queues one frame (NVIDIA low latency on NVIDIA cards; no effect measured on a capture card picture yet), full screen after connecting (bypasses desktop composition, one refresh less of waiting), and smooth frame pacing (Vsync plus an output cap; variable refresh is up to the NVIDIA driver). Frame generation, AI enhancement, HUD lock and pacing repair stay as they are. Turning it off restores the previous settings",
+  "zh-TW": "一鍵開啟不影響畫質的減少等待設定：顯示卡只排隊一幀（NVIDIA 顯示卡用 NVIDIA 低延遲，在擷取卡畫面上的效果沒有測出來），連線後進入全螢幕（繞過桌面合成，少等一次刷新），以及平滑幀節奏（垂直同步加輸出上限；可變刷新由 NVIDIA 驅動決定）。補幀、AI 增強、HUD 鎖定和幀節奏修復保持不變。關閉後恢復之前的設定",
+  "ja": "画質に影響しない待ち時間の設定をワンタップで有効にします：グラフィックスカードのキューを 1 フレームに（NVIDIA カードでは NVIDIA 低遅延。キャプチャーカードの映像での効果はまだ計測されていません）、接続後に全画面（デスクトップ合成を通らず、待ちが 1 リフレッシュ減ります）、スムーズなフレームペーシング（垂直同期と出力上限。可変リフレッシュは NVIDIA ドライバー次第）。フレーム生成、AI 強化、HUD ロック、ペーシング修正はそのままです。オフにすると以前の設定に戻ります"
+ },
+ "等屏幕刷新再显示每一帧，并把输出限制在屏幕刷新率：补出来的每一帧都完整显示，玩起来和录像一样流畅。垂直同步时 PushFPS 不请求可变刷新，是否可变刷新由 NVIDIA 驱动决定": {
+  "en": "Shows every frame on a screen refresh and limits the output to the refresh rate: every generated frame is shown whole, as smooth as a recording. With Vsync PushFPS does not ask for variable refresh; whether it is used is up to the NVIDIA driver",
+  "zh-TW": "等螢幕刷新再顯示每一幀，並把輸出限制在螢幕更新率：補出來的每一幀都完整顯示，玩起來和錄影一樣流暢。垂直同步時 PushFPS 不請求可變刷新，是否可變刷新由 NVIDIA 驅動決定",
+  "ja": "画面のリフレッシュを待って各フレームを表示し、出力をリフレッシュレートに制限します：生成フレームもすべて完全に表示され、録画のように滑らかです。垂直同期では PushFPS は可変リフレッシュを要求せず、使われるかは NVIDIA ドライバー次第です"
+ }
+}

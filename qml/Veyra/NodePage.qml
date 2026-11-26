@@ -704,6 +704,9 @@ VPage {
                             text: veyra.sourceSummary.length > 0 ? veyra.sourceSummary : qsTr("未打开片源")
                             color: Theme.t3; font.family: Theme.fontMono; font.pixelSize: 10; elide: Text.ElideRight
                         }
+                        // Stream "s12-settings" (review 3 MUST 3): the same status lines as Professional mode, from one board on this page.
+                        PushEffectBoard { id: nodeEffect; active: inCol.visible }
+                        PushEffectNote { objectName: "node-note-flow"; effect: nodeEffect.facts; setting: "flow"; groupRows: veyra.opticalFlowChoice === 1 ? 3 : 2 }
                         VSelect {
                             objectName: "node-flow-choice"
                             Layout.fillWidth: true
@@ -717,6 +720,7 @@ VPage {
                             NodeLabel { Layout.fillWidth: true; text: qsTr("边缘神盾（防果冻）") }
                             VSwitch { objectName: "node-edge-aegis"; checked: veyra.edgeAegis; onToggled: checked => veyra.edgeAegis = checked }
                         }
+                        PushEffectNote { objectName: "node-note-edgeAegis"; effect: nodeEffect.facts; setting: "edgeAegis" }
                         NodeLabel { text: qsTr("运动估算质量") }
                         VSeg {
                             objectName: "node-flow-quality"
@@ -732,6 +736,7 @@ VPage {
                             VSwitch { objectName: "node-amd-half"; checked: veyra.amdFlowHalf; onToggled: checked => veyra.amdFlowHalf = checked }
                         }
                         DedupModeRow { backend: veyra; namePrefix: "node"; showHelp: false }
+                        PushEffectNote { objectName: "node-note-dedup"; effect: nodeEffect.facts; setting: "dedup" }
                         Text {
                             Layout.fillWidth: true
                             text: qsTr("补帧与 NR 共用，输入后计算一次，不随节点重复。")
@@ -851,6 +856,7 @@ VPage {
                                 }
                             }
                             NodeLabel { Layout.fillWidth: true; text: veyra.vrrHint; wrapMode: Text.WordWrap }
+                            PushEffectNote { objectName: "node-note-vrr"; effect: nodeEffect.facts; setting: "vrr" }
                             NodeLabel { text: qsTr("输出上限") }
                             VSeg {
                                 objectName: "node-output-rate"
@@ -1641,6 +1647,7 @@ VPage {
                         onPicked: id => veyra.fgMultiplier = Number(id)
                     }
                 }
+                PushEffectNote { objectName: "node-note-multiplier"; effect: nodeEffect.facts; setting: "multiplier"; pauseSeconds: veyra.fgBackendName === "vfg" ? 3 : 1 }
                 VRow {
                     label: qsTr("DLSS 性能模式")
                     visible: veyra.fgBackendName === "dlss"
@@ -1660,6 +1667,7 @@ VPage {
                         onPicked: id => veyra.vfgQuality = Number(id)
                     }
                 }
+                PushEffectNote { objectName: "node-note-vfgQuality"; effect: nodeEffect.facts; setting: "vfgQuality"; visible: veyra.fgBackendName === "vfg"; pauseSeconds: 3 }
                 VRow {
                     label: qsTr("PushFlow 档位")
                     visible: veyra.fgBackendName === "pushflow"
@@ -1674,11 +1682,12 @@ VPage {
                 VRow {
                     label: qsTr("VFG 自动调控")
                     visible: veyra.fgBackendName === "vfg"
-                    enabled: veyra.vfgQuality !== 0 && veyra.fgMultiplier === 2
+                    enabled: veyra.vfgQuality > 0 && veyra.vfgQuality < 3 && veyra.fgMultiplier === 2   // s12 D2 (ProPage.qml list-vfg-auto-regulate)
                     opacity: enabled ? 1 : 0.5
                     hint: qsTr("实时采集 2X 时，当前档来不及赶上屏幕刷新，这一对帧就改用下一档，不丢帧也不加延迟。多占约 2 GB 显存，显存不够时不生效")
                     VSwitch { objectName: "node-vfg-auto-regulate"; checked: veyra.vfgAutoRegulate; onToggled: checked => veyra.vfgAutoRegulate = checked }
                 }
+                PushEffectNote { objectName: "node-note-vfgAutoRegulate"; effect: nodeEffect.facts; setting: "vfgAutoRegulate"; visible: veyra.fgBackendName === "vfg" && parts.length > 0 }
                 VRow {
                     label: qsTr("补帧运动来源")
                     visible: veyra.fgBackendName !== "vfg"
@@ -1690,13 +1699,16 @@ VPage {
                     hint: qsTr("帧同步 · 默认关闭")
                     VSwitch { checked: veyra.fgStrict; onToggled: checked => veyra.fgStrict = checked }
                 }
+                PushEffectNote { objectName: "node-note-strictCadence"; effect: nodeEffect.facts; setting: "strictCadence" }
                 NvidiaLowLatencyEditor { namePrefix: "node" }
+                PushEffectNote { objectName: "node-note-nvidiaLowLatency"; effect: nodeEffect.facts; setting: "nvidiaLowLatency"; visible: veyra.nvidiaLowLatencyAvailable === true && parts.length > 0 }
                 VRow {
                     visible: !veyra.nvidiaLowLatencyAvailable
                     label: qsTr("低延迟队列")
                     hint: qsTr("减少处理排队")
                     VSwitch { checked: veyra.fgLowQueue; onToggled: checked => veyra.fgLowQueue = checked }
                 }
+                PushEffectNote { objectName: "node-note-lowQueue"; effect: nodeEffect.facts; setting: "lowQueue"; visible: veyra.nvidiaLowLatencyAvailable !== true && parts.length > 0 }
             }
         }
     }
