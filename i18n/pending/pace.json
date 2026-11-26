@@ -1,0 +1,42 @@
+{
+ "全屏并让 PushFPS 处于前台时，这台电脑的驱动报告了直接显示和可变刷新：每帧按自己的时间显示": {
+  "en": "In fullscreen with PushFPS in front, this PC's driver reported direct display with variable refresh: every frame is shown at its own time",
+  "zh-TW": "全螢幕並讓 PushFPS 位於前景時，這台電腦的驅動回報了直接顯示和可變更新率：每格按自己的時間顯示",
+  "ja": "PushFPS を前面にした全画面では、この PC のドライバーが直接表示と可変リフレッシュを報告しました：各フレームが自分のタイミングで表示されます"
+ },
+ "直接显示（驱动报告）：%1 % 的 Present 间隔均匀（不是屏幕上的测量；可变刷新时屏幕跟随它）": {
+  "en": "Shown directly (driver report): %1 % of Present intervals even (not measured on screen; with variable refresh the screen follows them)",
+  "zh-TW": "直接顯示（驅動回報）：%1 % 的 Present 間隔均勻（不是螢幕上的量測；可變更新率時螢幕跟隨它）",
+  "ja": "直接表示（ドライバー報告）：Present 間隔の %1 % が均一（画面上の測定ではありません。可変リフレッシュでは画面がこれに従います）"
+ },
+ "%1 % 的 Present 间隔均匀（不是屏幕上的测量）": {
+  "en": "%1 % of Present intervals even (not measured on screen)",
+  "zh-TW": "%1 % 的 Present 間隔均勻（不是螢幕上的量測）",
+  "ja": "Present 間隔の %1 % が均一（画面上の測定ではありません）"
+ },
+ "屏幕上：至少 %1 % 的帧显示时间均匀（每帧 %2 次刷新，%3 ms）": {
+  "en": "On screen: at least %1 % of frames shown for an even time (%2 refreshes, %3 ms each)",
+  "zh-TW": "螢幕上：至少 %1 % 的影格顯示時間均勻（每格 %2 次更新，%3 ms）",
+  "ja": "画面上：少なくとも %1 % のフレームが均一な時間表示（各 %2 リフレッシュ、%3 ms）"
+ },
+ "屏幕上：至少 %1 % 的帧显示时间均匀（每帧 %2 次刷新）": {
+  "en": "On screen: at least %1 % of frames shown for an even time (%2 refreshes each)",
+  "zh-TW": "螢幕上：至少 %1 % 的影格顯示時間均勻（每格 %2 次更新）",
+  "ja": "画面上：少なくとも %1 % のフレームが均一な時間表示（各 %2 リフレッシュ）"
+ },
+ "全屏时提醒我点一下画面": {
+  "en": "Remind me to click the picture in fullscreen",
+  "zh-TW": "全螢幕時提醒我點一下畫面",
+  "ja": "全画面時に画面のクリックを促す"
+ },
+ "PushFPS 全屏但别的窗口在前台、画面显示不均匀时，提醒一次（最多每 10 分钟一次）": {
+  "en": "When PushFPS is fullscreen but another window is in front and frames are shown unevenly, a short reminder (at most once every 10 minutes)",
+  "zh-TW": "PushFPS 全螢幕但別的視窗在前景、畫面顯示不均勻時，提醒一次（最多每 10 分鐘一次）",
+  "ja": "PushFPS が全画面で別のウィンドウが前面にあり、表示が不均一なとき、一度だけ知らせます（最大 10 分に 1 回）"
+ },
+ "点一下游戏画面，让 PushFPS 回到前台。别的窗口在前台时，Windows 合成画面，每帧显示的时间不均匀。": {
+  "en": "Click the game picture once to bring PushFPS to the front. While another window is in front, Windows composes the picture and frames are shown for uneven times.",
+  "zh-TW": "點一下遊戲畫面，讓 PushFPS 回到前景。別的視窗在前景時，Windows 合成畫面，每格顯示的時間不均勻。",
+  "ja": "ゲーム画面を一度クリックして PushFPS を前面に戻してください。別のウィンドウが前面にある間は Windows が画面を合成し、フレームの表示時間が不均一になります。"
+ }
+}

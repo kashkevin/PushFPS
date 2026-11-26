@@ -15,6 +15,13 @@ struct GpuDisOpticalFlow::Impl {
         xess_gpu::FencePoint completion;
     } slots[2];
     DescriptorStager stager;
+    int64_t testLimit=-1;          // tests only (setTestDispatchLimit)
+    std::vector<std::string> testNames;
+    bool testRecord(const char* name,uint32_t x,uint32_t y){   // false: this dispatch is skipped (test limit)
+        const bool keep=testLimit<0||int64_t(testNames.size())<testLimit;
+        if(testLimit>=0)testNames.push_back(std::string(name)+" "+std::to_string(x)+"x"+std::to_string(y));
+        return keep;
+    }
     void srv(ComputePass& pass,UINT offset,ID3D12Resource* r) {
         D3D12_SHADER_RESOURCE_VIEW_DESC d{};d.Format=r->GetDesc().Format;
         d.ViewDimension=D3D12_SRV_DIMENSION_TEXTURE2D;d.Texture2D.MipLevels=1;
@@ -26,10 +33,18 @@ struct GpuDisOpticalFlow::Impl {
 };
 GpuDisOpticalFlow::GpuDisOpticalFlow():p_(std::make_unique<Impl>()){}
 GpuDisOpticalFlow::~GpuDisOpticalFlow()=default;
-bool GpuDisOpticalFlow::initialize(ID3D12Device* device,uint32_t w,uint32_t h){
+bool GpuDisOpticalFlow::initialize(ID3D12Device* device,uint32_t w,uint32_t h){return initialize(device,w,h,false);}
+bool GpuDisOpticalFlow::deviceHasDoubles(ID3D12Device* device){
+    D3D12_FEATURE_DATA_D3D12_OPTIONS options{};
+    return device&&SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS,&options,sizeof(options)))&&options.DoublePrecisionFloatShaderOps;
+}
+void GpuDisOpticalFlow::setTestDispatchLimit(int64_t limit){p_->testLimit=limit;}
+std::vector<std::string> GpuDisOpticalFlow::testDispatchNames() const{return p_->testNames;}
+bool GpuDisOpticalFlow::initialize(ID3D12Device* device,uint32_t w,uint32_t h,bool floatOnly){
     auto& p=*p_;p.device=device;p.w=w;p.h=h;
     if(!device||w<32||h<32||w>4096||h>4096){log::error("gpu-dis","unsupported flow extent (32..4096 each axis)");return false;}
-    p.provider=xess_gpu::make_strict_dis_provider((runtime::shaderDirectory()/"dis").string(),xess_gpu::StrictDisPreset::Fast);
+    p.provider=floatOnly?xess_gpu::make_float_dis_provider((runtime::shaderDirectory()/"dis_float").string(),xess_gpu::StrictDisPreset::Fast):
+                         xess_gpu::make_strict_dis_provider((runtime::shaderDirectory()/"dis").string(),xess_gpu::StrictDisPreset::Fast);
     xess_gpu::ProviderConfig config;config.source={w,h};config.slots=2;config.bidirectional=true;
     std::string error;
     if(!p.provider->initialize(device,config,error)){log::error("gpu-dis",error);return false;}
@@ -41,7 +56,7 @@ bool GpuDisOpticalFlow::initialize(ID3D12Device* device,uint32_t w,uint32_t h){
         if(!s.convert.create(device,convert,4,1,1)||!s.validate.create(device,validate,6,4,2))return false;
         for(UINT i=0;i<2;++i)makeUav(device,s.luma[i].Get(),DXGI_FORMAT_R8_UNORM,Impl::cpu(s.convert,2+i));
     }
-    log::info("gpu-dis",std::format("initialized FAST bidirectional {}x{} slots=2; photometric/forward-backward confidence; experimental",w,h));return true;
+    log::info("gpu-dis",std::format("initialized FAST bidirectional {}x{} slots=2 precision={}; photometric/forward-backward confidence; experimental",w,h,floatOnly?"float":"strict-fp64"));return true;
 }
 bool GpuDisOpticalFlow::dispatch(ID3D12GraphicsCommandList* list,ID3D12CommandQueue* queue,ID3D12Fence* fence,
     uint64_t completion,uint32_t slot,ID3D12Resource* previous,ID3D12Resource* current,ID3D12Resource* motion,
@@ -52,6 +67,7 @@ bool GpuDisOpticalFlow::dispatch(ID3D12GraphicsCommandList* list,ID3D12CommandQu
     if(!s.completion.complete()){log::error("gpu-dis","attempted in-flight descriptor reuse");return false;}
     StateTracker states;
     const uint32_t dims[8]={p.w,p.h};
+    if(p.testLimit>=0)p.testNames.clear();
     ID3D12Resource* inputs[]={previous,current};
     for(UINT i=0;i<2;++i){
         const auto d=inputs[i]->GetDesc();
@@ -60,7 +76,7 @@ bool GpuDisOpticalFlow::dispatch(ID3D12GraphicsCommandList* list,ID3D12CommandQu
         states.transition(list,inputs[i],D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         states.transition(list,s.luma[i].Get(),D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         s.convert.bind(list,reinterpret_cast<const float*>(dims),Impl::gpu(s.convert,i),Impl::gpu(s.convert,2+i));
-        list->Dispatch((p.w+15)/16,(p.h+15)/16,1);
+        if(p.testRecord("GpuDisLuma.dxil",(p.w+15)/16,(p.h+15)/16))list->Dispatch((p.w+15)/16,(p.h+15)/16,1);
         states.transition(list,s.luma[i].Get(),D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         states.transition(list,inputs[i],D3D12_RESOURCE_STATE_COMMON);
     }
@@ -74,6 +90,7 @@ bool GpuDisOpticalFlow::dispatch(ID3D12GraphicsCommandList* list,ID3D12CommandQu
     xess_gpu::RecordContext context;context.device=p.device;context.list=list;context.queue=queue;
     context.adapter_luid=p.device->GetAdapterLuid();context.completion={fence,completion};
     xess_gpu::MotionPacket packet;xess_gpu::Counters counters;std::string error;
+    if(p.testLimit>=0)xess_gpu::strict_dis_set_test(*p.provider,std::max<int64_t>(0,p.testLimit-int64_t(p.testNames.size())),true);
     if(!p.provider->record(&frames[0],frames[1],slot,context,packet,counters,error)){log::error("gpu-dis",error);return false;}
     p.srv(s.validate,0,packet.current_to_previous.resource.Get());p.srv(s.validate,1,packet.previous_to_current.resource.Get());
     p.srv(s.validate,2,s.luma[0].Get());p.srv(s.validate,3,s.luma[1].Get());
@@ -81,7 +98,8 @@ bool GpuDisOpticalFlow::dispatch(ID3D12GraphicsCommandList* list,ID3D12CommandQu
     makeUav(p.device,confidence,confidence->GetDesc().Format,Impl::cpu(s.validate,5));
     states.transition(list,motion,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);states.transition(list,confidence,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     s.validate.bind(list,reinterpret_cast<const float*>(dims),Impl::gpu(s.validate,0),Impl::gpu(s.validate,4));
-    list->Dispatch((p.w+15)/16,(p.h+15)/16,1);
+    if(p.testLimit>=0)for(auto& n:xess_gpu::strict_dis_test_names(*p.provider))p.testNames.push_back(n);
+    if(p.testRecord("GpuDisValidate.dxil",(p.w+15)/16,(p.h+15)/16))list->Dispatch((p.w+15)/16,(p.h+15)/16,1);
     states.transition(list,motion,D3D12_RESOURCE_STATE_COMMON);states.transition(list,confidence,D3D12_RESOURCE_STATE_COMMON);
     for(auto& r:s.luma)states.transition(list,r.Get(),D3D12_RESOURCE_STATE_COMMON);
     s.completion=context.completion;

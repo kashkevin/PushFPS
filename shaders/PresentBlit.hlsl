@@ -9,7 +9,8 @@ Texture2D<float4> sourceTex : register(t0);
 
 cbuffer PresentBlitConstants : register(b0)
 {
-    float4 srcDims; // z flags: 1=sRGB encode, 2=fine, 4=PQ encode, 8=SDR white, 16=HDR curve, 32=PQ decode
+    float4 srcDims; // z flags: 1=sRGB encode, 2=fine, 4=PQ encode, 8=SDR white, 16=HDR curve, 32=PQ decode,
+                    //   512=area filter when shrinking (stream s12-pace), 1024=the source holds PQ codes (average in linear light)
     float4 dstDims; // x/y=client extent z/w=view center
     // Custom: static HDR brightness curve, applied on absolute nits before the PQ
     // encode. See veyra/engine/HdrOutputTuning.h for the contract; every field is
@@ -105,6 +106,37 @@ float4 FineSample(float2 uv)
     return clamp(result,min(min(a,b),min(c,d)),max(max(a,b),max(c,d)));
 }
 
+// PushFPS stream "s12-pace": the area filter for a shrinking blit (engine/PushDownscale.h is its CPU reference). Today's path
+// takes ONE bilinear tap per output pixel, so at 3840 -> 2560 (1.5x) a third of the source columns never reach the screen and
+// thin moving edges crawl. n x n bilinear taps spread over the output pixel's footprint (n = ceil(footprint) + 1, 3..5),
+// equal weights: a box one output pixel wide (engine/PushDownscale.h has the offline numbers). A PQ-coded source (HDR10) is averaged in linear light (ST 2084 per channel, no gamut change) and coded again, so a
+// thin bright line keeps its brightness instead of the darker average of its codes.
+float3 PqToLinear(float3 pq) {
+    const float3 p = pow(saturate(pq), 32.0 / 2523.0);
+    return pow(max(p - 3424.0 / 4096.0, 0) / max(2413.0 / 128.0 - 2392.0 / 128.0 * p, 1e-6), 16384.0 / 2610.0);
+}
+float3 LinearToPq(float3 l) {
+    const float3 p = pow(saturate(l), 2610.0 / 16384.0);
+    return pow((3424.0 / 4096.0 + (2413.0 / 128.0) * p) / (1 + (2392.0 / 128.0) * p), 2523.0 / 32.0);
+}
+float4 AreaSample(float2 uv, float2 dx, float2 dy, uint n, bool pq)
+{
+    uint width, height; sourceTex.GetDimensions(width, height);
+    const float2 inv = 1.0 / float2(width, height);
+    float4 sum = 0;
+    [loop] for (uint j = 0; j < n; ++j) {
+        [loop] for (uint i = 0; i < n; ++i) {
+            const float2 o = ((float(i) + 0.5) / float(n) - 0.5) * dx + ((float(j) + 0.5) / float(n) - 0.5) * dy;
+            float4 c = sourceTex.SampleLevel(linearClamp, uv + o * inv, 0);
+            if (pq) c.rgb = PqToLinear(c.rgb);
+            sum += c;
+        }
+    }
+    sum /= float(n * n);
+    if (pq) sum.rgb = LinearToPq(sum.rgb);
+    return sum;
+}
+
 float4 psMain(VSOut input) : SV_Target
 {
     // zoom==0 retains the original contract for diagnostic harness callers.
@@ -116,7 +148,13 @@ float4 psMain(VSOut input) : SV_Target
     }
     uint flags=uint(srcDims.z+0.5);
     uv=PresentationSourceUv(uv,(flags>>6)&3);
-    float4 color=(flags&2)?FineSample(uv):sourceTex.SampleLevel(linearClamp,uv,0);
+    // Stream "s12-pace": the footprint in source pixels, taken in uniform control flow (derivatives).
+    uint srcW,srcH;sourceTex.GetDimensions(srcW,srcH);
+    const float2 dxp=ddx(uv)*float2(srcW,srcH),dyp=ddy(uv)*float2(srcW,srcH);
+    const float footprint=max(length(dxp),length(dyp));
+    float4 color;
+    if((flags&512)&&footprint>1.001)color=AreaSample(uv,dxp,dyp,uint(clamp(ceil(footprint)+1.0,3.0,5.0)),(flags&1024)!=0);
+    else color=(flags&2)?FineSample(uv):sourceTex.SampleLevel(linearClamp,uv,0);   // 1:1, magnification, or the switch off: as Package 16
     if((flags&256)&&color.a>1e-6)color.rgb/=color.a;
     if(flags&32)color.rgb=HdrDecodePq(color.rgb);
     if(flags&8)color.rgb*=203.0/80.0; // SDR comparison white in an HDR output.

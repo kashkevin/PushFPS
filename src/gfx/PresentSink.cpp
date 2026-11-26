@@ -13,12 +13,19 @@
 
 #include "veyra/Log.h"
 #include "veyra/diagnostics/CpuStallTrace.h"
+#include "veyra/engine/PushPresentTiming.h"
 
 namespace veyra::gfx {
 
 namespace {
 
 const wchar_t* kWindowClassName = L"VeyraPresentSink";
+// Slipstream switches: only the value "1" turns one on (docs/PS5_REMOTE_PLAY_EXPERIMENTS.md).
+bool slipstreamSwitch(const wchar_t* name){
+    wchar_t value[4]{};
+    const DWORD length=GetEnvironmentVariableW(name,value,4);
+    return length==1&&value[0]==L'1';
+}
 
 
 } // namespace
@@ -133,6 +140,8 @@ bool PresentSink::initialize(ID3D12Device* device, ID3D12CommandQueue* queue,
     shutdownCalled_ = false;
     desc_ = desc;
     presentContractDirty_=true;
+    // Read once per swap-chain creation (before configurePacing can log the chain's facts).
+    slipstreamStats_=slipstreamSwitch(L"VEYRA_EXP_RP_STATS");
     width_ = desc.width;
     height_ = desc.height;
     if (!device_ || !queue_ || (desc.targetWindow && !IsWindow(desc.targetWindow))) {
@@ -300,10 +309,13 @@ bool PresentSink::initialize(ID3D12Device* device, ID3D12CommandQueue* queue,
     frameStatisticsBaseValid_=false;
     // New swap chain: present ids restart; VEYRA_TEST_NO_DISPLAY_STATS=1 disables the samples.
     displayLatencyEnabled_=GetEnvironmentVariableW(L"VEYRA_TEST_NO_DISPLAY_STATS",nullptr,0)==0;
+    lastPresentId_=0;lastStatistics_={};lastDatedPresentId_=0;datedScanouts_={};datedScanoutNext_=0;compositionMode_=-1;mediaResultLogged_=false;
     pendingPresents_={};lastDisplayedPresent_=0;lastSyncRefresh_=0;lastPresentRefresh_=0;replacedPresents_=0;lastSyncQpc_=0;refreshQpc_=0;displayLatencyMs_.clear();
+    scanoutAudit_.reset();
     log::info("display-refresh",std::format("monitor refresh={:.3f} Hz at swapchain creation (0 = unknown); submissions above this rate cannot all be scanned out",displayRefreshHz_));
     log::info("present", std::format("present-sink: window {}x{} swapEffect={} buffers=3 vsync={} tearing={} captureCompatible={} (capture not verified)",
         width_, height_, actual.SwapEffect==DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL?"flip-sequential":"flip-discard", desc_.vsync ? 1 : 0, (desc_.tearing && tearingSupported_) ? 1 : 0, desc.captureCompatible));
+    logSwapchainFacts("created");
     return true;
 }
 
@@ -378,12 +390,16 @@ bool PresentSink::present(Status& status)
     // frame has no single vblank to date it by.
     const bool trackScanout=displayLatencyEnabled_&&!xess_&&!(flags&DXGI_PRESENT_ALLOW_TEARING);
     if(trackScanout)sampleDisplayLatency();
+    else lastStatistics_.valid=false;   // stream "s12-pace": no reading for a Present that cannot be dated
     LARGE_INTEGER presentQpc{};QueryPerformanceCounter(&presentQpc);
     const HRESULT hr = swapChain_->Present(syncInterval, flags);
     presentTiming_.callMs=split();presentTiming_.result=hr;
     UINT presentId=0;
     if(SUCCEEDED(hr)&&trackScanout&&SUCCEEDED(swapChain_->GetLastPresentCount(&presentId)))
         pendingPresents_[pendingPresentNext_++%pendingPresents_.size()]={presentId,presentQpc.QuadPart,syncInterval==0};
+    if(slipstreamStats_&&presentId)scanoutAudit_.presentIssued(presentId,syncInterval==0);
+    lastPresentId_=slipstreamStats_?presentId:0;
+    lastDatedPresentId_=presentId;   // stream "s12-pace": 0 when this Present cannot be dated
     if(presentContractDirty_||attemptedPresentCount_<=3||attemptedPresentCount_%120==0){
         log::info("present-contract",std::format("backend={} sync={} flags=0x{:X} hr=0x{:X}",xess_?"XeSS":"DXGI",syncInterval,flags,unsigned(hr)));
         presentContractDirty_=false;
@@ -472,7 +488,20 @@ PresentSink::FrameStatisticsDelta PresentSink::sampleFrameStatistics(){
 void PresentSink::sampleDisplayLatency(){
     static const double frequency=[]{LARGE_INTEGER f{};QueryPerformanceFrequency(&f);return double(f.QuadPart);}();
     DXGI_FRAME_STATISTICS stats{};
-    if(!swapChain_||FAILED(swapChain_->GetFrameStatistics(&stats))||!stats.SyncQPCTime.QuadPart)return;
+    const HRESULT statsResult=swapChain_?swapChain_->GetFrameStatistics(&stats):E_FAIL;
+    if(slipstreamStats_&&swapChain_){
+        // Slipstream: what this reading was, whatever happens to it below (PushScanoutAudit.h).
+        engine::PushScanoutSample reading;
+        reading.ok=SUCCEEDED(statsResult);reading.disjoint=statsResult==DXGI_ERROR_FRAME_STATISTICS_DISJOINT;
+        reading.hasSyncTime=reading.ok&&stats.SyncQPCTime.QuadPart!=0;
+        reading.presentCount=stats.PresentCount;reading.presentRefreshCount=stats.PresentRefreshCount;reading.syncRefreshCount=stats.SyncRefreshCount;
+        if(reading.hasSyncTime){LARGE_INTEGER readQpc{};QueryPerformanceCounter(&readQpc);reading.statsAgeMs=double(readQpc.QuadPart-stats.SyncQPCTime.QuadPart)*1000.0/frequency;}
+        scanoutAudit_.sample(reading);
+    }
+    // Stream "s12-pace": the reading for the on-screen hold of each frame (PushOnScreenCadence), whatever happens below.
+    lastStatistics_={swapChain_&&SUCCEEDED(statsResult)&&stats.SyncQPCTime.QuadPart!=0,stats.PresentCount,stats.PresentRefreshCount,stats.SyncRefreshCount,
+        stats.SyncQPCTime.QuadPart?int64_t(double(stats.SyncQPCTime.QuadPart)*1e7/frequency):0};
+    if(!swapChain_||FAILED(statsResult)||!stats.SyncQPCTime.QuadPart)return;
     // Measured vblank period from successive statistics, else the monitor rate.
     if(lastSyncQpc_&&stats.SyncRefreshCount>lastSyncRefresh_&&stats.SyncQPCTime.QuadPart>lastSyncQpc_)
         refreshQpc_=double(stats.SyncQPCTime.QuadPart-lastSyncQpc_)/double(stats.SyncRefreshCount-lastSyncRefresh_);
@@ -509,6 +538,9 @@ void PresentSink::sampleDisplayLatency(){
         if(pending.id!=stats.PresentCount&&(!newestQpc||newestQpc-double(pending.qpc)>double(stats.PresentCount-pending.id)*period*1.25))continue;
         const double ms=(scanout-double(stats.PresentCount-pending.id)*period-double(pending.qpc))*1000.0/frequency;
         if(pending.id==stats.PresentCount&&ms>=0&&ms<1000)latchMs_=std::min(latchMs_+.001,ms);
+        // Slipstream: the same dated vblank, by present id, for the per-frame join (host 100 ns).
+        if(slipstreamStats_&&ms>=0&&ms<1000)
+            datedScanouts_[datedScanoutNext_++%datedScanouts_.size()]={pending.id,int64_t((scanout-double(stats.PresentCount-pending.id)*period)*1e7/frequency)};
         if(ms>=0&&ms<1000&&displayLatencyMs_.size()<4096)displayLatencyMs_.push_back(ms);
     }
 }
@@ -532,8 +564,18 @@ PresentSink::DisplayLatencySummary PresentSink::takeDisplayLatency(){
     }
     ComPtr<IDXGISwapChainMedia> media;
     DXGI_FRAME_STATISTICS_MEDIA statistics{};
-    if(displayLatencyEnabled_&&!xess_&&swapChain_&&SUCCEEDED(swapChain_.As(&media))&&SUCCEEDED(media->GetFrameStatisticsMedia(&statistics)))
-        summary.compositionMode=int(statistics.CompositionMode);
+    HRESULT mediaResult=E_NOINTERFACE;
+    if(displayLatencyEnabled_&&!xess_&&swapChain_&&SUCCEEDED(swapChain_.As(&media))){
+        mediaResult=media->GetFrameStatisticsMedia(&statistics);
+        if(SUCCEEDED(mediaResult))summary.compositionMode=int(statistics.CompositionMode);
+    }
+    compositionMode_=summary.compositionMode;
+    if(slipstreamStats_&&!mediaResultLogged_&&displayLatencyEnabled_&&!xess_&&swapChain_){
+        // Once per chain: why compositionMode reads -1 (E_NOINTERFACE: no media interface; another
+        // failure: the statistics refused). PresentMon's PresentMode column is the reference.
+        mediaResultLogged_=true;
+        log::info("slipstream-present",std::format("mediaStatistics hr=0x{:X} compositionMode={}",unsigned(mediaResult),summary.compositionMode));
+    }
     return summary;
 }
 
@@ -565,6 +607,7 @@ bool PresentSink::configurePacing(bool enabled,bool vsync,bool tearing){
         capacityAcquired_=true;
     }
     log::info("pacing",std::format("DXGI enabled={} maximumLatency={} vsync={} tearing={} hr=0x{:X} staleLatencyCounts={}",enabled,enabled?1:3,vsync,tearing,unsigned(hr),stale));
+    logSwapchainFacts("pacing");
     return SUCCEEDED(hr);
 }
 bool PresentSink::waitPresentationReady(unsigned ms){
@@ -644,6 +687,31 @@ void PresentSink::resize(uint32_t width, uint32_t height)
     pendingResize_ = true;
     frameStatisticsBaseValid_=false;
     log::info("present", std::format("present-sink: resized to {}x{}", width_, height_));
+    logSwapchainFacts("resized");
+}
+
+void PresentSink::logSwapchainFacts(const char* reason){
+    if(!slipstreamStats_||!swapChain_||!hwnd_)return;
+    DXGI_SWAP_CHAIN_DESC1 actual{};
+    const HRESULT described=swapChain_->GetDesc1(&actual);
+    engine::PushSwapchainFacts facts;
+    facts.flipModel=SUCCEEDED(described)&&(actual.SwapEffect==DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL||actual.SwapEffect==DXGI_SWAP_EFFECT_FLIP_DISCARD);
+    facts.buffers=SUCCEEDED(described)?actual.BufferCount:0;facts.format=SUCCEEDED(described)?unsigned(actual.Format):0;
+    facts.flags=SUCCEEDED(described)?unsigned(actual.Flags):unsigned(swapChainFlags_);
+    facts.waitable=latencyHandle_!=nullptr;facts.tearingSupported=tearingSupported_;
+    facts.syncInterval=presentSyncInterval();facts.compositionMode=compositionMode_;
+    // Geometry only: the swap chain's window, and the top-level window it sits in, against the
+    // monitor. Covering the monitor is a precondition of independent flip, not a proof of it.
+    const auto monitor=MonitorFromWindow(hwnd_,MONITOR_DEFAULTTONEAREST);
+    MONITORINFO info{};info.cbSize=sizeof(info);
+    RECT own{},top{};
+    const HWND root=GetAncestor(hwnd_,GA_ROOT);
+    if(monitor&&GetMonitorInfoW(monitor,&info)){
+        const auto& m=info.rcMonitor;
+        if(GetWindowRect(hwnd_,&own))facts.windowCoversMonitor=engine::pushCoversRect(own.left,own.top,own.right,own.bottom,m.left,m.top,m.right,m.bottom);
+        if(root&&GetWindowRect(root,&top))facts.fullscreen=engine::pushCoversRect(top.left,top.top,top.right,top.bottom,m.left,m.top,m.right,m.bottom);
+    }
+    log::info("slipstream-swapchain",engine::formatSlipstreamSwapchain(facts)+" reason="+reason);
 }
 
 void PresentSink::shutdown()

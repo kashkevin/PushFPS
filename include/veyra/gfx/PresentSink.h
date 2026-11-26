@@ -19,6 +19,7 @@
 
 #include "veyra/Result.h"
 #include "veyra/gfx/XessPresenter.h"
+#include "veyra/engine/PushScanoutAudit.h"
 
 namespace veyra::gfx {
 
@@ -130,12 +131,40 @@ public:
         int compositionMode=-1;
     };
     DisplayLatencySummary takeDisplayLatency();
+    // Stream "s10-display": the dated Present -> vblank values (ms) gathered since the last takeDisplayLatency().
+    const std::vector<double>& pendingDisplayLatencyMs()const{return displayLatencyMs_;}
     // Host 100 ns (steady_clock). The last vblank in the frame statistics and the
     // measured period; latch is how long before a vblank a Present still makes it:
     // the shortest Present to scanout seen lately. Empty before any statistics.
     struct RefreshGrid { int64_t lastVblank100ns=0; double period100ns=0,latch100ns=0; };
     RefreshGrid refreshGrid()const;
     double displayRefreshHz()const{return displayRefreshHz_;}
+    // Stream "s12-pace" (engine/PushOnScreenCadence.h): the frame-statistics reading taken before the last Present (valid
+    // when it succeeded and dated a vblank; sync100ns on the host steady clock), and the DXGI present id of the last
+    // successful Present whose scanout can be dated (VSync or Automatic, no tearing, no provider), 0 otherwise. Always kept:
+    // the reading is the one sampleDisplayLatency already makes, so this costs a struct copy per Present.
+    struct StatisticsReading { bool valid=false; UINT presentCount=0,presentRefreshCount=0,syncRefreshCount=0; int64_t sync100ns=0; };
+    const StatisticsReading& lastStatistics()const{return lastStatistics_;}
+    UINT lastDatedPresentId()const{return lastDatedPresentId_;}
+    // Slipstream statistics (VEYRA_EXP_RP_STATS=1, read once per swap-chain creation; nothing
+    // below is recorded without it). lastPresentId: DXGI present id of the last successful
+    // Present whose scanout can be dated, 0 otherwise. datedScanouts: the last presents the frame
+    // statistics dated (id, vblank time in host 100 ns), a fixed ring the caller may read twice.
+    struct DatedScanout { UINT id=0; int64_t scanout100ns=0; };
+    bool slipstreamStats()const{return slipstreamStats_;}
+    UINT lastPresentId()const{return lastPresentId_;}
+    const std::array<DatedScanout,16>& datedScanouts()const{return datedScanouts_;}
+    // What the frame statistics did since the last call (PushScanoutAudit.h, line [slipstream-scanout]).
+    engine::PushScanoutAudit::Summary takeScanoutAudit(){return scanoutAudit_.take();}
+    int presentSyncInterval()const{return desc_.vsync?1:0;}
+    bool presentTearing()const{return desc_.tearing&&!desc_.vsync&&tearingSupported_;}
+    // SetMaximumFrameLatency in force: 1 while pacing, 3 otherwise, -1 without a waitable chain
+    // (DXGI's default then applies).
+    int queueLatency()const{return latencyHandle_?(pacing_?1:3):-1;}
+    bool waitable()const{return latencyHandle_!=nullptr;}
+    int compositionMode()const{return compositionMode_;}
+    // One [slipstream-swapchain] line (STATS only): after creation and after each resize.
+    void logSwapchainFacts(const char* reason);
     // The owner re-reads the monitor after a move or mode change.
     void setDisplayRefreshHz(double hz){if(hz>=1.0)displayRefreshHz_=hz;}
     bool configurePacing(bool enabled,bool vsync,bool tearing);
@@ -228,6 +257,15 @@ private:
     double refreshQpc_=0,latchMs_=2;
     bool displayLatencyEnabled_=true;
     std::vector<double> displayLatencyMs_;
+    bool slipstreamStats_=false;
+    UINT lastPresentId_=0;
+    StatisticsReading lastStatistics_{};
+    UINT lastDatedPresentId_=0;
+    std::array<DatedScanout,16> datedScanouts_{};
+    unsigned datedScanoutNext_=0;
+    engine::PushScanoutAudit scanoutAudit_;
+    int compositionMode_=-1;
+    bool mediaResultLogged_=false;
 };
 
 } // namespace veyra::gfx

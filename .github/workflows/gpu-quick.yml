@@ -1,0 +1,222 @@
+# Fast loop for the crash triage of the predicted frame's flow (GPU DIS; gate run 45526571434 crashed inside its self-check on
+# WARP): builds ONLY veyra_push_gpu_tests (no Qt app, no streaming sources, no packaging) and runs the predicted-frame cases
+# and tests/integration/dis_triage.py on WARP, with the D3D12 debug layer. Triggered only by pushes to check branches
+# ck/lowdelay2 and ck/gpu*; the real gate stays build-windows.yml. Dependencies and configure options follow
+# build-windows.yml (same pins); differences: no Qt app, no streaming sources (Remote Play, Moonlight, Xbox off: not used by
+# veyra_pipeline), no PushFlow runtime, the optional NVOF headers not fetched.
+name: gpu-quick
+
+on:
+  push:
+    branches: ['ck/lowdelay2', 'ck/gpu*']
+    paths:
+      - '.github/workflows/gpu-quick.yml'
+      - 'src/pipeline/PushPredict*'
+      - 'include/veyra/pipeline/PushPredict*'
+      - 'src/guidance/GpuDis*'
+      - 'src/guidance/AmdOpticalFlow*'
+      - 'shaders/NvofDensify.hlsl'
+      - 'src/pipeline/EnhanceGraph.cpp'
+      - 'include/veyra/guidance/GpuDis*'
+      - 'third_party/gpu-dis/**'
+      - 'shaders/GpuDis*'
+      - 'shaders/PushPredict*'
+      - 'cmake/VeyraGpuDis*'
+      - 'tests/integration/PushGpuTests.cpp'
+      - 'shaders/PushFrameThumb.hlsl'
+      - 'shaders/PresentBlit.hlsl'
+      - 'tests/integration/dis_triage.py'
+      - 'src/pipeline/PushHud*'
+      - 'include/veyra/pipeline/PushHud*'
+      - 'shaders/PushHud*'
+      - 'tests/remoteplay/HudGuardScene.h'
+  workflow_dispatch:
+    inputs:
+      cases:
+        description: 'Comma-separated dis-* cases for dis_triage.py (empty: all six)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gpu-quick-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  VCPKG_COMMIT: 30ef65cad98f08e7197c9a1656fbd871bcb72f2d
+  DLSS_TAG: v310.7.0
+  NVCODEC_TAG: n13.0.19.0
+  CUDART_ZIP: https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/windows-x86_64/cuda_cudart-windows-x86_64-12.9.79-archive.zip
+  XESS_TAG: v3.0.2
+  FFX1_TAG: v1.1.4
+  FFX2_TAG: v2.3.0
+  AMF_COMMIT: 57ee0cfb0e1a08d9041f77435653794c1b012be0
+
+jobs:
+  gpu:
+    runs-on: windows-2022
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DEPS: D:\deps
+      BUILD: D:\b
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: SDK headers (DLSS, NVENC, CUDA driver header, XeSS, FidelityFX, AMF)
+        shell: bash
+        run: |
+          set -e
+          mkdir -p /d/deps && cd /d/deps
+          GIT_LFS_SKIP_SMUDGE=1 git clone -q --depth 1 --branch "$DLSS_TAG" --filter=blob:none --sparse https://github.com/NVIDIA/DLSS.git dlss
+          git -C dlss sparse-checkout set include lib/Windows_x86_64/x64
+          git clone -q --depth 1 --branch "$NVCODEC_TAG" https://github.com/FFmpeg/nv-codec-headers.git nv-codec-headers
+          curl -sSfL "$CUDART_ZIP" -o cudart.zip && unzip -q cudart.zip -d cudart && mv cudart/*/ cudart-root
+          gh release download "$XESS_TAG" -R intel/xess -p '*.zip' -O xess.zip && unzip -q xess.zip -d xess
+          GIT_LFS_SKIP_SMUDGE=1 git clone -q --depth 1 --branch "$FFX2_TAG" --filter=blob:none --sparse https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK.git ffx2
+          git -C ffx2 sparse-checkout set Kits/FidelityFX/api/include Kits/FidelityFX/framegeneration/include Kits/FidelityFX/upscalers/include
+          gh release download "$FFX1_TAG" -R GPUOpen-LibrariesAndSDKs/FidelityFX-SDK -p '*.zip' -O ffx1.zip && unzip -q ffx1.zip -d ffx1
+          git init -q amf && git -C amf remote add origin https://github.com/GPUOpen-LibrariesAndSDKs/AMF.git
+          git -C amf fetch -q --depth 1 --filter=blob:none origin "$AMF_COMMIT"
+          git -C amf sparse-checkout set amf/public/include && git -C amf checkout -q FETCH_HEAD
+
+      - name: Restore the FidelityFX 1.1.4 build
+        id: ffx-cache
+        uses: actions/cache@v4
+        with:
+          path: D:\deps\ffx1\sdk\bin
+          key: gpu-quick-ffx1-${{ env.FFX1_TAG }}-v1
+
+      - name: Build FidelityFX 1.1.4 optical flow (static)
+        if: steps.ffx-cache.outputs.cache-hit != 'true'
+        working-directory: D:\deps\ffx1\sdk
+        run: |
+          cmake -S . -B build -A x64 -DFFX_API_BACKEND=DX12_X64 -DFFX_ALL=OFF -DFFX_OF=ON -DFFX_AUTO_COMPILE_SHADERS=1 `
+            -DCMAKE_POLICY_DEFAULT_CMP0091=NEW -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build --config Release --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Locate SDK roots
+        shell: bash
+        run: |
+          xess=$(dirname "$(dirname "$(dirname "$(find /d/deps/xess -name xefg_swapchain_d3d12.h | head -1)")")")
+          ffx1lib=$(find /d/deps/ffx1/sdk/bin -iname 'ffx_opticalflow_x64.lib' | head -1)
+          ffx1=$(dirname "$(dirname "$(dirname "$ffx1lib")")")
+          { echo "XESS_ROOT=$(cygpath -m "$xess")"; echo "FFX1_ROOT=$(cygpath -m "$ffx1")"; } >> "$GITHUB_ENV"
+
+      # build-windows.yml's binary cache (FFmpeg takes ~25 min to build); this workflow saves its own under the same prefix.
+      - name: Restore vcpkg binaries
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: D:\deps\vcpkg-binary
+          key: vcpkg-bin-${{ env.VCPKG_COMMIT }}-v2-${{ github.run_id }}
+          restore-keys: vcpkg-bin-${{ env.VCPKG_COMMIT }}-v2-
+
+      - name: FFmpeg 9.0.1 (vcpkg at the pinned baseline)
+        working-directory: D:\deps
+        run: |
+          git init -q vcpkg; git -C vcpkg remote add origin https://github.com/microsoft/vcpkg.git
+          git -C vcpkg fetch -q --depth 1 origin $env:VCPKG_COMMIT; git -C vcpkg checkout -q FETCH_HEAD
+          & vcpkg\bootstrap-vcpkg.bat -disableMetrics
+          New-Item -ItemType Directory -Force vcpkg-binary | Out-Null
+          $env:VCPKG_DEFAULT_BINARY_CACHE = "$env:DEPS\vcpkg-binary"
+          & vcpkg\vcpkg.exe install "ffmpeg[core,avcodec,avformat,avfilter,swresample,swscale]:x64-windows" --clean-after-build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Save vcpkg binaries
+        if: always() && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: D:\deps\vcpkg-binary
+          key: vcpkg-bin-${{ env.VCPKG_COMMIT }}-v2-${{ github.run_id }}
+
+      - name: Configure (pipeline only)
+        run: |
+          $ffmpeg = "$env:DEPS\vcpkg\installed\x64-windows"
+          cmake -S . -B $env:BUILD -G Ninja -DCMAKE_BUILD_TYPE=Release `
+            "-DCMAKE_PREFIX_PATH=$ffmpeg" `
+            -DVEYRA_BUILD_QML_UI=OFF -DVEYRA_ENABLE_EXPERIMENTAL_DLSSNR=ON -DVEYRA_ENABLE_D3D12_DEBUG=OFF `
+            "-DVEYRA_DISPLAY_VERSION=2.1.5-pushfps.gpuquick" -DSLIPSTREAM_BUILD=ON `
+            "-DVEYRA_FFMPEG_ROOT=$ffmpeg" `
+            "-DVEYRA_DLSS_SDK_ROOT=$env:DEPS\dlss" `
+            "-DVEYRA_NVENC_HEADERS_ROOT=$env:DEPS\nv-codec-headers" `
+            "-DVEYRA_CUDA_DRIVER_INCLUDE_DIR=$env:DEPS\cudart-root\include" `
+            "-DVEYRA_XESS_ROOT=$env:XESS_ROOT" `
+            "-DVEYRA_FIDELITYFX_ROOT=$env:FFX1_ROOT" `
+            "-DVEYRA_FIDELITYFX2_ROOT=$env:DEPS\ffx2\Kits\FidelityFX" `
+            "-DVEYRA_AMF_SDK_ROOT=$env:DEPS\amf\amf\public"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build the GPU test host
+        run: |
+          cmake --build $env:BUILD --target veyra_push_gpu_tests --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem "$env:BUILD\shaders\dis", "$env:BUILD\shaders\dis_float" -Filter *.dxil | Format-Table Directory, Name, Length
+
+      # The D3D12 debug layer (Windows "Graphics Tools") so a device removal on WARP names its cause; optional.
+      - name: Graphics Tools (D3D12 debug layer), optional
+        continue-on-error: true
+        timeout-minutes: 12
+        run: |
+          $cap = Get-WindowsCapability -Online -Name 'Tools.Graphics.DirectX*' | Select-Object -First 1
+          if ($cap -and $cap.State -ne 'Installed') { Add-WindowsCapability -Online -Name $cap.Name | Out-Host }
+          Get-WindowsCapability -Online -Name 'Tools.Graphics.DirectX*' | Format-Table Name, State
+
+      - name: Predicted-frame cases (the product's self-check path), each in its own process
+        timeout-minutes: 30
+        continue-on-error: true
+        run: |
+          $exe = Get-ChildItem $env:BUILD -Recurse -Filter 'veyra_push_gpu_tests.exe' | Select-Object -First 1
+          $env:PATH = "$($exe.DirectoryName);$env:DEPS\vcpkg\installed\x64-windows\bin;$env:PATH"
+          $env:VEYRA_PUSH_GPU_DEBUG = '1'
+          $out = Join-Path $env:RUNNER_TEMP 'gpu-quick'; New-Item -ItemType Directory -Force $out | Out-Null
+          $bad = 0
+          foreach ($case in 'frame-thumb', 'hud-lock', 'hud-guard', 'hud-guard-hdr10', 'predict', 'predict-hud-lock', 'predict-flow-marker', 'predict-flow-self-check', 'predict-flow-small-waves', 'predict-fidelityfx-sizes', 'predict-fidelityfx', 'predict-fidelityfx-hdr10') {
+            & $exe.FullName --only $case --test-timeout 900 2>&1 | Tee-Object -FilePath "$out\$case.log" | Out-Host
+            Write-Host "$case exit $LASTEXITCODE"
+            if ($LASTEXITCODE -ne 0) { $bad++ }
+          }
+          # GPU DIS float, selectable for comparison only (never P's default).
+          $env:VEYRA_TEST_PREDICT_FLOW = 'float'
+          & $exe.FullName --only predict-flow-self-check --test-timeout 900 2>&1 | Tee-Object -FilePath "$out\predict-flow-self-check-float.log" | Out-Host
+          Write-Host "predict-flow-self-check (float) exit $LASTEXITCODE"
+          if ($LASTEXITCODE -ne 0) { $bad++ }
+          Remove-Item Env:VEYRA_TEST_PREDICT_FLOW
+          Write-Host "predicted-frame cases failing: $bad"
+          if ($bad -ne 0) { exit 1 }
+
+      - name: GPU DIS triage (each case in its own process; bisects a crash to one dispatch)
+        if: always()
+        timeout-minutes: 60
+        env:
+          CASES: ${{ inputs.cases }}
+        run: |
+          $exe = Get-ChildItem $env:BUILD -Recurse -Filter 'veyra_push_gpu_tests.exe' | Select-Object -First 1
+          $env:PATH = "$($exe.DirectoryName);$env:DEPS\vcpkg\installed\x64-windows\bin;$env:PATH"
+          $out = Join-Path $env:RUNNER_TEMP 'gpu-quick\dis'
+          $cases = @()
+          if ($env:CASES) { $cases = @('--cases', $env:CASES) }
+          python "$env:GITHUB_WORKSPACE\tests\integration\dis_triage.py" --exe $exe.FullName --out $out --timeout 600 @cases
+          Write-Host "dis triage exit $LASTEXITCODE"
+
+      - name: Upload the logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gpu-quick-${{ github.run_id }}
+          path: ${{ runner.temp }}/gpu-quick
+          if-no-files-found: ignore
+          retention-days: 7
