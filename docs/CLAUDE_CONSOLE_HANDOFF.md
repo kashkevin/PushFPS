@@ -102,6 +102,18 @@ the Slipstream workflow on top.
    generator cannot run offline); results in four classes that are never mixed: simulation, software-renderer tests,
    real GPU measurements (only the owner's logs), display measurements (none exist).
 
+**State at 26 Nov ~17:40 UTC: the teams were interrupted by an API billing error ("credit balance is too low";
+the own-generator team stopped first). Their first batches are UNREVIEWED and partly failing CI. Resume from these
+heads; do not treat any of it as accepted.**
+
+| Stream | Local branch head | Pushed to | CI on that head | Note |
+|---|---|---|---|---|
+| settings | `work/s12-settings` `39d5e8d9` (one commit on `d3c29fd0`: executing only from measurements for low queue / Edge Aegis / adaptive, skipped pairs in `[settings-effect]`) | `ck/s12-settings` | `checks` #481 FAILED (run 45868596236: read which step; most likely translations or QML syntax); remoteplay-checks #448 was still running | fix `checks` first |
+| pace | `work/s12-pace` `df86edb2` (only the recovery commit) | not pushed | - | **uncommitted work in the worktree** (PushDownscale.h, PushOnScreenCadence.h, VideoPresenter.*, PresentBlit.hlsl, PushGpuTests.cpp, QuickSmokeTests.cpp, OnScreenCadenceTests.inc, new `tools/pace_downscale/`): never compiled; keep it (commit as WIP before anything else) |
+| hud | `work/s12-hud` `03795b79` (one commit on `547dfa1c`: aim anchor over flat pictures, scene matrix) | `ck/s12-hud` | remoteplay-checks #446 FAILED (run 45868463293); `checks` green | the new rule or its tests do not pass the core tests yet |
+| ownfg | `work/ownfg` `04829397` (one commit on `83209dd6`: reference refinement rules, duplicate tests) | `ck/gpu-ownfg` only | not checked on `ck/ownfg` | CPU reference only, never compiled by the core-test lane |
+| bench | `work/bench` `73fd6765` (workflow `quality-bench.yml`, data-driven downscale kernels) | `ck/bench` | quality-bench #2 green on `f955fd98` (run 45867581929: the first time the bench ran in CI; its artifact holds the report); #3 on `73fd6765` was running | `OBJECTIVE_COMPARISON.md` not written yet |
+
 ### 0-A.4 Package 17: what it is to contain and what remains before packaging
 
 Planned content: the settings readout, the on-screen (`[cadence]`) and frame-content (`[frame-probe]`) checks, the
