@@ -571,10 +571,12 @@ jobs:
       - name: Install test (download Veyra runtime, add PushFPS, start it)
         timeout-minutes: 30
         run: |
+          # Run logs cannot be read without signing in: whatever stops this step is repeated as an annotation.
+          trap { Write-Host ("::error::install test stopped: " + (("$_" -replace '\s+', ' ').Trim())); exit 1 }
           $zip = (Get-ChildItem dist/PushFPS-*.zip)[0].FullName
           Expand-Archive $zip -DestinationPath D:\pf-zip
           & D:\pf-zip\Install-PushFPS.ps1 -Gpu NVIDIA -InstallDir D:\pf-install -NoShortcuts -NoLaunch -ExperimentalExtras No -NeuralRuntime No
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::install test: the first install ended with exit code $LASTEXITCODE"; exit $LASTEXITCODE }
           if (-not (Test-Path D:\pf-install\PushFPS.exe)) { throw "PushFPS.exe missing after install" }
           # The neural layer's runtime is optional: not installed unless chosen, and the installer says so.
           if (Test-Path D:\pf-install\runtime\experimental\nr-original) { throw 'the optional neural runtime was installed without being chosen' }
