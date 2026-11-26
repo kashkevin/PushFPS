@@ -1,0 +1,79 @@
+# Offline quality bench (tools/quality_bench): SIMULATION of the 30 / 60 / 90 FPS chain, the downscale filters and the
+# frame generators on synthetic pictures. Needs numpy / scipy / g++, which the owner's PC does not have, so it runs here.
+# Results are a MODEL, not a measurement of any screen, GPU or NVIDIA's generator.
+#   push to ck/bench*  : unit tests + the quick run
+#   workflow_dispatch  : unit tests + the quick run or (input full = true) the full run
+name: quality-bench
+
+on:
+  push:
+    branches:
+      - 'ck/bench'
+      - 'ck/bench-*'
+      - 'ck/bench/**'
+  workflow_dispatch:
+    inputs:
+      full:
+        description: 'Run the full bench (about 10-20 minutes) instead of --quick'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-bench-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bench:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      QB_BUILD: ${{ runner.temp }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install numpy, scipy, pytest (CI only)
+        run: python -m pip install --disable-pip-version-check numpy scipy pytest
+
+      - name: Unit tests (metrics, downscale port vs the vendored C++ header)
+        run: |
+          g++ --version | head -1
+          python -B -m pytest -q tools/quality_bench/tests
+
+      - name: Run the bench
+        env:
+          FULL: ${{ github.event_name == 'workflow_dispatch' && inputs.full }}
+        run: |
+          mkdir -p bench-out
+          flag=--quick
+          if [ "$FULL" = "true" ]; then flag=; fi
+          python -B tools/quality_bench/run_all.py $flag --out bench-out/quality_bench_report.md
+          echo "mode: $([ -n "$flag" ] && echo quick || echo full); commit $GITHUB_SHA" > bench-out/RUN_INFO.txt
+
+      - name: Print the tables
+        if: always()
+        run: |
+          test -f bench-out/quality_bench_report.md && cat bench-out/quality_bench_report.md || echo "no report"
+
+      - name: Step summary
+        if: always()
+        run: |
+          {
+            echo "### Quality bench (SIMULATION on synthetic pictures; not a measurement of any screen or GPU)"
+            echo "commit $GITHUB_SHA"
+            test -f bench-out/quality_bench_report.md && cat bench-out/quality_bench_report.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload result (markdown + raw JSON)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-bench-${{ github.run_id }}
+          path: bench-out/
+          retention-days: 30
