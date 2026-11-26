@@ -57,6 +57,12 @@ public:
         slot=nextSlot_++%slotCount_;return acquire(slot,status);
     }
 
+    // Stream "s12-pace": true when acquireNext would not wait (the next slot's last submission is done). Never blocks.
+    bool nextSlotFree() const {
+        if(!initialized_||!slotCount_||!fence_)return false;
+        const auto& next=slots_[nextSlot_%slotCount_];
+        return next.fenceValue==0||fence_->GetCompletedValue()>=next.fenceValue;
+    }
     // Closes, submits and signals the slot; advances the fence timeline.
     bool submitAndSignal(uint32_t slot);
     bool discardRecording(); // Error rollback: never execute a partially recorded list.

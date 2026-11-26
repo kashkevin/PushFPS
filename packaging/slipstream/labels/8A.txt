@@ -1,0 +1,42 @@
+# START-HERE.txt of a package with this label (slipstream_package.py label_text): the text before
+# the separator line replaces @SHORTEST_AND_NEW@, the text after it @NEURAL_INSTALL@.
+# Lines starting with # are left out. ASCII only.
+THE SHORTEST WAY                                   four steps, about 60 minutes, most of it hands off
+  1. Double-click  Install-Slipstream.cmd          10 to 20 minutes, mostly one download of about 750 MB.
+                                                   No question.
+  2. Start the game on the PS5 and stand in a quiet place with detail in the picture (vegetation, HUD
+     text, something dark). Open a Command Prompt in this folder:
+       Run-First-Test.cmd -Session visual          about 25 minutes, hands off. Do not move. Your HDR
+                                                   reference needs the H.265 HDR codec, chosen in the
+                                                   PS5 connect dialog BEFORE this session (optional).
+  3. LOOK WITH YOUR OWN EYES                       about 5 minutes, by hand, while you play.
+     The numbers of -Session visual are software metrics; whether the picture is natural and sharp,
+     without halos or ghosting, only your eyes on your screen can tell. Start the experimental copy
+     (PushFPS-slipstream-exp\PushFPS.exe) yourself, connect, and in its quick setup choose the
+     Picture profile "Original". Click the tile "Comparison clip": choose Layout "Side by side" (or
+     "Split") and a Length, then "Start recording". Do it again with the profile "Clean 1440p". Each
+     clip is saved in the recordings folder: one side is the console's own picture (labelled
+     "Console"), the other what PushFPS shows. Watch them full screen. That, not a number, is how you
+     judge it; nothing here may say "better" before you have.
+  4.   Run-First-Test.cmd -Session builds          about 15 minutes: this download with everything off
+                                                   against Package 7 (and the original and stable copy).
+  Each session ends with RESULT.txt on screen and ONE zip to send back. That is all that is needed.
+  Wired or Wi-Fi both run; on Wi-Fi every table says "Wi-Fi: diagnostic only".
+
+WHAT IS IN PACKAGE 8A    (the first of three downloads; all in the experimental build, OFF until chosen)
+  - Restoration: a clean-up stage for the compressed 1080p stream in front of the upscaler to
+    2560x1440, 1080p to 1440p, HDR handled like the rest of the picture (the colour is checked only
+    by tests on GitHub, not on your screen yet), and the picture profiles. Session: visual.
+  - The kit: the visual and builds sessions; time estimates taken from your runs of 20 November;
+    RESULT.txt has a section MEASURED VALUES for every session.
+KNOWN ISSUE IN 8A
+  - After using the profile "Ultra Low Latency" together with the lowest-latency switch, check that
+    Smooth pacing is still how you want it (quick setup) before you measure anything else.
+  - In the tables, the rows "in effect at the end" for the neural layer read n/a: it is not in 8A.
+WHAT IS NOT IN 8A YET (later downloads; their sessions say "not in this build" here and still finish)
+  - 8B: the adaptive mouse and keyboard (session input), the pacing, audio and reliability fixes
+    (sessions pacing, audiofix).
+  - 8C, the complete Package 8: the optional neural layer and its verified installation (session
+    neural; the neural arms of -Session visual say "not in this build: skipped" in 8A).
+----- the install question (section 1) -----
+   No question about the neural layer: it is not in this download (it comes with 8C).

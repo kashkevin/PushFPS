@@ -1,7 +1,10 @@
 #include "veyra/pipeline/VfgBackend.h"
 #include "veyra/pipeline/VfgAmpereCompat.h"
+#include "veyra/pipeline/TestVfgBackend.h"
 #include "veyra/pipeline/FrameBatch.h"
 #include "veyra/pipeline/GpuPassUtils.h"
+#include "veyra/pipeline/PushGpuPath.h"
+#include "veyra/pipeline/PushPredict.h"
 #include "veyra/core/SceneCadenceAnalyzer.h"
 #include "veyra/engine/EnhancementSettings.h"
 #include "veyra/gfx/D3D12DeviceContext.h"
@@ -83,6 +86,7 @@ struct VfgBackend::Impl {
     int (__cdecl* create)(const char*,void**)=nullptr;
     void (__cdecl* destroy)(void*)=nullptr;
     int (__cdecl* setU32)(void*,const char*,unsigned)=nullptr;
+    int (__cdecl* setF32)(void*,const char*,float)=nullptr;   // Package 16: optional (explicit Timestep mode)
     int (__cdecl* setImage)(void*,const char*,void*)=nullptr;
     int (__cdecl* setStream)(void*,const char*,CUstream)=nullptr;
     int (__cdecl* loadEffect)(void*)=nullptr;
@@ -142,7 +146,11 @@ struct VfgBackend::Impl {
     Microsoft::WRL::ComPtr<ID3D12PipelineState> cutPso;
     Microsoft::WRL::ComPtr<ID3D12Resource> cutResults;
     D3D12_RESOURCE_STATES cutState=D3D12_RESOURCE_STATE_COMMON;
-    struct Job {unsigned parity,sub,multiplier;bool reset;uint64_t revision,value;bool fast;};
+    // value: the completion value this job signals (and, unless chained, the producer value it waits for);
+    // wait: the producer value its CUDA work waits for (PushGpuPath.h pushVfgChainedWait).
+    // alone: Package 15's one-predicted pair asks for FrameIndex 2 without FrameIndex 1 (never run on a GPU before). Its
+    // failure raises predictRefused, not failed: frame generation goes on; the graph stops asking for the session.
+    struct Job {unsigned parity,sub,multiplier;bool reset;uint64_t revision,value;bool fast;uint64_t wait;bool alone;};
     std::array<std::atomic<SubmissionState>,kOutputs> states{};
     std::atomic<bool> failed=false;
     std::mutex jobsMutex,profileMutex;
@@ -152,6 +160,16 @@ struct VfgBackend::Impl {
     bool asynchronous=false,stopping=false;
     unsigned outstanding=0;
     unsigned rejectRun=0,runCount=0; // process-local deterministic failure test
+    bool rejectAlone=false;          // VEYRA_TEST_VFG_REJECT_ALONE=1: every "alone" job is refused (test of the graceful path)
+    bool rejectAloneDirect=false;    // VEYRA_TEST_VFG_REJECT_ALONE=direct: only the direct FrameIndex-2 request (Package 16's fallbacks run)
+    // Package 16, item 5 (PushPredict.h PushVfgAloneLadder): direct, then Timestep, then FrameIndex 1 + 2; worker thread only.
+    PushVfgAloneLadder aloneLadder;
+    bool aloneReported=false;
+    std::atomic<bool> resetLadder=false;                                        // review 1 SHOULD 6
+    std::atomic<std::uint8_t> aloneNow=static_cast<std::uint8_t>(PushVfgAloneMode::Direct);   // review 1 SHOULD 7
+    // runAlone: defined after cpuCall (its return type is deduced), just before cudaJob.
+
+    std::atomic<bool> predictRefused=false;
     double testRunDelayMs=0; // VEYRA_TEST_VFG_DELAY_MS: a slower GPU, on this worker only
     bool profileCpu=false;
     std::array<double,13> cpuSum{},cpuMax{};
@@ -317,10 +335,34 @@ struct VfgBackend::Impl {
         if(buffer.memory){cu(cuDestroyExternalMemoryFn(buffer.memory),"cuDestroyExternalMemory");buffer.memory=nullptr;}
         buffer.resource.Reset();
     }
+    bool runAlone(Effect& e,PushVfgAloneMode mode,unsigned parity,unsigned sub,unsigned multiplier){
+        const auto dst=[&](unsigned s){return cv(cpuCall(5,[&]{return setImage(e.handle,"DstImage0",outputs[parity+2*(s-1)].image);}),"SetImage output");};
+        const auto index=[&](unsigned s){return cv(cpuCall(8,[&]{return setU32(e.handle,"FrameIndex",s);}),"SetU32 FrameIndex");};
+        const auto runOnce=[&]{return cv(cpuCall(9,[&]{return run(e.handle,1);}),"NvVFX_Run async");};
+        switch(mode){
+        case PushVfgAloneMode::Direct:return dst(sub)&&index(sub)&&runOnce();
+        case PushVfgAloneMode::Timestep:{
+            if(!setF32)return false;
+            e.boundMultiplier=0;   // FrameMultiplier 0 below: the next ordinary request sets the multiplier again
+            return cv(cpuCall(7,[&]{return setU32(e.handle,"FrameMultiplier",0u);}),"SetU32 FrameMultiplier 0 (Timestep mode)")&&
+                   cv(setF32(e.handle,"Timestep",pushVfgTimestep(sub,multiplier)),"SetF32 Timestep")&&dst(sub)&&runOnce();
+        }
+        case PushVfgAloneMode::IndexOneThenTwo:{
+            if(e.boundMultiplier!=multiplier){
+                if(!cv(cpuCall(7,[&]{return setU32(e.handle,"FrameMultiplier",multiplier);}),"SetU32 FrameMultiplier"))return false;
+                e.boundMultiplier=multiplier;
+            }
+            // FrameIndex 1 into the output this pair leaves unused (discarded), then the frame asked for.
+            return dst(1)&&index(1)&&runOnce()&&dst(sub)&&index(sub)&&runOnce();
+        }
+        case PushVfgAloneMode::Refused:break;
+        }
+        return false;
+    }
     bool cudaJob(const Job& job){
-        const auto [parity,sub,multiplier,reset,revision,value,fast]=job;
+        const auto [parity,sub,multiplier,reset,revision,value,fast,producerValue,alone]=job;
         Current current(*this);if(!current.active)return false;
-        CUDA_EXTERNAL_SEMAPHORE_WAIT_PARAMS wait{};wait.params.fence.value=value;
+        CUDA_EXTERNAL_SEMAPHORE_WAIT_PARAMS wait{};wait.params.fence.value=producerValue;
         bool ok=cu(cpuCall(2,[&]{return cuWaitExternalSemaphoresAsyncFn(&inputSemaphore,&wait,1,stream);}),"cuWaitExternalSemaphoresAsync")&&!failed.load();
         bool profiling=false;const unsigned profileSlot=unsigned(profileHead%kProfileJobs);
         if(profileGpu){
@@ -349,13 +391,33 @@ struct VfgBackend::Impl {
             ok=cv(cpuCall(7,[&]{return setU32(e.handle,"FrameMultiplier",multiplier);}),"SetU32 FrameMultiplier");
             if(ok)e.boundMultiplier=multiplier;
         }
-        ok=ok&&cv(cpuCall(5,[&]{return setImage(e.handle,"DstImage0",outputs[parity+2*(sub-1)].image);}),"SetImage output")&&
+        if(!alone)ok=ok&&cv(cpuCall(5,[&]{return setImage(e.handle,"DstImage0",outputs[parity+2*(sub-1)].image);}),"SetImage output")&&
             cv(cpuCall(8,[&]{return setU32(e.handle,"FrameIndex",sub);}),"SetU32 FrameIndex");
         if(ok&&testRunDelayMs>0){
             const auto until=std::chrono::steady_clock::now()+std::chrono::duration<double,std::milli>(testRunDelayMs*(second?.3:1));
             while(std::chrono::steady_clock::now()<until)std::this_thread::yield();
         }
-        if(ok){
+        if(ok&&alone){
+            // Package 16, item 5: the FrameIndex-2-only request through the fallback order; the SDK's status code of a
+            // refused call is in the [vfg] error line cv() writes. Only an "alone" failure is the experiment's (below).
+            ok=false;
+            if(resetLadder.exchange(false)){aloneLadder=PushVfgAloneLadder(setF32!=nullptr);aloneReported=false;log::info("vfg","FrameIndex-2-only ladder starts over (the row was switched on again, or a refusal right after a rebuild)");}
+            for(auto mode=aloneLadder.current();mode!=PushVfgAloneMode::Refused;){
+                const bool injected=rejectAlone||(rejectAloneDirect&&mode==PushVfgAloneMode::Direct);
+                if(injected)log::warn("vfg",std::format("injected rejection of a FrameIndex-2-only request, mode {} (VEYRA_TEST_VFG_REJECT_ALONE)",pushVfgAloneModeName(mode)));
+                const bool done=!injected&&runAlone(e,mode,parity,sub,multiplier);
+                const bool wasSettled=aloneLadder.settled();
+                const auto next=aloneLadder.outcome(done);
+                if(!done||(!wasSettled&&!aloneReported)){
+                    if(done)aloneReported=true;
+                    log::info("vfg",std::format("FrameIndex-2-only request: mode={} accepted={} next={} (Lower delay; order direct, timestep, index1-then-2; a refused call's SDK status is in the error line above)",
+                        pushVfgAloneModeName(mode),done,pushVfgAloneModeName(next)));
+                }
+                if(done){ok=true;break;}
+                mode=next;
+            }
+            aloneNow.store(static_cast<std::uint8_t>(aloneLadder.current()));
+        }else if(ok){
             if(rejectRun&&++runCount==rejectRun){log::warn("vfg","injected VFG Run rejection (test hook)");ok=false;}
             else ok=cv(cpuCall(9,[&]{return run(e.handle,1);}),"NvVFX_Run async");
         }
@@ -366,7 +428,8 @@ struct VfgBackend::Impl {
         }
         // Publish rejection before releasing the consumer. Its GPU copy still
         // drains, but resolveFrame must never present that slot as a success.
-        if(!ok)failed.store(true);
+        // An "alone" request's rejection is the experiment's, not the backend's.
+        if(!ok){if(alone)predictRefused.store(true);else failed.store(true);}
         CUDA_EXTERNAL_SEMAPHORE_SIGNAL_PARAMS signal{};signal.params.fence.value=value;
         if(!cu(cpuCall(10,[&]{return cuSignalExternalSemaphoresAsyncFn(&outputSemaphore,&signal,1,stream);}),"cuSignalExternalSemaphoresAsync")){
             failed.store(true);
@@ -384,9 +447,9 @@ struct VfgBackend::Impl {
             {std::unique_lock lock(jobsMutex);jobsChanged.wait(lock,[&]{return stopping||!jobs.empty();});
                 if(jobs.empty())return;job=jobs.front();jobs.pop_front();}
             bool ok=false;
-            try{ok=cudaJob(job);}catch(...){log::error("vfg","SDK worker exception; disabling VFG");}
+            try{ok=cudaJob(job);}catch(...){log::error("vfg",job.alone?"SDK worker exception on a FrameIndex-2-only request; Lower delay stops asking":"SDK worker exception; disabling VFG");}
             if(!ok){
-                failed.store(true);
+                if(job.alone)predictRefused.store(true);else failed.store(true);
                 // A context push failure/exception must also release its wait.
                 // cudaJob normally signals on the CUDA stream, so only force a
                 // CPU signal after draining it in the same primary context.
@@ -399,14 +462,30 @@ struct VfgBackend::Impl {
             {std::lock_guard lock(jobsMutex);--outstanding;}
         }
     }
-    bool handoff(unsigned parity,unsigned sub,unsigned multiplier,bool reset,bool fast){
+    // Stream "gpupath" experiment VEYRA_EXP_RP_VFG_BACK_TO_BACK=1 (off by default): a later subframe of a pair waits
+    // for the pair's first producer value instead of a new one signalled after the previous subframe's copy back, so
+    // CUDA runs it straight after the previous Run (PushGpuPath.h pushVfgChainedWait for why that is safe and why it
+    // stays off: the copy back of the first generated frame may then share the GPU with the second Run).
+    bool backToBack=false;
+    uint64_t pairProducerValue=0,pairProducerRevision=0;
+    // Signals the producer when this job needs a new value; returns the value its CUDA work waits for, 0 on failure.
+    uint64_t producerFor(unsigned sub,bool reset,uint64_t value){
+        const uint64_t chained=pushVfgChainedWait(backToBack,sub,reset,pairProducerValue,pairProducerRevision,inputRevision);
+        if(chained)return chained;
+        if(!hr(cpuCall(1,[&]{return context->directQueue()->Signal(producer.Get(),value);}),"signal VFG producer"))return 0;
+        pairProducerValue=sub==1?value:0;pairProducerRevision=inputRevision;
+        return value;
+    }
+    bool handoff(unsigned parity,unsigned sub,unsigned multiplier,bool reset,bool fast,bool alone){
         const unsigned slot=parity+2*(sub-1);
         if(!asynchronous){
             const uint64_t value=++signalValue;
-            if(!hr(cpuCall(1,[&]{return context->directQueue()->Signal(producer.Get(),value);}),"signal VFG producer"))return false;
-            const bool ok=cudaJob({parity,sub,multiplier,reset,inputRevision,value,fast});
+            const uint64_t waitValue=producerFor(sub,reset,value);
+            if(!waitValue)return false;
+            const bool ok=cudaJob({parity,sub,multiplier,reset,inputRevision,value,fast,waitValue,alone});
             if(!ok){
-                failed.store(true);Current current(*this);
+                if(alone)predictRefused.store(true);else failed.store(true);
+                Current current(*this);
                 if(current.active&&stream)cu(cuStreamSynchronizeFn(stream),"rejected synchronous job drain");
                 hr(completion->Signal(value),"release failed synchronous VFG job");
             }
@@ -419,10 +498,11 @@ struct VfgBackend::Impl {
             log::error("vfg","bounded VFG submission rejected; no GPU wait queued");return false;
         }
         const uint64_t value=++signalValue;
-        if(!hr(cpuCall(1,[&]{return context->directQueue()->Signal(producer.Get(),value);}),"signal VFG producer"))return false;
+        const uint64_t waitValue=producerFor(sub,reset,value);
+        if(!waitValue)return false;
         // Allocate the queue entry before adding a GPU dependency. Even a host
         // allocation exception cannot leave a wait with no job to signal it.
-        jobs.push_back({parity,sub,multiplier,reset,inputRevision,value,fast});
+        jobs.push_back({parity,sub,multiplier,reset,inputRevision,value,fast,waitValue,alone});
         if(!hr(cpuCall(11,[&]{return context->directQueue()->Wait(completion.Get(),value);}),"queue wait VFG completion")){
             jobs.pop_back();return false;
         }
@@ -439,6 +519,9 @@ VfgBackend::~VfgBackend(){shutdown();}
 
 bool VfgBackend::initialize(gfx::D3D12DeviceContext& context,const std::wstring& root,unsigned width,unsigned height,DXGI_FORMAT format,unsigned multiplier,unsigned quality,bool asynchronousSubmission,bool fastFallback){
     shutdown();
+    // TEST ONLY (stream "e2e"): VEYRA_TEST_FAKE_VFG=1 puts TestVfgBackend behind this class (CI's software renderer has no
+    // CUDA). Every public method below forwards to it first; without the switch nothing changes.
+    if(TestVfgBackend::requested()){test_=std::make_unique<TestVfgBackend>();return test_->initialize(context,width,height,format,multiplier,quality,asynchronousSubmission);}
 #ifdef VEYRA_HAVE_CUDA_DRIVER_HEADERS
     auto& p=*impl_;
     if(context.adapter().vendorId!=0x10DE||!runtimeAvailable(root)||!width||!height||multiplier<2||multiplier>FrameBatch::Capacity||quality>=engine::kVfgQualityCount||
@@ -454,6 +537,8 @@ bool VfgBackend::initialize(gfx::D3D12DeviceContext& context,const std::wstring&
     wchar_t reject[16]{};
     const auto rejectLength=GetEnvironmentVariableW(L"VEYRA_TEST_VFG_REJECT_RUN",reject,16);
     if(rejectLength&&rejectLength<16)p.rejectRun=unsigned(std::clamp(_wtoi(reject),0,1000000));
+    {wchar_t value[16]{};const DWORD n=GetEnvironmentVariableW(L"VEYRA_TEST_VFG_REJECT_ALONE",value,16);
+     p.rejectAloneDirect=n==6&&std::wstring_view(value,n)==L"direct";p.rejectAlone=n>0&&!p.rejectAloneDirect;}
     std::array<wchar_t,32768> system{};const auto n=GetSystemDirectoryW(system.data(),UINT(system.size()));if(!n||n>=system.size())return false;
     HMODULE driver=load(fs::path(system.data())/L"nvcuda.dll");if(!driver)return false;p.libraries.push_back(driver);
 #define BIND_CU(name,exported) if(!bind(driver,exported,p.name##Fn))return false
@@ -467,6 +552,8 @@ bool VfgBackend::initialize(gfx::D3D12DeviceContext& context,const std::wstring&
     BIND_CU(cuWaitExternalSemaphoresAsync,"cuWaitExternalSemaphoresAsync");BIND_CU(cuSignalExternalSemaphoresAsync,"cuSignalExternalSemaphoresAsync");
     BIND_CU(cuGetErrorName,"cuGetErrorName");BIND_CU(cuGetErrorString,"cuGetErrorString");
     p.profileGpu=GetEnvironmentVariableW(L"VEYRA_TEST_VFG_GPU_PROFILE",nullptr,0)>0;
+    {wchar_t chain[4]{};p.backToBack=GetEnvironmentVariableW(L"VEYRA_EXP_RP_VFG_BACK_TO_BACK",chain,4)==1&&chain[0]==L'1';}
+    if(p.backToBack)log::info("vfg","experiment VEYRA_EXP_RP_VFG_BACK_TO_BACK=1: later subframes of a pair wait for its first producer value (CUDA runs them back to back; off by default)");
     if(p.profileGpu){
         BIND_CU(cuEventCreate,"cuEventCreate");BIND_CU(cuEventRecord,"cuEventRecord");BIND_CU(cuEventQuery,"cuEventQuery");
         BIND_CU(cuEventElapsedTime,"cuEventElapsedTime");BIND_CU(cuEventDestroy,"cuEventDestroy_v2");
@@ -507,6 +594,8 @@ bool VfgBackend::initialize(gfx::D3D12DeviceContext& context,const std::wstring&
     log::info("vfg",std::format("compatibility={} compute={}.{}",ampere?"SM86-experimental":"native-no-patches",major,minor));
 #define BIND_VFX(member,name) if(!bind(core,name,p.member))return false
     BIND_VFX(create,"NvVFX_CreateEffect");BIND_VFX(destroy,"NvVFX_DestroyEffect");BIND_VFX(setU32,"NvVFX_SetU32");BIND_VFX(setImage,"NvVFX_SetImage");
+    // Package 16, item 5: optional (explicit Timestep mode); absent, that fallback step is skipped.
+    p.setF32=reinterpret_cast<decltype(p.setF32)>(GetProcAddress(core,"NvVFX_SetF32"));p.aloneLadder=PushVfgAloneLadder(p.setF32!=nullptr);
     BIND_VFX(setStream,"NvVFX_SetCudaStream");BIND_VFX(loadEffect,"NvVFX_Load");BIND_VFX(run,"NvVFX_Run");BIND_VFX(getVersion,"NvVFX_GetVersion");
 #undef BIND_VFX
 #define BIND_IMAGE(member,name) if(!bind(image,name,p.member))return false
@@ -580,6 +669,7 @@ bool VfgBackend::initialize(gfx::D3D12DeviceContext& context,const std::wstring&
 #endif
 }
 bool VfgBackend::created()const{
+    if(test_)return test_->created();   // TEST ONLY
 #ifdef VEYRA_HAVE_CUDA_DRIVER_HEADERS
     return impl_->ready;
 #else
@@ -587,6 +677,7 @@ bool VfgBackend::created()const{
 #endif
 }
 bool VfgBackend::capture(ID3D12GraphicsCommandList* list,ID3D12Resource* texture,unsigned parity,bool comparePrevious){
+    if(test_)return test_->capture(list,texture,parity,comparePrevious);   // TEST ONLY
 #ifdef VEYRA_HAVE_CUDA_DRIVER_HEADERS
     auto& p=*impl_;if(!p.ready||p.failed.load()||!list||!texture||parity>1)return false;
     const auto desc=texture->GetDesc();if(desc.Width!=p.width||desc.Height!=p.height||desc.Format!=p.format)return false;
@@ -604,21 +695,45 @@ bool VfgBackend::capture(ID3D12GraphicsCommandList* list,ID3D12Resource* texture
 #endif
 }
 bool VfgBackend::fastReady()const{
+    if(test_)return false;   // TEST ONLY: one model
 #ifdef VEYRA_HAVE_CUDA_DRIVER_HEADERS
     return impl_->ready&&impl_->effects[1].handle;
 #else
     return false;
 #endif
 }
-bool VfgBackend::generate(unsigned parity,unsigned sub,unsigned multiplier,bool reset,bool fast){
+bool VfgBackend::generate(unsigned parity,unsigned sub,unsigned multiplier,bool reset,bool fast,bool alone){
+    if(test_)return test_->generate(parity,sub,multiplier,reset,fast,alone);   // TEST ONLY
 #ifdef VEYRA_HAVE_CUDA_DRIVER_HEADERS
     auto& p=*impl_;if(!p.ready||p.failed.load()||parity>1||multiplier<2||multiplier>p.maxMultiplier||sub<1||sub>=multiplier)return false;
-    return p.handoff(parity,sub,multiplier,reset,fast);
+    return p.handoff(parity,sub,multiplier,reset,fast,alone);
 #else
-    (void)parity;(void)sub;(void)multiplier;(void)reset;(void)fast;return false;
+    (void)parity;(void)sub;(void)multiplier;(void)reset;(void)fast;(void)alone;return false;
+#endif
+}
+void VfgBackend::resetAloneLadder(){
+#ifdef VEYRA_HAVE_CUDA_DRIVER_HEADERS
+    impl_->resetLadder.store(true);
+    impl_->aloneNow.store(static_cast<std::uint8_t>(PushVfgAloneMode::Direct));
+#endif
+}
+PushVfgAloneMode VfgBackend::aloneMode() const{
+#ifdef VEYRA_HAVE_CUDA_DRIVER_HEADERS
+    return static_cast<PushVfgAloneMode>(impl_->aloneNow.load());
+#else
+    return PushVfgAloneMode::Refused;
+#endif
+}
+bool VfgBackend::takePredictRefused(){
+    if(test_)return test_->takePredictRefused();   // TEST ONLY
+#ifdef VEYRA_HAVE_CUDA_DRIVER_HEADERS
+    return impl_->predictRefused.exchange(false);
+#else
+    return false;
 #endif
 }
 VfgBackend::SubmissionState VfgBackend::submissionState(unsigned slot)const{
+    if(test_)return test_->submissionState(slot);   // TEST ONLY
 #ifdef VEYRA_HAVE_CUDA_DRIVER_HEADERS
     return slot<kOutputs?impl_->states[slot].load():SubmissionState::Failed;
 #else
@@ -626,6 +741,7 @@ VfgBackend::SubmissionState VfgBackend::submissionState(unsigned slot)const{
 #endif
 }
 bool VfgBackend::copyOutput(ID3D12GraphicsCommandList* list,ID3D12Resource* texture,unsigned slot){
+    if(test_)return test_->copyOutput(list,texture,slot);   // TEST ONLY
 #ifdef VEYRA_HAVE_CUDA_DRIVER_HEADERS
     auto& p=*impl_;if(!p.ready||!list||!texture||slot>=2*(p.maxMultiplier-1))return false;
     const auto desc=texture->GetDesc();if(desc.Width!=p.width||desc.Height!=p.height||desc.Format!=p.format)return false;
@@ -663,7 +779,48 @@ bool VfgBackend::copyOutput(ID3D12GraphicsCommandList* list,ID3D12Resource* text
     (void)list;(void)texture;(void)slot;return false;
 #endif
 }
+bool VfgBackend::copyInput(ID3D12GraphicsCommandList* list,ID3D12Resource* texture,unsigned parity,bool onlyOnCut){
+    if(test_)return test_->copyInput(list,texture,parity,onlyOnCut);   // TEST ONLY
+#ifdef VEYRA_HAVE_CUDA_DRIVER_HEADERS
+    auto& p=*impl_;if(!p.ready||!list||!texture||parity>=2)return false;
+    const auto desc=texture->GetDesc();if(desc.Width!=p.width||desc.Height!=p.height||desc.Format!=p.format)return false;
+    if(onlyOnCut&&!p.gpuShotChange)return true;   // the SDK's own detection: no GPU result to predicate on
+    auto* current=p.inputs[parity].resource.Get();
+    D3D12_TEXTURE_COPY_LOCATION src{};src.pResource=current;src.Type=D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;src.PlacedFootprint=p.footprint;
+    D3D12_TEXTURE_COPY_LOCATION dst{};dst.pResource=texture;dst.Type=D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    // B's buffer is read here without an explicit barrier: earlier in the same list the predicted-frame pass read it as
+    // a root SRV, which promoted it from COMMON to a read state; an explicit COMMON -> COPY_SOURCE barrier would name
+    // the wrong state (review 2). Buffers promote implicitly to COPY_SOURCE and read states accumulate.
+    if(onlyOnCut&&p.cutState!=D3D12_RESOURCE_STATE_PREDICATION){
+        D3D12_RESOURCE_BARRIER barrier{};transition(barrier,p.cutResults.Get(),p.cutState,D3D12_RESOURCE_STATE_PREDICATION);
+        list->ResourceBarrier(1,&barrier);p.cutState=D3D12_RESOURCE_STATE_PREDICATION;
+    }
+    if(onlyOnCut)list->SetPredication(p.cutResults.Get(),UINT64(parity)*8,D3D12_PREDICATION_OP_EQUAL_ZERO);   // skipped unless a cut
+    list->CopyTextureRegion(&dst,0,0,0,&src,nullptr);
+    if(onlyOnCut)list->SetPredication(nullptr,0,D3D12_PREDICATION_OP_EQUAL_ZERO);
+    return true;
+#else
+    (void)list;(void)texture;(void)parity;(void)onlyOnCut;return false;
+#endif
+}
+ID3D12Resource* VfgBackend::inputBuffer(unsigned parity)const{
+    if(test_)return test_->inputBuffer(parity);   // TEST ONLY
+#ifdef VEYRA_HAVE_CUDA_DRIVER_HEADERS
+    return impl_->ready&&parity<2?impl_->inputs[parity].resource.Get():nullptr;
+#else
+    (void)parity;return nullptr;
+#endif
+}
+uint32_t VfgBackend::inputRowPitch()const{
+    if(test_)return test_->inputRowPitch();   // TEST ONLY
+#ifdef VEYRA_HAVE_CUDA_DRIVER_HEADERS
+    return impl_->ready?impl_->footprint.Footprint.RowPitch:0;
+#else
+    return 0;
+#endif
+}
 ID3D12Resource* VfgBackend::shotChangeResultsForTest()const{
+    if(test_)return test_->shotChangeResults();   // TEST ONLY
 #ifdef VEYRA_HAVE_CUDA_DRIVER_HEADERS
     return impl_->gpuShotChange?impl_->cutResults.Get():nullptr;
 #else
@@ -671,6 +828,7 @@ ID3D12Resource* VfgBackend::shotChangeResultsForTest()const{
 #endif
 }
 void VfgBackend::shutdown(){
+    if(test_){test_->shutdown();test_.reset();}   // TEST ONLY
 #ifdef VEYRA_HAVE_CUDA_DRIVER_HEADERS
     auto& p=*impl_;p.ready=false;p.stopWorker();
     if(p.cudaContext&&p.cuCtxPushCurrentFn&&p.cuCtxPopCurrentFn){

@@ -7,6 +7,10 @@
 #include "veyra/remoteplay/InputGate.h"
 #include "veyra/remoteplay/SessionInbox.h"
 #include "veyra/remoteplay/StreamRecovery.h"
+#include "veyra/remoteplay/WakeSignal.h"
+#include "veyra/remoteplay/ControllerQueue.h"
+#include "veyra/remoteplay/KeyboardMousePad.h"
+#include "veyra/remoteplay/StreamCadence.h"
 #include "veyra/engine/PresentationScheduler.h"
 #include "veyra/engine/FgRecoveryBudget.h"
 #include <atomic>
@@ -190,6 +194,289 @@ TEST(recovery_intermittent_frames_do_not_renew_budget){
     for(int64_t t=7100;t<150000;t+=1000)CHECK(!r.frame(t));
     CHECK(r.episodeRetries()==1);CHECK(r.reconnects()==1);
 }
+// --- Latency work of 2026-11-18: event-driven owner wake and immediate pad dispatch ---
+TEST(wake_signal_is_latched){
+    WakeSignal w;CHECK(!w.waitFor(std::chrono::milliseconds(1)));
+    w.notify();w.notify();
+    // A notify that arrived while the owner was working ends the next wait at once, once.
+    const auto start=std::chrono::steady_clock::now();
+    CHECK(w.waitFor(std::chrono::seconds(2)));
+    CHECK(std::chrono::steady_clock::now()-start<std::chrono::milliseconds(500));
+    CHECK(!w.waitFor(std::chrono::milliseconds(1)));CHECK(w.notified()==2);
+    w.notify();w.clear();CHECK(!w.waitFor(std::chrono::milliseconds(1)));
+}
+TEST(wake_signal_ends_wait_from_another_thread){
+    WakeSignal w;std::atomic<bool> woke{false};
+    std::thread waiter([&]{woke=w.waitFor(std::chrono::seconds(5));});
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    const auto start=std::chrono::steady_clock::now();w.notify();waiter.join();
+    CHECK(woke);CHECK(std::chrono::steady_clock::now()-start<std::chrono::seconds(1));
+}
+TEST(inbox_wakes_owner_on_video_and_state){
+    SessionInbox inbox;auto signal=std::make_shared<WakeSignal>();inbox.wakeOn(signal);
+    auto token=inbox.begin(0);const auto g=token.generation();
+    token.connected();CHECK(signal->notified()==1);
+    CHECK(token.video(config(g,monotonic100ns())));CHECK(signal->notified()==2);
+    CHECK(token.video(frame(0,true,monotonic100ns(),g)));CHECK(signal->notified()==3);
+    CHECK(signal->waitFor(std::chrono::milliseconds(1)));CHECK(inbox.tryVideo(monotonic100ns()));
+    // A rejected P frame still wakes the owner: it has a keyframe request to send.
+    CHECK(!token.video(frame(5,false,monotonic100ns(),g)));CHECK(signal->notified()==4);
+    CHECK(inbox.takeIdrRequest(monotonic100ns()));
+    token.failed(-7);CHECK(signal->notified()==5);
+    // Stale callbacks of a failed session wake nobody.
+    CHECK(!token.video(frame(6,true,monotonic100ns(),g)));CHECK(signal->notified()==5);
+}
+TEST(inbox_without_wake_signal_still_polls){
+    SessionInbox inbox;auto token=inbox.begin(0);const auto g=token.generation();
+    CHECK(token.video(config(g,monotonic100ns())));CHECK(token.video(frame(0,true,monotonic100ns(),g)));
+    CHECK(inbox.tryVideo(monotonic100ns()));
+    auto signal=std::make_shared<WakeSignal>();inbox.wakeOn(signal);inbox.wakeOn(nullptr);
+    CHECK(token.video(frame(1,false,monotonic100ns(),g)));CHECK(signal->notified()==0);
+}
+TEST(inbox_wake_signal_survives_next_session){
+    SessionInbox inbox;auto signal=std::make_shared<WakeSignal>();inbox.wakeOn(signal);
+    auto first=inbox.begin(0);inbox.invalidate();inbox.finishStop();
+    auto second=inbox.begin(0);second.connected();CHECK(signal->notified()==1);
+    first.connected();CHECK(signal->notified()==1);
+}
+namespace {
+ControllerState pad(std::uint32_t buttons,std::int16_t stick=0){ControllerState s;s.inputActive=true;s.buttons=buttons;s.leftX=stick;return s;}
+}
+TEST(controller_queue_tick_is_the_original_behaviour){
+    ControllerQueue q(ControllerQueue::Policy::Tick);
+    CHECK(q.take(5)==ControllerState{}); // never polled: neutral
+    auto down=pad(0);down.touches[0].id=1;auto up=down;up.touches[0].id=-1;
+    CHECK(q.push(10,down));CHECK(q.push(10,ControllerState{}));CHECK(q.take(10)==ControllerState{});
+    q.push(20,down);q.push(20,up);CHECK(q.take(20).touches[0].id==1);CHECK(q.take(20).touches[0].id==-1);
+    // Identical states are queued again and a backlog overflows into a release.
+    for(int i=0;i<40;++i)q.push(30,down);
+    CHECK(q.depth()<=ControllerQueue::kCapacity);CHECK(q.overflows()>0);
+    CHECK(q.take(30+2000000)==ControllerState{});
+}
+TEST(controller_queue_immediate_keeps_every_edge_in_order){
+    ControllerQueue q;
+    // Press, release, press of two buttons before the owner runs: five states, all kept.
+    const std::uint32_t steps[]={ControllerState::Cross,0,ControllerState::Cross,ControllerState::Cross|ControllerState::R1,ControllerState::R1};
+    for(auto b:steps)CHECK(q.push(100,pad(b)));
+    CHECK(q.depth()==5);
+    for(auto b:steps)CHECK(q.take(100).buttons==b);
+    CHECK(!q.pending());CHECK(q.take(100).buttons==ControllerState::R1); // the tick repeats the current state
+}
+TEST(controller_queue_immediate_latest_analog_wins){
+    ControllerQueue q;
+    CHECK(q.push(100,pad(ControllerState::Cross,1)));
+    for(std::int16_t x=2;x<=500;++x)CHECK(q.push(100+x,pad(ControllerState::Cross,x)));
+    CHECK(q.depth()==1);CHECK(q.overflows()==0);
+    const auto sent=q.take(700);CHECK(sent.leftX==500&&sent.buttons==ControllerState::Cross);
+    // Unchanged state: nothing new to send, but the poll stamp is refreshed.
+    CHECK(!q.push(900,pad(ControllerState::Cross,500)));CHECK(!q.pending());
+    CHECK(q.take(900+ControllerQueue::kStale100ns).leftX==500);
+    CHECK(q.take(901+ControllerQueue::kStale100ns)==ControllerState{});
+}
+TEST(controller_queue_immediate_trigger_and_touch_edges){
+    ControllerQueue q;auto s=pad(0);
+    s.l2=10;CHECK(q.push(1,s));s.l2=200;CHECK(q.push(2,s));CHECK(q.depth()==1); // depth of a held trigger is analog
+    s.l2=0;CHECK(q.push(3,s));CHECK(q.depth()==2);                              // releasing it is an edge
+    s.touches[0]={3,100,100};CHECK(q.push(4,s));CHECK(q.depth()==3);            // finger down
+    s.touches[0]={3,400,120};CHECK(q.push(5,s));CHECK(q.depth()==3);            // finger moved
+    s.touches[0]={};CHECK(q.push(6,s));CHECK(q.depth()==4);                     // finger up
+    CHECK(q.take(6).l2==200);CHECK(q.take(6).l2==0);CHECK(q.take(6).touches[0].x==400);CHECK(q.take(6).touches[0].id==-1);
+}
+TEST(controller_queue_immediate_neutral_cancels_and_stale_fails_neutral){
+    ControllerQueue q;
+    q.push(10,pad(ControllerState::Cross));CHECK(q.take(10).buttons==ControllerState::Cross);
+    q.push(11,pad(0));q.push(12,pad(ControllerState::Circle));
+    // Focus loss: the queued release and press are dropped, the held button is released now.
+    CHECK(q.push(13,ControllerState{}));CHECK(q.depth()==1);CHECK(q.take(13)==ControllerState{});
+    // Nothing was ever sent: a neutral state has nothing to cancel and nothing to send.
+    ControllerQueue idle;idle.push(1,pad(ControllerState::Cross));CHECK(!idle.push(2,ControllerState{}));CHECK(!idle.pending());
+    // A backlog older than 100 ms is dropped and answered with a release; fresh entries behind it remain.
+    q.push(100,pad(ControllerState::Cross));q.push(100+2*ControllerQueue::kStale100ns,pad(0));
+    q.push(101+2*ControllerQueue::kStale100ns,pad(ControllerState::Square));
+    CHECK(q.take(102+2*ControllerQueue::kStale100ns)==ControllerState{});
+    CHECK(q.pending());CHECK(q.take(102+2*ControllerQueue::kStale100ns).buttons==0);
+    CHECK(q.take(102+2*ControllerQueue::kStale100ns).buttons==ControllerState::Square);
+}
+TEST(controller_queue_owner_stall_does_not_force_a_release){
+    // 250 Hz polls with a moving stick while the owner is busy for 200 ms (decoder open).
+    ControllerQueue tick(ControllerQueue::Policy::Tick),immediate;
+    for(int i=0;i<50;++i){const auto s=pad(ControllerState::R1,std::int16_t(i));tick.push(i*40000,s);immediate.push(i*40000,s);}
+    CHECK(tick.overflows()>0);CHECK(immediate.overflows()==0);CHECK(immediate.depth()==1);
+    CHECK(immediate.take(50*40000).leftX==49);
+}
+// --- Experimental keyboard and mouse as a DualSense (VEYRA_EXP_RP_KBM) ---
+namespace {
+double tiltOf(const MouseAim::Output& o){return std::hypot(double(o.x),double(o.y))/32767.0;}
+MouseAimConfig plainAim(){MouseAimConfig c;c.fullSpeedCounts=4000;c.deadzone=.12;c.smoothingMs=0;return c;}
+}
+TEST(mouse_aim_smallest_movement_already_clears_the_dead_zone){
+    MouseAim aim(plainAim());aim.add(1,0);
+    const auto out=aim.step(4000); // 1 count in 4 ms = 250 counts/s of 4000
+    CHECK(out.moving&&out.y==0&&out.x>0);
+    CHECK(std::abs(tiltOf(out)-(.12+.88*250.0/4000.0))<.002);
+    // The mouse stopped: the stick is back at rest on the next poll, as a mouse user expects.
+    const auto rest=aim.step(4000);CHECK(!rest.moving&&rest.x==0&&rest.y==0);
+}
+TEST(mouse_aim_speed_maps_linearly_and_keeps_direction){
+    MouseAim aim(plainAim());aim.add(6,-8); // 10 counts in 4 ms = 2500 counts/s
+    const auto out=aim.step(4000);
+    CHECK(std::abs(tiltOf(out)-(.12+.88*2500.0/4000.0))<.002);
+    CHECK(out.x>0&&out.y<0&&std::abs(double(out.y)/double(out.x)+8.0/6.0)<.01);
+}
+TEST(mouse_aim_curve_undoes_the_games_response){
+    auto config=plainAim();config.curve=2;config.deadzone=0;
+    MouseAim aim(config);aim.add(4,0); // a quarter of full speed
+    const auto out=aim.step(4000);
+    // A game turning with tilt^2 then turns at (0.5)^2 = a quarter of its full speed.
+    CHECK(std::abs(tiltOf(out)-.5)<.002);
+}
+TEST(mouse_aim_flick_faster_than_the_stick_is_carried_not_lost){
+    MouseAim aim(plainAim()); // budget: 16 counts per 4 ms poll, carry 40 ms = 160 counts
+    aim.add(100,0);
+    double delivered=0;int fullPolls=0,polls=0;
+    for(;polls<40;++polls){
+        const auto out=aim.step(4000);if(!out.moving)break;
+        const double tilt=tiltOf(out);if(tilt>.999)++fullPolls;
+        delivered+=(tilt-.12)/.88*16.0; // counts this poll stood for
+    }
+    CHECK(fullPolls==6);               // 96 counts at full tilt, then the remaining 4
+    CHECK(std::abs(delivered-100)<.5);
+    // Beyond the carry the excess is dropped: the stick must not keep turning for seconds.
+    aim.add(100000,0);int saturated=0;
+    for(int i=0;i<200;++i){if(tiltOf(aim.step(4000))>.999)++saturated;}
+    CHECK(saturated==11);              // this poll plus 160 carried counts
+}
+TEST(mouse_aim_smoothing_window_averages_uneven_polls){
+    auto config=plainAim();config.smoothingMs=8;
+    MouseAim aim(config);
+    // 1 kHz mouse moving 3 counts / 8 ms: polls alternate between 1 and 2 counts.
+    aim.add(1,0);aim.step(4000);aim.add(2,0);const auto a=aim.step(4000);
+    aim.add(1,0);const auto b=aim.step(4000);aim.add(2,0);const auto c=aim.step(4000);
+    CHECK(a.x==b.x&&b.x==c.x);         // steady tilt instead of a 1-2-1-2 wobble
+    CHECK(std::abs(tiltOf(a)-(.12+.88*375.0/4000.0))<.002);
+}
+TEST(mouse_aim_gyro_mode_reports_the_turn_and_leaves_the_stick){
+    MouseAimConfig config;config.mode=MouseAimConfig::Mode::Gyro;config.gyroDegPerCount=.05;
+    KeyboardMousePad pad(config);
+    ControllerState physical;physical.rightX=1234;
+    pad.mouseMove(40,-20);
+    const auto out=pad.apply(physical,1000000);
+    CHECK(out.rightX==1234&&out.motionValid&&out.motionSampleCount==1);
+    const double radians=.05*3.14159265358979323846/180.0;
+    CHECK(std::abs(out.gyro[1]-(-40*radians/.004))<1e-3); // yaw: mouse right turns right
+    CHECK(std::abs(out.gyro[0]-(20*radians/.004))<1e-3);
+    CHECK(out.accel[1]==1.f);
+    const auto still=pad.apply(physical,1004000);
+    CHECK(still.gyro[0]==0.f&&still.gyro[1]==0.f&&still.motionTimestampUs>out.motionTimestampUs);
+}
+TEST(keyboard_pad_movement_buttons_and_wheel){
+    KeyboardMousePad pad(plainAim());
+    ControllerState physical;physical.buttons=ControllerState::Triangle;physical.leftX=9000;
+    auto out=pad.apply(physical,1000);
+    CHECK(out.inputActive&&out.buttons==ControllerState::Triangle&&out.leftX==9000); // nothing held: the pad passes through
+    pad.key('W',true);pad.key('D',true);pad.key(0x20,true);pad.mouseButton(1,true);pad.mouseButton(3,true);
+    out=pad.apply(physical,5000);
+    CHECK(out.buttons==(ControllerState::Triangle|ControllerState::Cross));
+    CHECK(out.r2==255&&out.l2==255);
+    CHECK(out.leftX>23000&&out.leftX<23300&&out.leftY==-out.leftX); // forward-right on the unit circle
+    pad.key('S',true);out=pad.apply(physical,9000);
+    CHECK(out.leftY==0&&out.leftX==32767);                          // W and S cancel
+    pad.key(0x12,true);out=pad.apply(physical,13000);CHECK(out.leftX>16300&&out.leftX<16500); // Alt: walk
+    pad.scroll(120);out=pad.apply(physical,17000);CHECK(out.buttons&ControllerState::Triangle);
+    physical.buttons=0;out=pad.apply(physical,21000);CHECK(out.buttons&ControllerState::Triangle); // the notch is held 60 ms
+    out=pad.apply(physical,17000+KeyboardMousePad::kWheelPulseUs+1000);CHECK(!(out.buttons&ControllerState::Triangle));
+    pad.releaseAll();out=pad.apply(physical,200000);
+    CHECK(out.buttons==0&&out.l2==0&&out.r2==0&&out.leftX==9000&&out.leftY==0); // the physical stick again
+}
+TEST(keyboard_pad_bindings_parse_overrides){
+    KeyboardPadBindings bindings;
+    CHECK(bindings.action('R')==PadAction::Square&&bindings.action(kMouseButtonBase+1)==PadAction::R2);
+    CHECK(bindings.parse(" f = Square ; Mouse2=None; shift=Circle;F5=PS;wheeldown=DDown ")==0);
+    CHECK(bindings.action('F')==PadAction::Square&&bindings.action(kMouseButtonBase+2)==PadAction::None);
+    CHECK(bindings.action(0x10)==PadAction::Circle&&bindings.action(0x74)==PadAction::PS&&bindings.action(kWheelDown)==PadAction::DDown);
+    CHECK(bindings.parse("nokey=Cross;W=nothing;broken;F13=Cross")==4);
+    CHECK(bindings.action('W')==PadAction::LUp); // unreadable entries change nothing
+}
+TEST(keyboard_mouse_states_coalesce_in_the_controller_queue){
+    // A moving mouse changes the right stick every poll: analog only, so the queue keeps one entry
+    // and a click in between still gets its own.
+    KeyboardMousePad pad(plainAim());ControllerQueue q;ControllerState physical;
+    for(int i=0;i<10;++i){pad.mouseMove(3+i,0);q.push(100+i,pad.apply(physical,1000+4000ull*unsigned(i)));}
+    CHECK(q.depth()==1);
+    pad.mouseButton(1,true);pad.mouseMove(5,0);q.push(200,pad.apply(physical,50000));
+    CHECK(q.depth()==2);CHECK(q.take(200).r2==0);CHECK(q.take(200).r2==255);
+}
+#include "StreamCadenceTests.inc"
+#include "PerformanceModeTests.inc"
+#include "KbmProfileTests.inc"
+#include "LanTransportTests.inc"
+#include "UpdatePolicyTests.inc"
+#include "AdaptiveTransportTests.inc"
+#include "GpuBudgetTests.inc"
+#include "KbmCalibrationTests.inc"
+#include "AudioSyncTests.inc"
+#include "AudioSoakTests.inc"
+#include "GovernorFeedTests.inc"
+#include "HardwareProfileTests.inc"
+#include "LanStudyTests.inc"
+#include "GovernorControlTests.inc"
+#include "CalibrationPlanTests.inc"
+#include "StressTests.inc"
+#include "ConfigRecoveryTests.inc"
+#include "StuckInputTests.inc"
+#include "ControllerQueueFixTests.inc"
+#include "LatencyStatsTests.inc"
+#include "AutorunPlanTests.inc"
+#include "SrPlanTests.inc"
+#include "PresentTimingTests.inc"
+#include "FrameDeliveryTests.inc"
+#include "DeviceLossResumeTests.inc"
+#include "GovernorStallTests.inc"
+#include "SmartLinkTests.inc"
+#include "SmartLinkSimTests.inc"
+#include "SmartLinkSharedTests.inc"
+#include "PipelineHookTests.inc"
+#include "AudioPopTests.inc"
+#include "SmartLinkFeedTests.inc"
+#include "CleanTests.inc"
+#include "PipelinePlanTests.inc"
+#include "NrStatsTests.inc"
+#include "ImageMetricsTests.inc"
+#include "PipelineProbeTests.inc"
+#include "UpstreamPortTests.inc"
+#include "KbmInputTests.inc"
+#include "KbmInputStatsTests.inc"
+#include "KbmInputMatrixTests.inc"
+#include "AudioOwnClockTests.inc"
+#include "ScanoutAuditTests.inc"
+#include "CoverRegionTests.inc"
+#include "DecodeFallbackTests.inc"
+#include "CadenceTests.inc"
+#include "NrRuntimeTests.inc"
+#include "SmoothnessTests.inc"
+#include "ClarityTests.inc"
+#include "FrameDumpTests.inc"
+#include "NetDiagnosticsTests.inc"
+#include "SyncTests.inc"
+#include "CaptureStatsTests.inc"
+#include "FgLatencyTests.inc"
+#include "KbmCameraTests.inc"
+#include "NrAdaptTests.inc"
+#include "SizesTests.inc"
+#include "DedupCadenceTests.inc"
+#include "LagfixSettingsTests.inc"
+#include "FgScheduleSimTests.inc"
+#include "LegacyTests.inc"   // uses the simulator: after FgScheduleSimTests.inc
+#include "GpuPathTests.inc"
+#include "LagHuntTests.inc"
+#include "PredictTests.inc"
+#include "LowDelayTests.inc"
+#include "LowDelaySimTests.inc"   // uses the simulator and fgsim_tests: after FgScheduleSimTests.inc
+#include "DelaySplitTests.inc"
+#include "PresentPathTests.inc"
+#include "DisplayPathTests.inc"
+#include "OnScreenCadenceTests.inc"
+#include "StallWitnessTests.inc"
 int main(int argc,char**argv){
     std::string filter;
     if(argc==2&&std::string_view(argv[1])=="--list"){for(auto [name,f]:tests()){(void)f;std::cout<<name<<'\n';}return 0;}

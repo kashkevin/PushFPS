@@ -1,0 +1,47 @@
+{
+ "另外，Present 之后到屏幕刷新：中位数 %1 ms，P95 %2 ms（DXGI 帧统计，软件计时，不是光子测量；不计入上面的数字）": {
+  "en": "Separately, from Present to the screen refresh: median %1 ms, P95 %2 ms (DXGI frame statistics, software timing, not a photon measurement; not included in the number above)",
+  "zh-TW": "另外，Present 之後到螢幕更新：中位數 %1 ms，P95 %2 ms（DXGI 影格統計，軟體計時，不是光子量測；不計入上面的數字）",
+  "ja": "別途、Present から画面のリフレッシュまで：中央値 %1 ms、P95 %2 ms（DXGI フレーム統計、ソフトウェア計測で光の測定ではありません。上の数値には含まれません）"
+ },
+ "驱动配置已保存：请重启 PushFPS 来完成 G-SYNC 设置": {
+  "en": "Driver profile saved: restart PushFPS to finish setting up G-SYNC",
+  "zh-TW": "驅動設定已儲存：請重新啟動 PushFPS 來完成 G-SYNC 設定",
+  "ja": "ドライバープロファイルを保存しました：G-SYNC の設定を完了するには PushFPS を再起動してください"
+ },
+ "重启后驱动已确认 G-SYNC 对 PushFPS 生效": {
+  "en": "After the restart the driver confirms G-SYNC for PushFPS",
+  "zh-TW": "重新啟動後驅動已確認 G-SYNC 對 PushFPS 生效",
+  "ja": "再起動後、ドライバーが PushFPS の G-SYNC を有効と確認しました"
+ },
+ "现在 Present 之后到屏幕刷新：%1 ms（中位数，DXGI 帧统计，软件计时）· %2": {
+  "en": "Now from Present to the screen refresh: %1 ms (median, DXGI frame statistics, software timing) · %2",
+  "zh-TW": "現在 Present 之後到螢幕更新：%1 ms（中位數，DXGI 影格統計，軟體計時）· %2",
+  "ja": "現在の Present から画面のリフレッシュまで：%1 ms（中央値、DXGI フレーム統計、ソフトウェア計測）· %2"
+ },
+ "重启后驱动还没有报告 G-SYNC 对 PushFPS 生效": {
+  "en": "After the restart the driver has not reported G-SYNC as active for PushFPS",
+  "zh-TW": "重新啟動後驅動還沒有回報 G-SYNC 對 PushFPS 生效",
+  "ja": "再起動後、ドライバーは PushFPS の G-SYNC が有効とまだ報告していません"
+ },
+ "窗口占满屏幕": {
+  "en": "the window fills the screen",
+  "zh-TW": "視窗佔滿螢幕",
+  "ja": "ウィンドウが画面全体を覆っています"
+ },
+ "窗口没有占满屏幕": {
+  "en": "the window does not fill the screen",
+  "zh-TW": "視窗沒有佔滿螢幕",
+  "ja": "ウィンドウが画面全体を覆っていません"
+ },
+ "窗口没有占满屏幕；这台电脑报告窗口不支持硬件合成": {
+  "en": "the window does not fill the screen; this PC reports no hardware composition for windows",
+  "zh-TW": "視窗沒有佔滿螢幕；這台電腦回報視窗不支援硬體合成",
+  "ja": "ウィンドウが画面全体を覆っていません。この PC はウィンドウのハードウェア合成に非対応と報告しています"
+ },
+ "现在 Present 之后到屏幕刷新：%1 ms（中位数，DXGI 帧统计，软件计时）": {
+  "en": "Now from Present to the screen refresh: %1 ms (median, DXGI frame statistics, software timing)",
+  "zh-TW": "現在 Present 之後到螢幕更新：%1 ms（中位數，DXGI 影格統計，軟體計時）",
+  "ja": "現在の Present から画面のリフレッシュまで：%1 ms（中央値、DXGI フレーム統計、ソフトウェア計測）"
+ }
+}
