@@ -354,9 +354,84 @@ Item {
             tools.canRepair = false; tools.changed()
             tryVerify(() => !row.visible, 2000, "nothing left to set: the row goes")
             compare(veyra.preferences.pushGsyncChecked, true, "and that is remembered")
+            // Stream "s10-display": the repair is applied by the driver only after a restart of PushFPS: said until then.
+            compare(veyra.preferences.pushGsyncRestartPending, true, "a repair waits for a restart")
+            compare(quick.gsyncRun, 1)
+            verify(control("pushfps-gsync-restart-row").visible, "the row says: restart PushFPS to finish")
+            quick.gsyncRun = 0
             veyra.vrrState = 0; veyra.displaySync = 2; veyra.variableRefresh = false
             veyra.nvidiaVrrProfile = null
             tools.destroy()
+        }
+
+        // Stream "s10-display" (review MUST 1): after the restart only the driver's answer is stated, and only where PushFPS
+        // asked for variable refresh; never a troubleshooting instruction.
+        function test_gsync_after_restart_states_only_what_the_driver_answered() {
+            compare(quick.gsyncVerdict(false, 3), 0, "variable refresh not requested: nothing to say")
+            compare(quick.gsyncVerdict(false, 4), 0)
+            compare(quick.gsyncVerdict(true, 4), 2, "requested and reported active")
+            compare(quick.gsyncVerdict(true, 3), 3, "requested, not reported active: said as such")
+            quick.gsyncRun = 3
+            const row = control("pushfps-gsync-restart-row")
+            verify(row.visible)
+            verify(row.hint.indexOf("控制面板") < 0, "no control-panel instruction")
+            quick.gsyncRun = 2
+            verify(row.visible)
+            quick.gsyncRun = 0
+            verify(!row.visible)
+        }
+        // Stream "s10-display": the auto-fullscreen row shows this PC's measured display path in the current window mode.
+        function test_auto_fullscreen_hint_shows_the_measured_to_screen_figure() {
+            veyra.liveStats = ({running: true, toScreenKnown: true, toScreenP50Ms: 9.43, toScreenP95Ms: 14.5})
+            control("pushfps-display-path-timer").triggered()
+            verify(quick.toScreenText.indexOf("9.4") >= 0, quick.toScreenText)
+            veyra.liveStats = ({running: true, toScreenKnown: false})
+            control("pushfps-display-path-timer").triggered()
+            compare(quick.toScreenText, "", "nothing measured: nothing said")
+        }
+
+        // Stream "s12-pace" (review 1 MUST 3): the composed path says "at least" (the lower bound); a direct or frozen path says
+        // Present spacing and "not measured on screen"; the direct hint needs the driver's report; nothing when unmeasured.
+        function test_auto_fullscreen_hint_shows_the_measured_on_screen_evenness() {
+            veyra.liveStats = ({running: true, onScreenKnown: true, onScreenPath: 0, onScreenRefreshes: 2, onScreenEvenPctMin: 71.6, onScreenEvenPctMax: 76.2, onScreenNarrow: true, onScreenDirectSeen: false})
+            control("pushfps-display-path-timer").triggered()
+            verify(quick.onScreenText.indexOf("71") >= 0 && quick.onScreenText.indexOf("77") >= 0, quick.onScreenText)   // a range, rounded outwards
+            compare(quick.directHint, "", "direct display never reported on this PC: no claim")
+            verify(control("pushfps-auto-fullscreen-row").hint.indexOf(quick.onScreenText) >= 0)
+            veyra.liveStats = ({running: true, onScreenKnown: true, onScreenPath: 0, onScreenRefreshes: 2, onScreenEvenPctMin: 71.6, onScreenEvenPctMax: 76.2, onScreenNarrow: true, onScreenDirectSeen: true})
+            control("pushfps-display-path-timer").triggered()
+            verify(quick.directHint.length > 0)
+            veyra.liveStats = ({running: true, onScreenKnown: true, onScreenPath: 0, onScreenRefreshes: 2, onScreenEvenPctMin: 47, onScreenEvenPctMax: 90, onScreenNarrow: false})
+            control("pushfps-display-path-timer").triggered()
+            compare(quick.onScreenText, "", "a wide range: no number shown")
+            veyra.liveStats = ({running: true, onScreenKnown: true, onScreenPath: 1, onScreenSpacingEvenPct: 95.2, onScreenDirectSeen: true})
+            control("pushfps-display-path-timer").triggered()
+            verify(quick.onScreenText.indexOf("95") >= 0 && quick.onScreenText.indexOf("没有测量") >= 0, quick.onScreenText)
+            verify(quick.onScreenText.indexOf("驱动报告") >= 0)
+            compare(quick.directHint, "", "already direct: no hint")
+            veyra.liveStats = ({running: true, onScreenKnown: true, onScreenPath: 2, onScreenSpacingEvenPct: 95.2, onScreenDirectSeen: false})
+            control("pushfps-display-path-timer").triggered()
+            verify(quick.onScreenText.indexOf("驱动报告") < 0, "a still refresh count is not a driver report")
+            verify(quick.onScreenText.indexOf("没有测量") >= 0)
+            veyra.liveStats = ({running: true, onScreenKnown: false})
+            control("pushfps-display-path-timer").triggered()
+            compare(quick.onScreenText, "", "nothing measured: nothing said")
+        }
+        function test_unfocused_notice_switch_is_a_preference() {
+            const sw = control("pushfps-unfocused-notice")
+            verify(sw.checked, "on unless switched off")
+            sw.toggled(false)
+            compare(veyra.preferences.pushUnfocusedNotice, false)
+            sw.toggled(true)
+        }
+        // Stream s12-pace: "Steadier fine detail" is a visible choice, off unless chosen (Package 16's blit by default).
+        function test_steady_detail_is_off_by_default_and_a_preference() {
+            const sw = control("pushfps-steady-detail")
+            verify(!sw.checked, "off unless chosen")
+            sw.toggled(true)
+            compare(veyra.preferences.pushSteadyDetail, true)
+            sw.toggled(false)
+            compare(veyra.preferences.pushSteadyDetail, false)
         }
 
         // The look of AI picture enhancement: presets, two sliders, reset, every layer.

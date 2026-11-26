@@ -252,6 +252,9 @@ Window {
         case "watch":
             // PushFPS video playback mode: the picture beside its controls.
             return watchPage.videoViewport
+        case "kbm":
+            // PushFPS Mouse & Keyboard page: the game picture beside the calibration wizard's step, else none.
+            return kbmPage.videoViewport
         default:
             return { x: 0, y: 0, width: 0, height: 0 }
         }
@@ -329,6 +332,13 @@ Window {
             onVideoViewportChanged: if (root.page === "live" && !root.fullscreen) videoHost.syncRect()
             onRequestPage: p => root.goPage(p)
             onRequestLayout: id => { dialogs.layoutScene = id; dialogs.open("layout") }
+        }
+        PushKbmPage {
+            id: kbmPage
+            pageId: "kbm"
+            home: pages
+            onVideoViewportChanged: if (root.page === "kbm" && !root.fullscreen) videoHost.syncRect()
+            onRequestPage: p => root.goPage(p)
         }
         SettingsPage { id: settingsPage; pageId: "set"; home: pages; onRequestPage: p => root.goPage(p) }
     }
@@ -852,6 +862,31 @@ Window {
         target: veyra.updates
         function onUpdateAvailable(version) { updateBanner.show(version) }
     }
+    // Stream "s12-pace" (engine/PushOnScreenCadence.h, [cadence]): fullscreen while another program has the focus and [cadence]
+    // measures the composed path with at most 90 % of frames even (the upper bound, review 2). Plain words, no percentage (review 1 SHOULD 4), 8 s
+    // on screen, at most once per 10 minutes, off for good with the quick-setup switch pushUnfocusedNotice (SHOULD 3). PushFPS never
+    // takes the focus itself; the text does not promise what a click changes.
+    property int unfocusedComposedTicks: 0
+    property double unfocusedNoticeAtMs: 0
+    Timer {
+        objectName: "pushfps-unfocused-fullscreen-timer"
+        interval: 2000; repeat: true
+        running: root.fullscreen && veyra.hasSource === true && !Qt.application.active && veyra.preferences.pushUnfocusedNotice !== false
+        onRunningChanged: root.unfocusedComposedTicks = 0
+        onTriggered: {
+            const st = veyra.pushLiveStats() || ({})
+            // Review 2 MUST 1: the UPPER bound below 90 %: certainly uneven, whatever the measurement's range.
+            const evenMax = Number(st.onScreenEvenPctMax)
+            if (st.onScreenKnown === true && Number(st.onScreenPath) === 0 && isFinite(evenMax) && evenMax < 90) root.unfocusedComposedTicks++
+            else root.unfocusedComposedTicks = 0
+            const now = Date.now()
+            if (root.unfocusedComposedTicks >= 4 && now - root.unfocusedNoticeAtMs > 600000) {
+                root.unfocusedNoticeAtMs = now
+                toast.show(qsTr("点一下游戏画面，让 PushFPS 回到前台。别的窗口在前台时，Windows 合成画面，每帧显示的时间不均匀。"), false, 8000)
+                veyra.logUi("ui-fullscreen", "unfocused fullscreen notice: composed path, at most " + Math.ceil(evenMax) + " % even")
+            }
+        }
+    }
     // pages.css .canvas-toast: top 12px, padding 7px 12px, from translate -8px and
     // opacity 0; .on: opacity .2s, translate .45s --spring; hidden after 2600 ms.
     Rectangle {
@@ -878,7 +913,7 @@ Window {
         transform: Translate { id: toastShift; y: toast.on ? 0 : -8
             Behavior on y { NumberAnimation { duration: Theme.d(450); easing.bezierCurve: Theme.spring } } }
         Behavior on opacity { NumberAnimation { duration: Theme.d(200) } }
-        function show(m, bad) { toast.message = m; toast.isError = bad; toast.on = true; toastTimer.restart() }
+        function show(m, bad, ms) { toast.message = m; toast.isError = bad; toast.on = true; toastTimer.interval = ms > 0 ? ms : 2600; toastTimer.restart() }
         Timer { id: toastTimer; interval: 2600; onTriggered: toast.on = false }
         Text {
             id: toastText
@@ -906,8 +941,29 @@ Window {
         z: 31
         x: videoHost.x + 12
         y: videoHost.y + 12
+        videoOrigin: Qt.point(videoHost.x, videoHost.y)   // stream "present" R1: drawn in the picture (PushInPicture.js)
         visible: wanted && stats.running === true && videoHost.width > 200 && root.page !== "home" && root.page !== "set"
     }
+    // PushFPS: the optional statistics overlay (quick setup switch, off by default), under the badge's place.
+    PushStatsOverlay {
+        z: 31
+        x: videoHost.x + 12
+        y: videoHost.y + 50
+        videoOrigin: Qt.point(videoHost.x, videoHost.y)   // stream "present" R1: drawn in the picture (PushInPicture.js)
+        visible: wanted && stats.running === true && videoHost.width > 320 && videoHost.height > 260 && root.page !== "home" && root.page !== "set"
+    }
+    // PushFPS: network diagnostics of a PS5 stream (with the overlay, only when [slipstream-net] runs), top right.
+    PushNetDiagnostics {
+        z: 31
+        x: videoHost.x + videoHost.width - width - 12
+        y: videoHost.y + 50
+        videoOrigin: Qt.point(videoHost.x, videoHost.y)   // stream "present" R1: drawn in the picture (PushInPicture.js)
+        visible: wanted && available && videoHost.width > 760 && videoHost.height > 420 && root.page !== "home" && root.page !== "set"
+    }
+
+    // PushFPS performance modes: keeps the chosen mode right for the source that plays (idle while no
+    // mode is chosen). Its notices use the same toast as the bridge's.
+    PushModeDriver { onNotice: text => toast.show(text, false) }
 
     // RivaTuner, NVIDIA's overlay or GamePP started after Veyra (QmlPlayerBridge): RTSS's
     // OSD is kept out until a restart; the other two cannot be, and froze 2.0 in the field.

@@ -11,25 +11,55 @@
 #include "veyra/engine/PresentationSettings.h"
 #include "veyra/engine/PresentCapture.h"
 #include "veyra/engine/DisplayStateService.h"
+#include "veyra/engine/PushPresentTiming.h"
+#include "veyra/engine/PushCadence.h"
+#include "veyra/engine/PushPresentOverlay.h"
+#include "veyra/engine/PushFgHealth.h"
+#include "veyra/engine/PushOnScreenCadence.h"
+#include "veyra/engine/PushPhaseLock.h"
+#include "veyra/engine/PushFrameProbe.h"
+#include "veyra/engine/PushDownscale.h"
+#include <string>
+#include <memory>
 #include <chrono>
 #include <array>
 #include <optional>
+#include <utility>
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
 namespace veyra::gfx { class D3D12DeviceContext; class CommandSlotRing; }
 namespace veyra::pipeline { class EnhanceGraph; }
 namespace veyra::sink { struct RgbaImage; }
 namespace veyra::engine {
+class PushFrameThumb;
 class VideoPresenter {
 public:
     // Live recording hook; the object must outlive every present() call.
     void setCapture(PresentCapture* capture){capture_=capture;}
     // Shared refresh/VRR states (the engine's); must outlive the presenter.
     void setDisplayStates(DisplayStateService* states){displayStates_=states;}
-    ~VideoPresenter(){close();}
+    // Stream "s12-pace": defined in VideoPresenter.cpp, where PushFrameThumb is complete (thumbs_ is a unique_ptr to it; an
+    // inline constructor or destructor would instantiate its deleter in every file that only sees the forward declaration).
+    VideoPresenter();
+    ~VideoPresenter();
+    VideoPresenter(const VideoPresenter&)=delete;
+    VideoPresenter& operator=(const VideoPresenter&)=delete;
     // mediaClockPaced: the owner already waits on a media clock before each
     // source (file playback). Retained for diagnostics; XeLL low latency must
     // stay enabled or the provider refuses generation (result -15).
     bool open(gfx::D3D12DeviceContext&, HWND, pipeline::EnhanceGraph&, bool captureCompatible=false, bool mediaClockPaced=false);
     bool present(gfx::D3D12DeviceContext&,gfx::CommandSlotRing&,pipeline::EnhanceGraph&,unsigned slot,bool generated,bool referencesValid=true,int comparison=0,bool baseReference=false,float split=.5f,pipeline::FrameIdentity identity={},PreviewView view={},int64_t sourcePts100ns=-1,bool retainUnchanged=false);
+    // Stream "present" R3 (VEYRA_EXP_RP_PRESENT_BLIT_AHEAD=1, off by default): a frame that is GPU-ready before its deadline
+    // has its blit recorded and submitted now; present() with the same arguments at the deadline then only calls Present.
+    // False when it does not apply (switch off, XeSS, shared queue) or failed: present() then works as always.
+    bool prepare(gfx::D3D12DeviceContext&,gfx::CommandSlotRing&,pipeline::EnhanceGraph&,unsigned slot,bool generated,bool referencesValid=true,int comparison=0,bool baseReference=false,float split=.5f,pipeline::FrameIdentity identity={},PreviewView view={},int64_t sourcePts100ns=-1);
+    bool blitAheadEnabled()const{return blitAheadSwitch_&&presentationQueue_!=nullptr&&!sink_.xess();}
+    // Counters for the experiment's log: prepared, presented as prepared, discarded (another frame or a changed window).
+    uint64_t blitAheadPrepared()const{return blitAheadPrepared_;}
+    uint64_t blitAheadUsed()const{return blitAheadUsed_;}
+    uint64_t blitAheadDiscarded()const{return blitAheadDiscarded_;}
     void close();
     // Owner-thread graph replacement boundary. Native DXGI remains attached to
     // its HWND; provider-owned presentation must be shut down before its graph.
@@ -44,16 +74,40 @@ public:
     // stallUs > 0: a live source; a driver low-latency Sleep longer than this,
     // repeatedly, ends NVIDIA Low Latency for the session (ReflexSession).
     bool beginSourceInput(uint64_t stallUs=0);
+    // Stream "present" R11: the capture sample read after this source's low-latency Sleep arrived at arrival100ns (host
+    // steady clock, 100 ns). Measures how far the Sleep ran past it ([fg-health]) and, on a capture card with frame
+    // generation, ends low latency once it keeps doing so (PushReflexOverrunGuard). Owner thread; O(1).
+    void sourceArrived(int64_t arrival100ns,bool physicalCapture,bool frameGeneration,uint64_t mailboxReplaced=0);
+    // R11: the overrun guard ended NVIDIA low latency for this source session (EngineController's status line).
+    bool reflexOverrunEnded()const{return reflexGuard_.ended();}
     bool beginSourceProcessing();
     void sourceProcessed(pipeline::FrameIdentity);
     PresentationSettings configurePresentation(gfx::D3D12DeviceContext&,PresentationSettings,bool fg,std::wstring& status);
     bool presentationReady(){return sink_.presentationReady();}
     gfx::PresentSink::RefreshGrid refreshGrid()const{return sink_.refreshGrid();}
+    // Stream "s12-pace" ([cadence], engine/PushOnScreenCadence.h): a generated frame waited this long (ms) for display-queue
+    // capacity before its Present (owner thread).
+    void capacityWaited(double ms){onScreen_.capacityWait(ms);}
+    // Stream "s12-pace" (review 2 MUST 1): the time (host 100 ns) at which one more frame-statistics reading is wanted (about one
+    // refresh after the last reading), 0 when none. The owner's wait may end there, take it with sampleStatistics(), and wait on.
+    int64_t statisticsReadingDue()const;
+    void sampleStatistics(int64_t now100ns);
+    // ... and why a paced Present began late (PushOnScreenCadence::presentLateness).
+    void presentLateness(double lateMs,unsigned subframe,double readyLateMs,double capacityMs){onScreen_.presentLateness(lateMs,subframe,readyLateMs,capacityMs);}
+    // Stream "s12-pace" experiment VEYRA_EXP_RP_PHASE_LOCK=1 (engine/PushPhaseLock.h, OFF by default): the time a paced, ready
+    // frame is presented at: its deadline, or an earlier slot `offset` after a vblank of the display's own clock. Never later
+    // than the deadline. outputInterval100ns: the content interval / multiplier. Owner thread.
+    int64_t phaseLockDue(int64_t deadline100ns,int64_t now100ns,double outputInterval100ns);
+    bool phaseLockSwitch()const{return phaseLockSwitch_;}
+    // The frame just presented went out advanceMs before its own deadline (review 1 MUST 2: moves are counted here, at the Present).
+    void phaseLockPresented(double advanceMs){if(phaseLockSwitch_)onScreen_.phaseLockPresented(advanceMs);}
     bool waitPresentationReady(unsigned ms){return sink_.waitPresentationReady(ms);}
     uint64_t beginReflex(){const auto id=reflexInputFrame_;reflexInputFrame_=0;reflex_.renderStart(id);return id;}
     void endReflex(uint64_t id){reflex_.renderEnd(id);}
     void cancelReflexInput(){if(reflexInputFrame_)reflex_.mark(reflexInputFrame_,1);reflexInputFrame_=0;}
     void reflexFrame(uint64_t id){reflexFrame_=id;}
+    // Stream "s12-pace" (review 2 SHOULD 4): the next presented frame's subframe (0 real) and its group's frame count.
+    void frameInfo(unsigned subframe,unsigned groupFrames){probeSubframe_=subframe;probeGroupFrames_=groupFrames;}
     // True while XeSS owns Present: the low-latency queue and the output
     // cap cannot reach provider-generated frames, so the UI greys them out.
     bool providerOwnedPresentation()const{return providerOwnedPresentation_;}
@@ -69,6 +123,13 @@ public:
     // just before it as RTSS and PresentMon do: the 1% low counts these, not
     // returns, whose spacing also carries the call's own 0.2-0.6 ms jitter.
     int64_t lastPresentCallHost100ns()const{return lastPresentCallHost100ns_;}
+    // Slipstream (VEYRA_EXP_RP_STATS=1): called after a REAL frame's present with the host 100 ns
+    // stamps the frame carries (network arrival, decoded, engine pickup); joins the scanout dated by
+    // DXGI frame statistics and writes one [slipstream-latency] line per 5 s. No-op without the switch.
+    void latencyObserved(int64_t arrival100ns,int64_t decoded100ns,int64_t pickup100ns);
+    // VEYRA_EXP_PRESENT_TEARING: whether the last configurePresentation replaced VSync by
+    // sync interval 0 + DXGI_PRESENT_ALLOW_TEARING (docs/PRESENTATION_LATENCY.md).
+    bool tearingExperimentActive()const{return tearingExperiment_;}
     bool pacingActive()const{return sink_.pacingActive();}
     uint64_t generation()const{return generation_;}
     // Explicit integration-test capture only; never called by playback/export.
@@ -80,6 +141,9 @@ public:
     // queue; caller drains the shared queue and releases before resize/close.
     Microsoft::WRL::ComPtr<ID3D12Resource> presentedResourceForTest();
     uint64_t submittedCount() const {return sink_.presentCount();}
+    // PushFPS stream "delay90" ([slipstream-sizes]): the swap chain's back buffer extent.
+    uint32_t backBufferWidth() const {return sink_.bufferWidth();}
+    uint32_t backBufferHeight() const {return sink_.bufferHeight();}
     uint64_t consumerFenceValue(uint64_t sharedValue)const{return presentationQueue_?presentationRing_.lastSignaledValue():sharedValue;}
     double cpuWaitMilliseconds(const gfx::CommandSlotRing& shared)const{return presentationQueue_?presentationRing_.cpuWaitMilliseconds():shared.cpuWaitMilliseconds();}
     uint64_t xessGeneratedCount() const {return sink_.xess()?sink_.xess()->generatedCount():0;}
@@ -99,6 +163,11 @@ public:
     double displayRefreshHz();
     // Variable refresh state of that monitor (NVIDIA only), read with it.
     gfx::VrrState displayVrr()const{return vrr_;}
+    // VRR state for the cadence figures and VEYRA_EXP_PRESENT_EVEN_CADENCE: 1 enabled, 0 fixed refresh (read after
+    // the first present), -1 unknown (PushCadence.h pushVrrCadenceState).
+    int cadenceVrr()const{
+        return pushVrrCadenceState(vrr_.known,vrr_.enabled,cadenceConfirm_.readAfterPresent(),vrrConfirmAt_.has_value(),cadenceConfirm_.recentResize(cadenceNowMs()));
+    }
     // The 可变刷新 rule: the switch is on, Automatic is selected and VRR is
     // possible on the monitor, so Automatic presents like explicit Vsync.
     // vrrSync() is what the last configurePresentation applied.
@@ -128,6 +197,72 @@ private:
     gfx::ReflexSession reflex_;
     uint64_t reflexFrame_=0,reflexInputFrame_=0,generation_=0;
     int64_t lastPresentCallHost100ns_=0;
+    int64_t lastPresentReturnHost100ns_=0;
+    // Slipstream experiments, read once per swap-chain creation (open() without reuse).
+    std::unique_ptr<PushPresentLatency> latency_;
+    std::unique_ptr<PushCadenceWindow> cadence_; // [slipstream-cadence], with latency_ (VEYRA_EXP_RP_STATS=1)
+    // Live readout (always): a 1 s window published to pushLiveCadenceBoard() for the interface's counters.
+    std::unique_ptr<PushCadenceWindow> liveCadence_;int64_t nextLiveCadence100ns_=0;
+    // Cadence VRR state (pushVrrCadenceState): readings issued after this chain's first present
+    // (cadence-confirm, vrr-confirm, slipstream-stats); a resize / full-screen change makes it unknown for 3 s.
+    PushVrrConfirmSchedule cadenceConfirm_;
+    void resetCadenceVrr(){cadenceConfirm_.reset();}
+    static double cadenceNowMs(){return double(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count())/1e6;}
+    bool tearingSwitch_=false,vrrRequestSwitch_=false,tearingExperiment_=false;
+    // vrrConfirmLog_: the next display state is logged even when unchanged (vrr-confirm with the VRR switch).
+    // statsVrrReread_: STATS asks the display worker for a forced VRR re-read on the next presenter loop.
+    bool vrrConfirmLog_=false,statsVrrReread_=false;
+    // VEYRA_EXP_PRESENT_WINDOW_FACTS=1 (with STATS): the window facts and the forced VRR re-read run only then,
+    // because they query the desktop from the presenting thread (review: keep them out of ordinary STATS runs).
+    bool windowFactsSwitch_=false;
+    PushWindowFacts windowFacts_{};
+    int64_t windowCheckAt_=0;
+    void watchWindow(int64_t now100ns);
+    const char* tearingReason_=nullptr;
+    void openSlipstreamExperiments();
+    // Stream "present" R1: the in-picture interface items (PushVideoOverlay.h); off with VEYRA_TEST_RP_LEGACY_VIDEO_OVERLAY.
+    PushPresentOverlay overlay_;
+    bool overlayLegacy_=false;
+    // Records the overlay into `list` after the picture; returns whether a copy was recorded / a draw was recorded.
+    void recordOverlay(ID3D12Device*,ID3D12GraphicsCommandList*,pipeline::EnhanceGraph&,ID3D12Resource* backBuffer,unsigned backBufferIndex,unsigned windowW,unsigned windowH,bool& uploaded,bool& drew);
+    // Stream "present" R2: [present-path], on change (checked at most 4 times a second, the driver's sleep status every 2 s).
+    std::string presentPathLine_;
+    int64_t presentPathCheck100ns_=0,sleepStatusCheck100ns_=0,presentPathLogged100ns_=0;unsigned presentPathChanges_=0;
+    gfx::ReflexSession::DriverStatus sleepStatus_{};
+    // Stream "s12-pace": the measured on-screen hold of each frame ([cadence] every 10 s) and the opt-in phase lock.
+    PushOnScreenCadence onScreen_;
+    PushOnScreenCadence::Summary lastOnScreen_{};
+    bool phaseLockSwitch_=false;double phaseLockOffsetMs_=kPushPhaseLockDefaultOffsetMs;const char* phaseLockRefusalLogged_=nullptr;int64_t phaseLockCounted_=0;int foreground_=-1;
+    void observeOnScreen(bool generated);
+    // Stream "s12-pace" (review 2 MUST 3): the windows-above walk on its own thread; the presenter reads only these atomics.
+    void startAboveWatch();
+    void stopAboveWatch();
+    std::thread aboveThread_;std::mutex aboveMutex_;std::condition_variable aboveWake_;
+    std::atomic<bool> aboveStop_{false},aboveCovers_{false};
+    std::atomic<int> aboveCount_{-1},aboveTopmost_{-1},aboveLayered_{-1},aboveTaskbar_{-1},aboveTruncated_{0},aboveMicros_{-1};
+    // Stream "s12-pace" frame probe (PushFrameThumb.h / PushFrameProbe.h, [frame-probe] every 10 s): a thumbnail of every
+    // presented frame, recorded at the end of its blit list (independent presentation queue only), read back when done;
+    // restored to Package 16 (no probe) by VEYRA_TEST_RP_LEGACY_FRAME_PROBE / PACKAGE16.
+    std::unique_ptr<PushFrameThumb> thumbs_;
+    PushFrameProbe frameProbe_;
+    PushFrameGroups frameGroups_{frameProbe_};
+    uint64_t thumbSequence_=0;
+    bool thumbSwitch_=true;
+    // Stream "s12-pace": "Steadier fine detail" (PushDownscale.h): allowed unless PushLegacyPart::PresentDownscale17 restores
+    // Package 16; used only while the user's choice (pushSteadyDetail) is on; the kernel; the last state logged ([present-path] shrink).
+    bool downscaleArea_=true;
+    PushShrinkKernel shrinkKernelChoice_=PushShrinkKernel::AreaSharp;
+    struct ShrinkLogged { int kernel=-1,transfer=-1,fx100=-1,fy100=-1; } shrinkLogged_;
+    void noteShrink(PushShrinkKernel kernel,PushTransfer transfer,PushShrinkFootprint footprint);
+    bool statsReadings_=true;int64_t lastReading100ns_=0;   // stream "s12-pace": extra readings (PushLegacyPart::StatsReadings17)
+    unsigned probeSubframe_=0,probeGroupFrames_=0;
+    HMONITOR compositionMonitor_=nullptr;int compositionFlags_=-1;
+    bool overlayDrawing_=false;
+    void watchPresentPath(int64_t now100ns,unsigned windowW,unsigned windowH);
+    // Stream "present" R11.
+    PushReflexOverrunGuard reflexGuard_;
+    bool reflexGuardLegacy_=false;
+    int64_t reflexSleepSeen100ns_=0;uint64_t lastMailboxReplaced_=0;
     bool providerOwnedPresentation_=false;
     PresentCapture* capture_=nullptr;
     Microsoft::WRL::ComPtr<ID3D12CommandQueue> presentationQueue_;
@@ -172,9 +307,27 @@ private:
         pipeline::FrameIdentity identity{};
         HMONITOR monitor=nullptr;
         HdrCurveSettings displayCurve{};
+        uint64_t overlay=0;   // stream "present": the in-picture readouts' version drawn into it
         bool operator==(const RetainedFrame&)const=default;
     };
     std::optional<RetainedFrame> retainedFrame_;
+    // Stream "present" R3: what present() needs after the blit's submission, and the frame a prepared blit belongs to.
+    struct PendingPresent {
+        uint64_t reflexFrame=0;bool generated=false;
+        std::chrono::steady_clock::time_point presentStart{},resizeEnd{},beginEnd{};
+        double slotWaitStart=0;pipeline::FrameIdentity identity{};bool resized=false;
+        unsigned windowW=0,windowH=0;RetainedFrame retained{};bool ahead=false;
+        uint64_t overlayVersion=0;   // the in-picture readouts' version this frame carries (0: none)
+    };
+    struct PreparedKey {
+        unsigned slot=0;bool generated=false,referencesValid=false,baseReference=false;int comparison=0;float split=.5f;
+        pipeline::FrameIdentity identity{};PreviewView view{};int64_t sourcePts100ns=-1;
+        bool operator==(const PreparedKey&)const=default;
+    };
+    bool dxgiPresent(PendingPresent&,gfx::CommandSlotRing&);
+    std::optional<std::pair<PreparedKey,PendingPresent>> prepared_;
+    bool preparing_=false,blitAheadSwitch_=false;
+    uint64_t blitAheadPrepared_=0,blitAheadUsed_=0,blitAheadDiscarded_=0;int64_t blitAheadLog100ns_=0;
     HWND window_=nullptr;
     ID3D12Device* presentationDevice_=nullptr;
     DXGI_FORMAT presentationFormat_=DXGI_FORMAT_UNKNOWN;
