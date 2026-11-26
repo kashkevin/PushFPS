@@ -354,6 +354,8 @@ veyra_add_graphics_shader_pair(veyra_shader_present_blit PresentBlit)
 veyra_add_graphics_shader_pair(veyra_shader_push_video_overlay PushVideoOverlay)
 veyra_add_compute_shader(veyra_shader_present_motion PresentMotion)
 veyra_add_compute_shader(veyra_shader_hdr_coverage HdrCurveCoverage)
+# PushFPS stream "s12-pace": the frame probe's thumbnail of each presented frame (engine/PushFrameThumb.h).
+veyra_add_compute_shader(veyra_shader_push_frame_thumb PushFrameThumb)
 # NvofDensify: SHORT2 S10.5 raw flow -> workingExtent float2 + confidence.
 veyra_add_compute_shader(veyra_shader_nvof_densify NvofDensify)
 veyra_add_compute_shader(veyra_shader_nr_downsample NrDownsample)
@@ -580,13 +582,13 @@ target_compile_options(veyra_nis_gpu_tests PRIVATE /utf-8)
 target_link_libraries(veyra_nis_gpu_tests PRIVATE veyra_pipeline)
 add_dependencies(veyra_nis_gpu_tests veyra_shader_nis_color veyra_shader_nis_scaler_sdr veyra_shader_nis_scaler_pq)
 # PushFPS comparison clips and HUD frame sampling on a real D3D12 device (hardware or WARP), run in CI.
-add_executable(veyra_push_gpu_tests tests/integration/PushGpuTests.cpp src/engine/PushPresentOverlay.cpp src/engine/PushHud.cpp src/engine/PushHudSampler.cpp src/engine/PushPipelineProbe.cpp src/engine/RecordingCompare.cpp src/engine/PushStreamOverlay.cpp src/engine/PushLayerSourcesShape.cpp)
+add_executable(veyra_push_gpu_tests tests/integration/PushGpuTests.cpp src/engine/PushFrameThumb.cpp src/engine/PushPresentOverlay.cpp src/engine/PushHud.cpp src/engine/PushHudSampler.cpp src/engine/PushPipelineProbe.cpp src/engine/RecordingCompare.cpp src/engine/PushStreamOverlay.cpp src/engine/PushLayerSourcesShape.cpp)
 target_compile_features(veyra_push_gpu_tests PRIVATE cxx_std_20)
 target_compile_options(veyra_push_gpu_tests PRIVATE /utf-8)
 target_link_libraries(veyra_push_gpu_tests PRIVATE veyra_pipeline)
 add_dependencies(veyra_push_gpu_tests veyra_shader_push_hud_lock_update veyra_shader_push_hud_lock_compose veyra_shader_push_compare_sbs veyra_shader_push_compare_vertical veyra_shader_push_compare_raw veyra_shader_push_compare_overlay veyra_shader_push_layer_blend veyra_shader_push_canvas_convert veyra_shader_push_flow_pack veyra_shader_push_flow_unpack veyra_shader_push_flow_reconstruct veyra_shader_push_stream_change)
 add_dependencies(veyra_push_gpu_tests veyra_shader_push_clean_sdr veyra_shader_push_clean_pq veyra_shader_scale_blit)
-add_dependencies(veyra_push_gpu_tests veyra_shader_push_video_overlay)
+add_dependencies(veyra_push_gpu_tests veyra_shader_push_video_overlay veyra_shader_push_frame_thumb veyra_shader_present_blit)   # present_blit: compiled by gpu-quick too (s12-pace area filter)
 
 # PushFlowBench (tools/pushflow_bench): PushFlow timings on this PC's GPU, as JSON; shipped next to PushFPS.exe.
 add_executable(veyra_pushflow_bench tools/pushflow_bench/main.cpp)
@@ -1714,7 +1716,7 @@ add_executable(veyra_sr_reconstruction_tests tests/integration/SrReconstructionT
   target_link_libraries(veyra_repair_fg_tests PRIVATE veyra_pipeline veyra_sinks veyra_nvof)
 
   # Headless quality-core runner (Playbook R3.3): the phase5 gate's quality
-  add_library(veyra_engine STATIC src/engine/EngineController.cpp src/engine/EngineWatchdog.cpp src/engine/PreviewGpuSession.cpp src/engine/EngineControllerImage.cpp src/engine/PosterFrame.cpp src/engine/EffectChain.cpp src/engine/PresetLibrary.cpp src/ui/PlayerUiFacade.cpp src/engine/TiledImageProcessor.cpp src/engine/PresetStore.cpp src/engine/VideoPresenter.cpp src/engine/PushPresentOverlay.cpp src/engine/DisplayStateService.cpp src/engine/VideoExportJob.cpp src/engine/ExportStreams.cpp src/engine/ExportQueue.cpp src/engine/ExportJobManager.cpp src/engine/Subtitles.cpp src/engine/FgCompatibilityProbe.cpp src/engine/LiveRecorder.cpp src/engine/ReplayBuffer.cpp src/engine/MicrophoneCapture.cpp src/engine/PushHud.cpp src/engine/PushHudSampler.cpp src/engine/RecordingCompare.cpp src/engine/LiveStream.cpp src/engine/Mp4Finalize.cpp src/engine/PushAudioMix.cpp src/engine/PushStreamOverlay.cpp src/engine/PushLayerSources.cpp src/engine/PushLayerSourcesShape.cpp src/engine/PushAuxAudio.cpp src/engine/PushAuxFifo.cpp src/engine/PushQuality.cpp src/engine/PushQualityProbe.cpp src/engine/PushInputLatency.cpp src/engine/PushInputLatencyProbe.cpp src/engine/PushPipelineProbe.cpp)
+  add_library(veyra_engine STATIC src/engine/EngineController.cpp src/engine/EngineWatchdog.cpp src/engine/PreviewGpuSession.cpp src/engine/EngineControllerImage.cpp src/engine/PosterFrame.cpp src/engine/EffectChain.cpp src/engine/PresetLibrary.cpp src/ui/PlayerUiFacade.cpp src/engine/TiledImageProcessor.cpp src/engine/PresetStore.cpp src/engine/VideoPresenter.cpp src/engine/PushFrameThumb.cpp src/engine/PushPresentOverlay.cpp src/engine/DisplayStateService.cpp src/engine/VideoExportJob.cpp src/engine/ExportStreams.cpp src/engine/ExportQueue.cpp src/engine/ExportJobManager.cpp src/engine/Subtitles.cpp src/engine/FgCompatibilityProbe.cpp src/engine/LiveRecorder.cpp src/engine/ReplayBuffer.cpp src/engine/MicrophoneCapture.cpp src/engine/PushHud.cpp src/engine/PushHudSampler.cpp src/engine/RecordingCompare.cpp src/engine/LiveStream.cpp src/engine/Mp4Finalize.cpp src/engine/PushAudioMix.cpp src/engine/PushStreamOverlay.cpp src/engine/PushLayerSources.cpp src/engine/PushLayerSourcesShape.cpp src/engine/PushAuxAudio.cpp src/engine/PushAuxFifo.cpp src/engine/PushQuality.cpp src/engine/PushQualityProbe.cpp src/engine/PushInputLatency.cpp src/engine/PushInputLatencyProbe.cpp src/engine/PushPipelineProbe.cpp)
   target_sources(veyra_pipeline PRIVATE src/guidance/AmdOpticalFlow.cpp
     src/guidance/GpuDisOpticalFlow.cpp third_party/gpu-dis/src/gpu/native_strict_dis_provider.cpp)
   target_include_directories(veyra_pipeline PRIVATE third_party/gpu-dis/src/gpu)
@@ -1887,7 +1889,7 @@ target_link_options(veyra_hdr_tuning_tests PRIVATE /STACK:33554432)
   target_compile_options(veyra_popup_selector_tests PRIVATE /utf-8)
   target_compile_definitions(veyra_popup_selector_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
   target_link_libraries(veyra_popup_selector_tests PRIVATE veyra_base comctl32)
-  add_dependencies(veyra_engine veyra_shader_hdr_video_sr veyra_shader_present_motion veyra_shader_present_blit veyra_shader_push_video_overlay veyra_shader_hdr_coverage)
+  add_dependencies(veyra_engine veyra_shader_hdr_video_sr veyra_shader_present_motion veyra_shader_present_blit veyra_shader_push_video_overlay veyra_shader_hdr_coverage veyra_shader_push_frame_thumb)
   add_executable(veyra_hdr_color_tests tests/integration/HdrColorTests.cpp)
   add_executable(veyra_hdr_output_tuning_gpu_tests tests/integration/HdrOutputTuningGpuTests.cpp)
   target_compile_features(veyra_hdr_output_tuning_gpu_tests PRIVATE cxx_std_20)

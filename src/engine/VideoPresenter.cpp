@@ -1,4 +1,5 @@
 #include "veyra/engine/VideoPresenter.h"
+#include "veyra/engine/PushFrameThumb.h"
 #include "veyra/engine/PresentationGeometry.h"
 #include "veyra/pipeline/EnhanceGraph.h"
 #include "veyra/gfx/D3D12DeviceContext.h"
@@ -7,6 +8,11 @@
 #include <array>
 #include <memory>
 #include <thread>
+#include <cmath>
+#include <cstdlib>
+#include <string_view>
+#include <dwmapi.h>
+#pragma comment(lib, "dwmapi.lib")
 #include "veyra/gfx/NvidiaVrrProfile.h"
 #include "veyra/engine/PushLegacyEnv.h"
 #include "veyra/engine/PushBlitAhead.h"
@@ -17,6 +23,9 @@ static_assert(unsigned(veyra::diagnostics::GpuStage::Color)==0&&unsigned(veyra::
               unsigned(veyra::diagnostics::GpuStage::BaseTail)==35&&unsigned(veyra::diagnostics::GpuStage::VfgCapture)==36&&
               unsigned(veyra::diagnostics::GpuStage::RealCompose)==37,"PushFgHealth.h kPushHealthStages");
 namespace veyra::engine {
+VideoPresenter::VideoPresenter()=default;
+VideoPresenter::~VideoPresenter(){close();}
+
 bool VideoPresenter::beginSourceInput(uint64_t stallUs){
     if(!reflexInputFrame_&&reflex_.active())reflexInputFrame_=reflex_.begin(stallUs);
     auto* xess=sink_.xess();if(!xess)return true;
@@ -128,9 +137,34 @@ bool VideoPresenter::open(gfx::D3D12DeviceContext& ctx,HWND window,pipeline::Enh
         // Stream "present": the rollback switches of what is new since Package 14 (PushLegacy.h), named once per process.
         overlayLegacy_=pushLegacyRestored(PushLegacyPart::VideoOverlay,pushEnvironment());
         reflexGuardLegacy_=pushLegacyRestored(PushLegacyPart::ReflexSleep,pushEnvironment());
+        thumbSwitch_=!pushLegacyRestored(PushLegacyPart::FrameProbe17,pushEnvironment());   // stream "s12-pace": the frame probe (PushFrameThumb.h)
+        downscaleArea_=!pushLegacyRestored(PushLegacyPart::PresentDownscale17,pushEnvironment());   // stream "s12-pace": the fine-detail choice is allowed
+        {   // stream "s12-pace": the kernel the choice uses (default area + mild sharpening + clamp). A/B with gpu_blit and the eye:
+            // VEYRA_EXP_RP_SHRINK_KERNEL = area | sharp | clamp | catmull | catmull-clamp | lanczos | lanczos-clamp (anything else: the default)
+            const auto kernel=pushReadEnvironment("VEYRA_EXP_RP_SHRINK_KERNEL");
+            const std::string name=kernel?*kernel:std::string();
+            shrinkKernelChoice_=name=="area"?PushShrinkKernel::Area:name=="sharp"?PushShrinkKernel::AreaSharp:name=="catmull"?PushShrinkKernel::CatmullRom
+                :name=="catmull-clamp"?PushShrinkKernel::CatmullRomClamp:name=="lanczos"?PushShrinkKernel::Lanczos2:name=="lanczos-clamp"?PushShrinkKernel::Lanczos2Clamp
+                :PushShrinkKernel::AreaSharpClamp;
+            shrinkLogged_={};
+        }
+        statsReadings_=!pushLegacyRestored(PushLegacyPart::StatsReadings17,pushEnvironment());   // stream "s12-pace": one statistics reading per refresh
+        startAboveWatch();   // stream "s12-pace" (review 2 MUST 3): the windows-above walk, off this thread
+        // Stream "s12-pace" (review 2 SHOULD 2): the probe's pipeline and buffers are made here, outside the paced path.
+        if(thumbSwitch_&&!thumbs_){thumbs_=std::make_unique<PushFrameThumb>();if(!thumbs_->create(ctx.device())){thumbs_.reset();thumbSwitch_=false;}}
         // Stream "present" R3: experiment, off unless "1" (read per chain creation).
         {wchar_t v[4]{};blitAheadSwitch_=GetEnvironmentVariableW(L"VEYRA_EXP_RP_PRESENT_BLIT_AHEAD",v,4)==1&&v[0]==L'1';}
         if(blitAheadSwitch_)veyra::log::info("present-path","experiment blitAhead=1 (VEYRA_EXP_RP_PRESENT_BLIT_AHEAD: a ready frame's blit is submitted before its deadline; Present at the deadline)");
+        // Stream "s12-pace": experiment, off unless "1"; VEYRA_EXP_RP_PHASE_LOCK_OFFSET_MS (0.2 .. half a refresh, default 1).
+        {
+            wchar_t v[16]{};
+            phaseLockSwitch_=GetEnvironmentVariableW(L"VEYRA_EXP_RP_PHASE_LOCK",v,4)==1&&v[0]==L'1';
+            const DWORD n=GetEnvironmentVariableW(L"VEYRA_EXP_RP_PHASE_LOCK_OFFSET_MS",v,16);
+            phaseLockOffsetMs_=n>0&&n<16?_wtof(v):kPushPhaseLockDefaultOffsetMs;
+            if(!std::isfinite(phaseLockOffsetMs_)||phaseLockOffsetMs_<=0)phaseLockOffsetMs_=kPushPhaseLockDefaultOffsetMs;
+            phaseLockRefusalLogged_=nullptr;
+            if(phaseLockSwitch_)veyra::log::info("cadence",std::format("experiment phaseLock=1 offsetMs={:.2f} (VEYRA_EXP_RP_PHASE_LOCK: a paced, GPU-ready frame is presented at the last point at or before its deadline that lies the offset after a vblank; never later than the deadline; off with a frozen refresh clock, independent flip, VRR, or an output interval that is not whole refreshes)",phaseLockOffsetMs_));
+        }
         if(overlayLegacy_)pushVideoOverlayBoard().stopped();
         static bool named=false;
         if(!named){
@@ -406,7 +440,16 @@ bool VideoPresenter::present(gfx::D3D12DeviceContext& ctx,gfx::CommandSlotRing& 
     // Display tuning also applies after RTX Video HDR converted an SDR source.
     const float curveFlag=(hdrCurve.enabled&&graph.hdrOutput())?16.0f:0.0f;
     const float mainFlags=samplingFlags+curveFlag+(curveFlag&&graph.hdr10Output()?36.0f:0.0f);
-    float dims[16]={renderW,renderH,mainFlags,inverseFit,float(rc.right),float(rc.bottom),view.centerX,view.centerY};
+    // Stream "s12-pace": "Steadier fine detail" (engine/PushDownscale.h), the main picture only (not the comparison half, not
+    // interface layers). A visible choice, default off (pref pushSteadyDetail); VEYRA_TEST_RP_LEGACY_PRESENT_DOWNSCALE / PACKAGE16
+    // keep it off whatever is chosen. The footprint per source axis goes in dims[14..15] (curve1.zw), never from derivatives.
+    const auto shrinkFootprint=pushShrinkFootprint(double(graph.workWidth()),double(graph.workHeight()),renderW,renderH,double(rc.right),double(rc.bottom),
+        double(sink_.bufferWidth()),double(sink_.bufferHeight()),view.quarterTurns());
+    const PushShrinkKernel shrinkKernel=(downscaleArea_&&pushSteadyDetail())?shrinkKernelChoice_:PushShrinkKernel::Bilinear1;
+    const PushTransfer shrinkTransfer=graph.hdr10Output()?PushTransfer::Pq:graph.hdrOutput()?PushTransfer::Linear:PushTransfer::Srgb;
+    const float downscaleFlags=float(pushShrinkFlags(shrinkKernel,shrinkTransfer));
+    noteShrink(shrinkKernel,shrinkTransfer,shrinkFootprint);
+    float dims[16]={renderW,renderH,mainFlags+downscaleFlags,inverseFit,float(rc.right),float(rc.bottom),view.centerX,view.centerY};
     dims[8]=float(hdrCurve.shadowLiftEv100)/100.0f;
     dims[9]=float(hdrCurve.shadowRangeNits);
     dims[10]=float(hdrCurve.midGrayNits);
@@ -417,7 +460,7 @@ bool VideoPresenter::present(gfx::D3D12DeviceContext& ctx,gfx::CommandSlotRing& 
         dims[12]=std::max(1.0f,peak-start)*float(hdrCurve.rollOffPercent)/100.0f;
         dims[13]=float(hdrCurve.peakCapNits);
     }
-    dims[14]=0.0f;dims[15]=0.0f;
+    dims[14]=float(shrinkFootprint.x);dims[15]=float(shrinkFootprint.y);
     list->SetGraphicsRoot32BitConstants(0,16,dims,0);
     list->SetGraphicsRootDescriptorTable(1,{pass_.heap->GetGPUDescriptorHandleForHeapStart().ptr+size_t(slot+(generated?2:0))*pass_.increment});
     list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);list->DrawInstanced(3,1,0,0);
@@ -600,14 +643,21 @@ bool VideoPresenter::present(gfx::D3D12DeviceContext& ctx,gfx::CommandSlotRing& 
         previousXessView_=view;previousXessWidth_=rc.right;previousXessHeight_=rc.bottom;
     }
 
+
     // Stream "present" R1: the interface items drawn in the picture (delay badge, statistics overlay), blended last: after
     // the picture, after the comparison half and after the capture hook above, so recordings, comparison clips, streams and
     // the clarity probe (captured.screen) never contain them. XeSS owns its Present and gets none (the QML items stay cut out).
     bool overlayUploaded=false,overlayDrew=false;
     if(!sink_.xess()&&!overlayLegacy_)recordOverlay(ctx.device(),list,graph,bb,backBufferIndex,unsigned(rc.right),unsigned(rc.bottom),overlayUploaded,overlayDrew);
     overlayDrawing_=overlayDrew;   // what this frame carries; acknowledged to the UI only once it is presented (dxgiPresent)
+    // Stream "s12-pace" frame probe (review 2 SHOULD 1): the thumbnail of this frame at the end of its own blit list, inside the
+    // Blit stage's timer; covered by the same fence as the blit (presentationValues_). Not while a blit is prepared ahead.
+    bool thumbRecorded=false;
+    if(thumbs_&&thumbSwitch_&&presentationQueue_&&!sink_.xess()&&!preparing_&&thumbs_->hasRoom()&&PushFrameThumb::readableFormat(graph.outputFormat()))
+        thumbRecorded=thumbs_->record(ctx.device(),list,source,graph.outputFormat(),thumbSequence_+1,generated,probeSubframe_,probeGroupFrames_);
     gpuTimer_.mark(list,diagnostics::GpuStage::Blit,true);gpuTimer_.resolve(list);
-    if(!ring.submitAndSignal(commandSlot))return false;gpuTimer_.submitted(ring.lastSignaledValue());
+    if(!ring.submitAndSignal(commandSlot)){if(thumbRecorded)thumbs_->discarded();return false;}gpuTimer_.submitted(ring.lastSignaledValue());
+    if(thumbRecorded)thumbs_->submitted(fence,ring.lastSignaledValue());
     overlay_.submitted(fence,ring.lastSignaledValue(),overlayUploaded,overlayDrew);
     reflex_.blitEnd(reflexFrame);
     if(captureRecorded){captureRecorded=false;capture_->submitted(fence,ring.lastSignaledValue());}
@@ -627,6 +677,20 @@ bool VideoPresenter::present(gfx::D3D12DeviceContext& ctx,gfx::CommandSlotRing& 
     if(preparing_){prepared_.emplace(key,pending);return true;}
     return dxgiPresent(pending,ring);
 }
+
+// Stream "s12-pace": one [present-path] line when "Steadier fine detail" changes state or the footprint changes by 0.01 or more,
+// so [fg-health] gpu_blit can be compared with the choice on and off.
+void VideoPresenter::noteShrink(PushShrinkKernel kernel,PushTransfer transfer,PushShrinkFootprint footprint){
+    const ShrinkLogged now{int(kernel),int(transfer),int(std::lround(footprint.x*100)),int(std::lround(footprint.y*100))};
+    if(now.kernel==shrinkLogged_.kernel&&now.transfer==shrinkLogged_.transfer&&now.fx100==shrinkLogged_.fx100&&now.fy100==shrinkLogged_.fy100)return;
+    shrinkLogged_=now;
+    const bool active=kernel!=PushShrinkKernel::Bilinear1&&pushShrinkApplies(kernel,std::max(footprint.x,footprint.y));
+    veyra::log::info("present-path",std::format("shrink={} transfer={} footprint={:.2f}x{:.2f} active={} choice={} allowed={} (\"Steadier fine detail\": "
+        "per-texel decode and exact box weights when the picture shrinks; package16 = one bilinear tap on the codes; compare [fg-health] gpu_blit before and after this line)",
+        pushShrinkKernelName(kernel),
+        transfer==PushTransfer::Pq?"pq":transfer==PushTransfer::Srgb?"srgb":"linear",footprint.x,footprint.y,active?1:0,pushSteadyDetail()?1:0,downscaleArea_?1:0));
+}
+
 bool VideoPresenter::dxgiPresent(PendingPresent& p,gfx::CommandSlotRing& ring){
     Status st=Status::Ok;
     const auto dxgiStart=std::chrono::steady_clock::now();
@@ -656,6 +720,8 @@ bool VideoPresenter::dxgiPresent(PendingPresent& p,gfx::CommandSlotRing& ring){
     lastPresentReturnHost100ns_=std::chrono::duration_cast<std::chrono::nanoseconds>(presentEnd.time_since_epoch()).count()/100;
     // Stream "present" R2: every Present call for [fg-health]; the display path's facts for [present-path] (on change).
     if(presented)pushFgHealth().presented(lastPresentCallHost100ns_,p.generated);
+    if(presented)++thumbSequence_;   // stream "s12-pace": every Present has a number; one not probed leaves a gap
+    if(presented)observeOnScreen(p.generated);   // stream "s12-pace": [cadence]
     watchPresentPath(lastPresentReturnHost100ns_,p.windowW,p.windowH);
     const auto ms=[](auto d){return std::chrono::duration<double,std::milli>(d).count();};
     const bool slow=ms(presentEnd-p.presentStart)>=80.0;
@@ -684,6 +750,65 @@ bool VideoPresenter::dxgiPresent(PendingPresent& p,gfx::CommandSlotRing& ring){
     }
     xessFailed_=sink_.xessFailed();if(presented)retainedFrame_=p.retained;return presented;
 }
+// Stream "s12-pace" (engine/PushOnScreenCadence.h): feeds the frame-statistics reading taken before this Present and the
+// Present itself into the on-screen window; every 10 s one [cadence] line and the interface's board. O(1) per present.
+void VideoPresenter::observeOnScreen(bool generated){
+    if(sink_.xess())return;
+    const auto& reading=sink_.lastStatistics();
+    if(reading.valid)onScreen_.statistics(reading.presentCount,reading.presentRefreshCount,reading.syncRefreshCount,double(reading.sync100ns)/10000);
+    lastReading100ns_=lastPresentCallHost100ns_;
+    const auto grid=sink_.refreshGrid();
+    const double callMs=double(lastPresentCallHost100ns_)/10000;
+    onScreen_.presented(sink_.lastDatedPresentId(),generated,callMs,grid.period100ns>0?double(grid.lastVblank100ns)/10000:-1.0,grid.period100ns/10000);
+    if(thumbs_)thumbs_->collect([&](uint64_t sequence,bool frameGenerated,unsigned subframe,unsigned groupFrames,const float* thumb){frameGroups_.frame(sequence,frameGenerated,subframe,groupFrames,thumb);});
+    if(!onScreen_.due(callMs))return;
+    lastOnScreen_=onScreen_.take(callMs);
+    if(thumbs_&&thumbs_->ready())veyra::log::info("frame-probe",formatPushFrameProbe(frameProbe_.take()));
+    PushCadenceContext context;
+    const auto& d=sleepStatus_;
+    context.directPath=d.known?(d.fullscreenIFlip?1:0):-1;
+    context.driverVrr=d.known?(d.fsVrr?1:0):-1;
+    context.foreground=foreground_;
+    context.reflex=reflex_.active()?1:0;
+    context.lock=phaseLockSwitch_?1:0;
+    context.syncInterval=sink_.presentSyncInterval();
+    veyra::log::info("cadence",formatPushCadence(lastOnScreen_,context));
+    pushOnScreenBoard().publish(pushCadencePathCode(lastOnScreen_,context),lastOnScreen_.k,lastOnScreen_.evenPctMin,lastOnScreen_.evenPctMax,lastOnScreen_.spacingEvenPct,
+        context.directPath==1&&context.driverVrr==1&&context.foreground==1,callMs);
+}
+int64_t VideoPresenter::statisticsReadingDue()const{
+    if(!statsReadings_||!hasPresented_||sink_.xess()||!lastReading100ns_)return 0;
+    const auto grid=sink_.refreshGrid();
+    return grid.period100ns>0?lastReading100ns_+int64_t(grid.period100ns):0;
+}
+void VideoPresenter::sampleStatistics(int64_t now100ns){
+    if(!statsReadings_||sink_.xess())return;
+    const auto start=std::chrono::steady_clock::now();
+    const auto reading=sink_.readStatistics();
+    lastReading100ns_=now100ns;
+    if(reading.valid)onScreen_.statistics(reading.presentCount,reading.presentRefreshCount,reading.syncRefreshCount,double(reading.sync100ns)/10000);
+    onScreen_.extraReading(std::chrono::duration<double,std::micro>(std::chrono::steady_clock::now()-start).count());
+}
+int64_t VideoPresenter::phaseLockDue(int64_t deadline100ns,int64_t now100ns,double outputInterval100ns){
+    if(!phaseLockSwitch_)return deadline100ns;
+    const auto grid=sink_.refreshGrid();
+    PushPhaseLockInputs in;
+    in.switchOn=true;
+    in.clockFrozen=onScreen_.clockStillNow()||lastOnScreen_.clockFrozen;   // review 1 MUST 2: the last reading, not only the 10 s window
+    in.directFlip=sleepStatus_.known&&sleepStatus_.fullscreenIFlip;
+    in.vrrActive=vrr_.enabled||(sleepStatus_.known&&sleepStatus_.fsVrr);
+    in.now100ns=now100ns;in.lastVblank100ns=grid.lastVblank100ns;in.period100ns=grid.period100ns;in.outputInterval100ns=outputInterval100ns;
+    const char* refusal=pushPhaseLockRefusal(in);
+    if(refusal!=phaseLockRefusalLogged_){
+        phaseLockRefusalLogged_=refusal;
+        veyra::log::info("cadence",std::format("phaseLock state={} (VEYRA_EXP_RP_PHASE_LOCK; logged when it changes)",refusal?refusal:"applies"));
+    }
+    if(refusal)return deadline100ns;
+    const auto due=pushPhaseLockDue(deadline100ns,now100ns,grid.lastVblank100ns,grid.period100ns,pushPhaseLockOffset100ns(phaseLockOffsetMs_,grid.period100ns));
+    // Review 1 MUST 2: a move is counted at the Present itself (phaseLockPresented); here only a passed slot, once per frame.
+    if(due.missed&&deadline100ns!=phaseLockCounted_){onScreen_.phaseLockMissed();phaseLockCounted_=deadline100ns;}
+    return due.due100ns;
+}
 void VideoPresenter::recordOverlay(ID3D12Device* device,ID3D12GraphicsCommandList* list,pipeline::EnhanceGraph& graph,ID3D12Resource* backBuffer,unsigned backBufferIndex,unsigned windowW,unsigned windowH,bool& uploaded,bool& drew){
     uploaded=drew=false;
     auto& board=pushVideoOverlayBoard();
@@ -704,6 +829,64 @@ void VideoPresenter::recordOverlay(ID3D12Device* device,ID3D12GraphicsCommandLis
     const D3D12_CPU_DESCRIPTOR_HANDLE rtv{rtvs_->GetCPUDescriptorHandleForHeapStart().ptr+size_t(backBufferIndex)*inc_};
     drew=overlay_.draw(list,rtv,windowW,windowH,sink_.bufferWidth(),sink_.bufferHeight());
     std::swap(b.Transition.StateBefore,b.Transition.StateAfter);list->ResourceBarrier(1,&b);
+}
+// Stream "s12-pace" (review 1 item 3; review 2 MUST 3: off the presenter thread): why a window that covers its monitor is still
+// composed. A worker thread, every 2.5 s while the video window covers its monitor, enumerates the top-level windows from the
+// top of the z-order down to ours (EnumWindows, at most 1024) and counts the visible, not cloaked windows of OTHER processes
+// that intersect our monitor: how many, how many topmost or layered, whether a taskbar is among them. Numbers only: no titles,
+// no program names (a class name is compared with the shell's taskbar classes and never stored). The presenter only reads
+// atomics; [present-path] prints the latest result with `truncated` and the walk's duration.
+namespace {
+struct AboveWalk { HWND root=nullptr; DWORD ours=0; RECT monitor{}; int count=0,topmost=0,layered=0,taskbar=0,visited=0; bool found=false,truncated=false; };
+BOOL CALLBACK aboveWalkStep(HWND h,LPARAM param){
+    auto& w=*reinterpret_cast<AboveWalk*>(param);
+    if(h==w.root){w.found=true;return FALSE;}
+    if(++w.visited>1024){w.truncated=true;return FALSE;}
+    if(!IsWindowVisible(h))return TRUE;
+    DWORD pid=0;GetWindowThreadProcessId(h,&pid);
+    if(pid==w.ours)return TRUE;
+    BOOL cloaked=FALSE;
+    if(SUCCEEDED(DwmGetWindowAttribute(h,DWMWA_CLOAKED,&cloaked,sizeof(cloaked)))&&cloaked)return TRUE;
+    RECT r{},overlap{};
+    if(!GetWindowRect(h,&r)||!IntersectRect(&overlap,&r,&w.monitor))return TRUE;
+    ++w.count;
+    const LONG_PTR ex=GetWindowLongPtrW(h,GWL_EXSTYLE);
+    if(ex&WS_EX_TOPMOST)++w.topmost;
+    if(ex&WS_EX_LAYERED)++w.layered;
+    wchar_t cls[32]{};
+    if(GetClassNameW(h,cls,32)&&(std::wstring_view(cls)==L"Shell_TrayWnd"||std::wstring_view(cls)==L"Shell_SecondaryTrayWnd"))w.taskbar=1;
+    return TRUE;
+}
+}  // namespace
+void VideoPresenter::startAboveWatch(){
+    stopAboveWatch();
+    if(!window_)return;
+    aboveStop_=false;
+    const HWND video=window_;
+    aboveThread_=std::thread([this,video]{
+        while(!aboveStop_.load()){
+            if(aboveCovers_.load()){
+                AboveWalk w;w.root=GetAncestor(video,GA_ROOT);GetWindowThreadProcessId(w.root,&w.ours);
+                MONITORINFO mi{};mi.cbSize=sizeof(mi);
+                if(w.root&&GetMonitorInfoW(MonitorFromWindow(video,MONITOR_DEFAULTTONEAREST),&mi)){
+                    w.monitor=mi.rcMonitor;
+                    const auto start=std::chrono::steady_clock::now();
+                    EnumWindows(aboveWalkStep,reinterpret_cast<LPARAM>(&w));
+                    aboveMicros_.store(int(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now()-start).count()));
+                    aboveCount_.store(w.found||w.truncated?w.count:-1);aboveTopmost_.store(w.topmost);aboveLayered_.store(w.layered);
+                    aboveTaskbar_.store(w.taskbar);aboveTruncated_.store(w.truncated?1:0);
+                }
+            }else{aboveCount_.store(-1);aboveTopmost_.store(-1);aboveLayered_.store(-1);aboveTaskbar_.store(-1);aboveTruncated_.store(0);aboveMicros_.store(-1);}
+            std::unique_lock lock(aboveMutex_);
+            aboveWake_.wait_for(lock,std::chrono::milliseconds(2500),[this]{return aboveStop_.load();});
+        }
+    });
+}
+void VideoPresenter::stopAboveWatch(){
+    if(!aboveThread_.joinable())return;
+    {std::lock_guard lock(aboveMutex_);aboveStop_=true;}
+    aboveWake_.notify_all();
+    aboveThread_.join();
 }
 void VideoPresenter::watchPresentPath(int64_t now100ns,unsigned windowW,unsigned windowH){
     // Stream "present" R2: one [present-path] line whenever what decides the display path changes (checked at most four
@@ -733,6 +916,8 @@ void VideoPresenter::watchPresentPath(int64_t now100ns,unsigned windowW,unsigned
     // Stream "s10-display" (review SHOULD 5): the measured window facts for the interface's display-path line.
     pushToScreenBoard().publishWindow(coversMonitor?1:0,compositionFlags_<0?-1:(compositionFlags_&DXGI_HARDWARE_COMPOSITION_SUPPORT_FLAG_WINDOWED)?1:0);
     const HWND root=GetAncestor(window_,GA_ROOT);
+    foreground_=root&&GetForegroundWindow()==root?1:0;   // stream "s12-pace": also for [cadence]
+    aboveCovers_.store(coversMonitor);   // stream "s12-pace": the worker walks only while ours covers its monitor
     const auto region=pushRegionBoard().get();
     // Review S5: Windows' own answer beside the interface's decision (0 none/error, 1 empty, 2 one rectangle, 3 complex).
     int windowRgn=0;
@@ -740,12 +925,13 @@ void VideoPresenter::watchPresentPath(int64_t now100ns,unsigned windowW,unsigned
     const auto& d=sleepStatus_;
     std::string line=std::format("region={} windowRgn={} coversInPicture={} cineBand={} items={} inPictureOverlay={} overlayRollback={} swapEffect={} buffers={} format={} chainFlags=0x{:X} waitable={} maxLatency={} syncInterval={} tearingFlag={} tearingSupported={} "
         "vrrSync={} vrrLevel={} vrrRequested={} vrrActive={} displayInVrrMode={} cadenceVrr={} hwCompositionFlags={} window={}x{} buffer={}x{} coversMonitor={} foreground={} xess={} hdrCopy={} "
-        "reflexActive={} reflexEnded={} reflexGuard={} driverStatus={} driverLowLatency={} driverFsVrr={} driverFullscreenIFlip={} driverGameSleep={} driverCplVsync={}",
+        "reflexActive={} reflexEnded={} reflexGuard={} driverStatus={} driverLowLatency={} driverFsVrr={} driverFullscreenIFlip={} driverGameSleep={} driverCplVsync={} "
+        "windowsAbove={} windowsAboveTopmost={} windowsAboveLayered={} taskbarAbove={} aboveTruncated={} aboveWalkUs={}",
         pushRegionKindName(region.kind),windowRgn,region.coversInPicture,region.insetBand?1:0,region.items.empty()?std::string("none"):region.items,overlayDrawing_?1:0,overlayLegacy_?1:0,
         unsigned(desc.SwapEffect),desc.BufferCount,unsigned(desc.Format),unsigned(desc.Flags),sink_.waitable()?1:0,sink_.queueLatency(),sink_.presentSyncInterval(),sink_.presentTearing()?1:0,sink_.tearingSupported()?1:0,
         vrrSync_?1:0,gfx::vrrLevel(vrr_),vrr_.requested?1:0,vrr_.enabled?1:0,vrr_.inVrrMode?1:0,cadenceVrr(),compositionFlags_,windowW,windowH,sink_.bufferWidth(),sink_.bufferHeight(),coversMonitor?1:0,
-        root&&GetForegroundWindow()==root?1:0,sink_.xess()?1:0,copyBeforePresent_?1:0,
-        reflex_.active()?1:0,reflex_.stalled()?1:0,reflexGuardLegacy_?"rollback":"on",d.result,d.known?(d.lowLatency?1:0):-1,d.known?(d.fsVrr?1:0):-1,d.known?(d.fullscreenIFlip?1:0):-1,d.known?(d.useGameSleep?1:0):-1,d.known?(d.cplVsyncOn?1:0):-1);
+        foreground_,sink_.xess()?1:0,copyBeforePresent_?1:0,
+        reflex_.active()?1:0,reflex_.stalled()?1:0,reflexGuardLegacy_?"rollback":"on",d.result,d.known?(d.lowLatency?1:0):-1,d.known?(d.fsVrr?1:0):-1,d.known?(d.fullscreenIFlip?1:0):-1,d.known?(d.useGameSleep?1:0):-1,d.known?(d.cplVsyncOn?1:0):-1,aboveCount_.load(),aboveTopmost_.load(),aboveLayered_.load(),aboveTaskbar_.load(),aboveTruncated_.load(),aboveMicros_.load());
     // Review S6: at most one line per 5 s. A change is logged at once when the last line is 5 s old, otherwise with the
     // latest state when 5 s have passed (changes= counts the states seen meanwhile); an unchanged state is repeated every 10 s.
     if(line!=presentPathLine_){presentPathLine_=line;++presentPathChanges_;}
@@ -756,7 +942,8 @@ void VideoPresenter::watchPresentPath(int64_t now100ns,unsigned windowW,unsigned
     const auto toScreen=pushToScreenBoard().read(double(now100ns)/10000);
     veyra::log::info("present-path",line+std::format(" changes={} toScreenP50Ms={:.2f} toScreenP95Ms={:.2f}",changes,toScreen.known?toScreen.p50Ms:-1.0,toScreen.known?toScreen.p95Ms:-1.0)+" (at most one line per 5 s, the latest state; changes = states seen since the last line; the video window's clipping region as the interface set it (full = none, rect = one rectangle), windowRgn = GetWindowRgn (0 none, 2 rectangle, 3 complex), items = the interface items cut out of it; "
         "hwCompositionFlags = IDXGIOutput6::CheckHardwareCompositionSupport, -1 unknown; driver* = NvAPI_D3D_GetSleepStatus, -1 not read (low latency never enabled on this chain); "
-        "facts the program can see, not PresentMon's present mode; toScreen* = the last second's Present -> vblank from DXGI frame statistics, -1 unknown)");
+        "facts the program can see, not PresentMon's present mode; toScreen* = the last second's Present -> vblank from DXGI frame statistics, -1 unknown; "
+        "windowsAbove* = visible windows of other programs above ours in z-order on our monitor while ours covers it (counts only, from a worker thread every 2.5 s; -1 when not covering or not walked yet; aboveTruncated = the walk stopped at 1024 windows))");
 }
 bool VideoPresenter::readPresentedFrameForTest(gfx::D3D12DeviceContext& ctx,gfx::CommandSlotRing& ring,sink::RgbaImage& image){
     if(presentationQueue_&&!presentationRing_.drainQueue())return false;
@@ -802,7 +989,9 @@ void VideoPresenter::close(){
     retainedFrame_.reset();
     xessInputId_=0;xessWork_={};xessWorkPosition_=0;
     reflex_.close();reflexFrame_=reflexInputFrame_=0;
+    stopAboveWatch();aboveCovers_.store(false);   // stream "s12-pace"
     if(presentationRing_.initialized())presentationRing_.drainQueue();
+    thumbs_.reset();frameGroups_.reset();lastReading100ns_=0;   // stream "s12-pace": nothing of the probe is in flight after the drain
     hasPresented_=false;gpuTimer_.close();compositeTarget_.Reset();exclusionUiTarget_.Reset();exclusionHudlessTarget_.Reset();exclusionUiEnabled_=false;copyBeforePresent_=copyEligible_=false;rtvs_.Reset();
     probeStats_.Reset();probeReadback_.Reset();probeCpuViews_.Reset();probePass_={};probePending_=false;probeFailed_=false;probeNext_={};probeCurve_={};probeIdentity_={};liveCoverage_={};pass_={};sink_.shutdown();
     presentMotionPass_={};presentMotion_={};previousXessWidth_=previousXessHeight_=0;

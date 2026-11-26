@@ -15,23 +15,37 @@
 #include "veyra/engine/PushCadence.h"
 #include "veyra/engine/PushPresentOverlay.h"
 #include "veyra/engine/PushFgHealth.h"
+#include "veyra/engine/PushOnScreenCadence.h"
+#include "veyra/engine/PushPhaseLock.h"
+#include "veyra/engine/PushFrameProbe.h"
+#include "veyra/engine/PushDownscale.h"
 #include <string>
 #include <memory>
 #include <chrono>
 #include <array>
 #include <optional>
 #include <utility>
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
 namespace veyra::gfx { class D3D12DeviceContext; class CommandSlotRing; }
 namespace veyra::pipeline { class EnhanceGraph; }
 namespace veyra::sink { struct RgbaImage; }
 namespace veyra::engine {
+class PushFrameThumb;
 class VideoPresenter {
 public:
     // Live recording hook; the object must outlive every present() call.
     void setCapture(PresentCapture* capture){capture_=capture;}
     // Shared refresh/VRR states (the engine's); must outlive the presenter.
     void setDisplayStates(DisplayStateService* states){displayStates_=states;}
-    ~VideoPresenter(){close();}
+    // Stream "s12-pace": defined in VideoPresenter.cpp, where PushFrameThumb is complete (thumbs_ is a unique_ptr to it; an
+    // inline constructor or destructor would instantiate its deleter in every file that only sees the forward declaration).
+    VideoPresenter();
+    ~VideoPresenter();
+    VideoPresenter(const VideoPresenter&)=delete;
+    VideoPresenter& operator=(const VideoPresenter&)=delete;
     // mediaClockPaced: the owner already waits on a media clock before each
     // source (file playback). Retained for diagnostics; XeLL low latency must
     // stay enabled or the provider refuses generation (result -15).
@@ -71,11 +85,29 @@ public:
     PresentationSettings configurePresentation(gfx::D3D12DeviceContext&,PresentationSettings,bool fg,std::wstring& status);
     bool presentationReady(){return sink_.presentationReady();}
     gfx::PresentSink::RefreshGrid refreshGrid()const{return sink_.refreshGrid();}
+    // Stream "s12-pace" ([cadence], engine/PushOnScreenCadence.h): a generated frame waited this long (ms) for display-queue
+    // capacity before its Present (owner thread).
+    void capacityWaited(double ms){onScreen_.capacityWait(ms);}
+    // Stream "s12-pace" (review 2 MUST 1): the time (host 100 ns) at which one more frame-statistics reading is wanted (about one
+    // refresh after the last reading), 0 when none. The owner's wait may end there, take it with sampleStatistics(), and wait on.
+    int64_t statisticsReadingDue()const;
+    void sampleStatistics(int64_t now100ns);
+    // ... and why a paced Present began late (PushOnScreenCadence::presentLateness).
+    void presentLateness(double lateMs,unsigned subframe,double readyLateMs,double capacityMs){onScreen_.presentLateness(lateMs,subframe,readyLateMs,capacityMs);}
+    // Stream "s12-pace" experiment VEYRA_EXP_RP_PHASE_LOCK=1 (engine/PushPhaseLock.h, OFF by default): the time a paced, ready
+    // frame is presented at: its deadline, or an earlier slot `offset` after a vblank of the display's own clock. Never later
+    // than the deadline. outputInterval100ns: the content interval / multiplier. Owner thread.
+    int64_t phaseLockDue(int64_t deadline100ns,int64_t now100ns,double outputInterval100ns);
+    bool phaseLockSwitch()const{return phaseLockSwitch_;}
+    // The frame just presented went out advanceMs before its own deadline (review 1 MUST 2: moves are counted here, at the Present).
+    void phaseLockPresented(double advanceMs){if(phaseLockSwitch_)onScreen_.phaseLockPresented(advanceMs);}
     bool waitPresentationReady(unsigned ms){return sink_.waitPresentationReady(ms);}
     uint64_t beginReflex(){const auto id=reflexInputFrame_;reflexInputFrame_=0;reflex_.renderStart(id);return id;}
     void endReflex(uint64_t id){reflex_.renderEnd(id);}
     void cancelReflexInput(){if(reflexInputFrame_)reflex_.mark(reflexInputFrame_,1);reflexInputFrame_=0;}
     void reflexFrame(uint64_t id){reflexFrame_=id;}
+    // Stream "s12-pace" (review 2 SHOULD 4): the next presented frame's subframe (0 real) and its group's frame count.
+    void frameInfo(unsigned subframe,unsigned groupFrames){probeSubframe_=subframe;probeGroupFrames_=groupFrames;}
     // True while XeSS owns Present: the low-latency queue and the output
     // cap cannot reach provider-generated frames, so the UI greys them out.
     bool providerOwnedPresentation()const{return providerOwnedPresentation_;}
@@ -201,6 +233,33 @@ private:
     std::string presentPathLine_;
     int64_t presentPathCheck100ns_=0,sleepStatusCheck100ns_=0,presentPathLogged100ns_=0;unsigned presentPathChanges_=0;
     gfx::ReflexSession::DriverStatus sleepStatus_{};
+    // Stream "s12-pace": the measured on-screen hold of each frame ([cadence] every 10 s) and the opt-in phase lock.
+    PushOnScreenCadence onScreen_;
+    PushOnScreenCadence::Summary lastOnScreen_{};
+    bool phaseLockSwitch_=false;double phaseLockOffsetMs_=kPushPhaseLockDefaultOffsetMs;const char* phaseLockRefusalLogged_=nullptr;int64_t phaseLockCounted_=0;int foreground_=-1;
+    void observeOnScreen(bool generated);
+    // Stream "s12-pace" (review 2 MUST 3): the windows-above walk on its own thread; the presenter reads only these atomics.
+    void startAboveWatch();
+    void stopAboveWatch();
+    std::thread aboveThread_;std::mutex aboveMutex_;std::condition_variable aboveWake_;
+    std::atomic<bool> aboveStop_{false},aboveCovers_{false};
+    std::atomic<int> aboveCount_{-1},aboveTopmost_{-1},aboveLayered_{-1},aboveTaskbar_{-1},aboveTruncated_{0},aboveMicros_{-1};
+    // Stream "s12-pace" frame probe (PushFrameThumb.h / PushFrameProbe.h, [frame-probe] every 10 s): a thumbnail of every
+    // presented frame, recorded at the end of its blit list (independent presentation queue only), read back when done;
+    // restored to Package 16 (no probe) by VEYRA_TEST_RP_LEGACY_FRAME_PROBE / PACKAGE16.
+    std::unique_ptr<PushFrameThumb> thumbs_;
+    PushFrameProbe frameProbe_;
+    PushFrameGroups frameGroups_{frameProbe_};
+    uint64_t thumbSequence_=0;
+    bool thumbSwitch_=true;
+    // Stream "s12-pace": "Steadier fine detail" (PushDownscale.h): allowed unless PushLegacyPart::PresentDownscale17 restores
+    // Package 16; used only while the user's choice (pushSteadyDetail) is on; the kernel; the last state logged ([present-path] shrink).
+    bool downscaleArea_=true;
+    PushShrinkKernel shrinkKernelChoice_=PushShrinkKernel::AreaSharpClamp;
+    struct ShrinkLogged { int kernel=-1,transfer=-1,fx100=-1,fy100=-1; } shrinkLogged_;
+    void noteShrink(PushShrinkKernel kernel,PushTransfer transfer,PushShrinkFootprint footprint);
+    bool statsReadings_=true;int64_t lastReading100ns_=0;   // stream "s12-pace": extra readings (PushLegacyPart::StatsReadings17)
+    unsigned probeSubframe_=0,probeGroupFrames_=0;
     HMONITOR compositionMonitor_=nullptr;int compositionFlags_=-1;
     bool overlayDrawing_=false;
     void watchPresentPath(int64_t now100ns,unsigned windowW,unsigned windowH);

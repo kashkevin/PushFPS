@@ -475,6 +475,7 @@ TEST(keyboard_mouse_states_coalesce_in_the_controller_queue){
 #include "DelaySplitTests.inc"
 #include "PresentPathTests.inc"
 #include "DisplayPathTests.inc"
+#include "OnScreenCadenceTests.inc"
 #include "StallWitnessTests.inc"
 #include "SettingsEffectTests.inc"
 int main(int argc,char**argv){

@@ -201,6 +201,7 @@ QmlPlayerBridge::QmlPlayerBridge(engine::EngineController& engine, std::filesyst
     applyPushMix();   // PushFPS streaming mode mixer (PushStudio.cpp)
     engine::setPushLiveCanvas(pushCanvas(0));   // PushFPS layout (Recording.cpp)
     applyPreference(QStringLiteral("nisSharpness"));
+    applyPreference(QStringLiteral("pushSteadyDetail"));   // PushFPS (stream s12-pace): "Steadier fine detail" -> the presenter (PushDownscale.h)
     applyPreference(QStringLiteral("pushFlowHalf"));
     applyPreference(QStringLiteral("pushLanProfile"));   // PushFPS LAN profile -> the switch the next PS5 connection reads (PushSlipstream.cpp)
     applyPreference(QStringLiteral("pushSmoothTarget"));   // PushFPS Smoothness Mode -> the engine's target (PushSlipstream.cpp)

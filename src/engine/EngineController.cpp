@@ -1,4 +1,5 @@
 #include "veyra/engine/EngineController.h"
+#include "veyra/engine/PushAdmissionAnchor.h"
 #include "veyra/engine/PlaybackRate.h"
 #include "veyra/engine/PreviewFrameReadiness.h"
 #include "veyra/engine/FgCompatibilityProbe.h"
@@ -1735,6 +1736,19 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
                 const auto due=liveScheduler?liveScheduler->wakeAt():0;
                 const auto arrivalEvent=physicalCapture?captureSource.frameEvent():remoteFrameEvent;
                 const auto readyEvent=physicalCapture||remoteFrameEvent?gpuReadyEvent.handle:nullptr;
+                // Stream "s12-pace" (review 2 MUST 1, PushOnScreenCadence.h): one frame-statistics reading about every refresh, so
+                // [cadence] names (nearly) every shown frame. Only on this thread (the presenting one: DXGI serialises swap-chain
+                // calls), only when the reading falls at least 1 ms before the next frame's precise deadline: the wait ends at
+                // the reading time, the reading (microseconds, its maximum logged) is taken, and the loop waits on for the deadline.
+                if(preciseDeadlines&&liveScheduler&&liveScheduler->preciseWake()&&due>0){
+                    const auto reading=presenter.statisticsReadingDue();
+                    if(reading>0&&due-reading>=10000){
+                        if(reading>host100ns())deadlineWait.until(reading,physicalCapture?arrivalEvent:nullptr,physicalCapture?readyEvent:nullptr,[&]{return stop_||(paused_&&!seekPreviewPending)||seekSeconds_>=0;});
+                        const auto now=host100ns();
+                        if(now>=reading&&due-now>=10000)presenter.sampleStatistics(now);
+                        return;   // the loop comes back here and waits for the deadline (or the next reading)
+                    }
+                }
                 if(preciseDeadlines&&liveScheduler&&liveScheduler->preciseWake()){
                     // A frame that is ready and waits for its presentation time (frame generation
                     // on a PS5 stream): unchanged, the stream's events do not end this wait. Its
@@ -2942,7 +2956,12 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
                         // Admission asks whether this pair's own frames can make
                         // it, so it keeps the callback; LiveArrivalSmoother moves
                         // only the presentation anchor set below.
-                        if(pairAnchoredLive)liveTimeline.resetPair(batch.identity.epoch,batch.b100ns,liveInputReady,pairDelay);
+                        // Stream "s12-pace" (PushAdmissionAnchor.h): with duplicate removal the pair's deadlines count from the content
+                        // anchor (about half a capture interval after the callback); admission now uses that same anchor, so 2X is no
+                        // longer judged against deadlines ~16 ms too early. Transport anchoring: unchanged. VEYRA_TEST_RP_LEGACY_DEDUP_ADMISSION.
+                        static const bool dedupAdmissionLegacy=pushLegacyRestored(PushLegacyPart::DedupAdmission17,pushEnvironment());
+                        if(pairAnchoredLive)liveTimeline.resetPair(batch.identity.epoch,batch.b100ns,
+                            pushAdmissionAnchor(smoothContentAnchor,dedupAdmissionLegacy,liveInputReady,smoothContentAnchor?presentAnchorFor(batch.b100ns):liveInputReady),pairDelay);
                         else if(!liveTimeline.anchored(batch.identity.epoch))liveTimeline.reset(batch.identity.epoch,batch.b100ns,liveInputReady,liveSourceInterval100ns(pkt.duration,activeSource->info().averageFps));
                         const auto interval=liveInterval;
                         const auto a=(historyReset||batch.b100ns<=batch.a100ns||batch.b100ns-batch.a100ns>10000000)?batch.b100ns-interval:batch.a100ns;
@@ -3434,9 +3453,14 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
                             }
                             if(readiness==PreviewFrameReadiness::Expired){if(generated&&item.lease&&item.lease->predicted)lowDelay.predictedOutcome(true);*robustBad=true;++generatedDropDeadline;++s.dropped;++s.handled;++s.next;s.deadlineStart.reset();s.capacityStart.reset();continue;}
                             if(!s.deadlineStart)s.deadlineStart=Clock::now();
-                            if(isCapture){if(host100ns()<timeline.deadline(item.pts100ns)){
+                            if(isCapture){
+                                // Stream "s12-pace" hook (VEYRA_EXP_RP_PHASE_LOCK, off by default: PushPhaseLock.h): a paced, ready frame may go
+                                // out at an earlier slot just after a vblank; never later than its deadline. Off, due is the deadline.
+                                const auto captureDue=timeline.paced()&&presenter.phaseLockSwitch()&&!presenter.providerOwnedPresentation()
+                                    ?presenter.phaseLockDue(timeline.deadline(item.pts100ns),host100ns(),sourceIntervalMs*10000.0/std::max(1u,batch.batch.count)):timeline.deadline(item.pts100ns);
+                                if(host100ns()<captureDue){
                                 if(presenter.blitAheadEnabled()&&timeline.paced())presenter.prepare(ctx,ring,*graph,item.lease->slot,generated,item.lease->referencesValid,comparisonMode_,comparisonBase_,comparisonSplit_,item.identity,previewView(),item.pts100ns);   // stream "present" R3 hook (VEYRA_EXP_RP_PRESENT_BLIT_AHEAD, off by default)
-                                return {State::Pending,timeline.deadline(item.pts100ns),timeline.paced()&&!presenter.providerOwnedPresentation()};}}
+                                return {State::Pending,captureDue,timeline.paced()&&!presenter.providerOwnedPresentation()};}}
                             else if(!fileAwaitingVideo){
                                 if(audioStarted)audioPipe.videoReady(itemPtsMs);
                                 if(nowMs()+.25<itemPtsMs)return {State::Pending,now+std::min<int64_t>(10000,int64_t((itemPtsMs-nowMs())*10000/playbackRate))};
@@ -3483,6 +3507,8 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
                                 }
                                 return {State::Pending,optionalNow+2000};
                             }
+                            const double capacityWaitedMs=s.capacityStart?elapsedMs(*s.capacityStart):0.0;
+                            if(s.capacityStart&&isCapture)presenter.capacityWaited(capacityWaitedMs);   // stream "s12-pace": [cadence] capacityWaits
                             s.capacityStart.reset();
                             const auto waited=elapsedMs(*s.deadlineStart);s.deadlineStart.reset();s.waitMs+=waited;flow->cpu(diagnostics::CpuStage::DeadlineWait,waited,host100ns());
                             const bool deviationValid=!isCapture&&!isImage&&!fileAwaitingVideo&&!paused_;
@@ -3490,6 +3516,7 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
                             const auto presentBeginHost=host100ns();
                             const auto begin=Clock::now();const auto before=presenter.submittedCount();
                             presenter.reflexFrame(watch->reflexFrame);
+                            presenter.frameInfo(generated?unsigned(item.subframe):0u,unsigned(batch.batch.count));   // stream "s12-pace": the frame probe's grouping
                             presenter.observeHdrCoverage(hdrCoverageObserved_.load());
                             if(!presenter.present(ctx,ring,*graph,item.lease->slot,generated,item.lease->referencesValid,comparisonMode_,comparisonBase_,comparisonSplit_,item.identity,previewView(),item.pts100ns))return {State::Failed};
                             const auto presentEndHost=host100ns();
@@ -3610,6 +3637,11 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
                             }
                             if(didPresent&&flow==frameFlow)presentGrid.observe(presentBeginHost,gridSlot);   // stream "lagfix": always on, cheap
                             if(didPresent&&flow==frameFlow&&isCapture&&timeline.paced())pushFgHealth().presentLate(double(presentBeginHost-timeline.deadline(item.pts100ns))/10000,generated);   // stream "s10-display" hook: Present lateness in [fg-health]
+                            if(didPresent&&flow==frameFlow&&isCapture&&timeline.paced()){   // stream "s12-pace": why a Present was late ([cadence] late*)
+                                const auto deadline=timeline.deadline(item.pts100ns),ready=watch->frameReadyObserved[s.next];
+                                presenter.presentLateness(double(presentBeginHost-deadline)/10000,generated?std::max(1u,unsigned(item.subframe)):0u,ready>0?double(ready-deadline)/10000:-1.0,capacityWaitedMs);
+                                presenter.phaseLockPresented(double(deadline-presentBeginHost)/10000);   // counted only with VEYRA_EXP_RP_PHASE_LOCK, only when > 0.5 ms early
+                            }
                             // PushRobustAdmitGuard: a robust-admitted pair whose generated frame went out more than 1 ms late or was dropped.
                             if(robustPair&&didPresent&&flow==frameFlow){
                                 if(generated&&timeline.paced()&&presentBeginHost-timeline.deadline(item.pts100ns)>10000)*robustBad=true;

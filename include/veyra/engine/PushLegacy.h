@@ -37,6 +37,17 @@
 //                                               source is NOT rolled back (Package 15's strict GPU DIS removed the device)
 //   VEYRA_TEST_RP_LEGACY_LOWDELAY_MIGRATE = 1   no one-time switch-off of a saved "Lower delay" on (pushLowDelayMigrate)
 //
+// Since Package 17 (stream "s12-pace", 25 Nov 2026), restored together by ONE line (every earlier master restores these too):
+//
+//   VEYRA_TEST_RP_LEGACY_PACKAGE16 = 1          every part below as Package 16
+//   VEYRA_TEST_RP_LEGACY_FRAME_PROBE = 1        no frame probe (no thumbnail list after each Present, no [frame-probe] line)
+//   VEYRA_TEST_RP_LEGACY_PRESENT_DOWNSCALE = 1  the present blit shrinks a larger picture with one bilinear tap (Package 16)
+//                                               instead of the area filter in linear light
+//   VEYRA_TEST_RP_LEGACY_DEDUP_ADMISSION = 1    with duplicate removal, FG admission judges a pair against the callback, not
+//                                               the content anchor its deadlines count from (PushAdmissionAnchor.h)
+//   VEYRA_TEST_RP_LEGACY_STATS_READINGS = 1     no extra frame-statistics reading between Presents (one per Present, as
+//                                               Package 16; [cadence]'s even-share range is then wide)
+//
 // Each value is exactly "1" (anything else, "0" included, restores nothing). The earlier names keep working from the
 // environment as aliases: VEYRA_TEST_RP_FG_SCHED_LEGACY=<parts> (robustAdmit, gridEarly), VEYRA_TEST_RP_DEDUP_LEGACY_CADENCE,
 // VEYRA_TEST_GPU_REAL_WAITS_GROUP, VEYRA_TEST_UPLOAD_LATE_RELEASE, VEYRA_TEST_NR_KEEP_SAVED_ON (each "1"; the
@@ -56,18 +67,23 @@ enum class PushLegacyPart : unsigned {
     // Package 16 (after Package 15): restored by PACKAGE15 = 1 and by the earlier masters.
     DisplayUi, GsyncRestart, StallWitness,
     LowDelaySchedule16, LowDelayMigrate16,   // stream "s10-lowdelay2" (row-ON schedule; the one-time preference reset)
+    // Package 17 (after Package 16): restored by PACKAGE16 = 1 and by the earlier masters.
+    FrameProbe17, PresentDownscale17, DedupAdmission17, StatsReadings17,   // stream "s12-pace"
     Count
 };
 // The first part that Package 14 did not have: PACKAGE14 = 1 restores this one and every later one.
 inline constexpr PushLegacyPart kPushLegacyFirstAfter14 = PushLegacyPart::VideoOverlay;
 // The first part that Package 15 did not have: PACKAGE15 = 1 restores this one and every later one.
 inline constexpr PushLegacyPart kPushLegacyFirstAfter15 = PushLegacyPart::DisplayUi;
+// The first part that Package 16 did not have: PACKAGE16 = 1 restores this one and every later one.
+inline constexpr PushLegacyPart kPushLegacyFirstAfter16 = PushLegacyPart::FrameProbe17;
 struct PushLegacyName {
     std::string_view part, name, alias;
 };
 inline constexpr std::string_view kPushLegacyMaster = "VEYRA_TEST_RP_LEGACY_PACKAGE13";
 inline constexpr std::string_view kPushLegacyMaster14 = "VEYRA_TEST_RP_LEGACY_PACKAGE14";
 inline constexpr std::string_view kPushLegacyMaster15 = "VEYRA_TEST_RP_LEGACY_PACKAGE15";
+inline constexpr std::string_view kPushLegacyMaster16 = "VEYRA_TEST_RP_LEGACY_PACKAGE16";
 inline constexpr std::array<PushLegacyName, static_cast<std::size_t>(PushLegacyPart::Count)> kPushLegacyNames{{
     {"robustAdmit", "VEYRA_TEST_RP_LEGACY_ROBUST_ADMIT", ""},
     {"gridEarly", "VEYRA_TEST_RP_LEGACY_GRID_EARLY", ""},
@@ -82,6 +98,10 @@ inline constexpr std::array<PushLegacyName, static_cast<std::size_t>(PushLegacyP
     {"stallWitness", "VEYRA_TEST_RP_LEGACY_STALL_WITNESS", ""},
     {"lowDelaySchedule", "VEYRA_TEST_RP_LEGACY_LOWDELAY_SCHEDULE", ""},
     {"lowDelayMigrate", "VEYRA_TEST_RP_LEGACY_LOWDELAY_MIGRATE", ""},
+    {"frameProbe", "VEYRA_TEST_RP_LEGACY_FRAME_PROBE", ""},
+    {"presentDownscale", "VEYRA_TEST_RP_LEGACY_PRESENT_DOWNSCALE", ""},
+    {"dedupAdmission", "VEYRA_TEST_RP_LEGACY_DEDUP_ADMISSION", ""},
+    {"statsReadings", "VEYRA_TEST_RP_LEGACY_STATS_READINGS", ""},
 }};
 // Reads one variable: its value, or nothing when it is not set.
 using PushEnvLookup = std::function<std::optional<std::string>(std::string_view)>;
@@ -112,19 +132,22 @@ inline bool listed(const PushEnvLookup& env, std::string_view part) {
 inline bool pushLegacyMaster(const PushEnvLookup& env) { return push_legacy_detail::one(env, kPushLegacyMaster); }
 inline bool pushLegacyMaster14(const PushEnvLookup& env) { return push_legacy_detail::one(env, kPushLegacyMaster14); }
 inline bool pushLegacyMaster15(const PushEnvLookup& env) { return push_legacy_detail::one(env, kPushLegacyMaster15); }
+inline bool pushLegacyMaster16(const PushEnvLookup& env) { return push_legacy_detail::one(env, kPushLegacyMaster16); }
 // True when this part runs as before its change (Package 13 for the first six, Package 14 for the later ones).
 inline bool pushLegacyRestored(PushLegacyPart part, const PushEnvLookup& env) {
     const auto& n = kPushLegacyNames[static_cast<std::size_t>(part)];
     if (pushLegacyMaster(env) || push_legacy_detail::one(env, n.name) || push_legacy_detail::one(env, n.alias)) return true;
     if (static_cast<unsigned>(part) >= static_cast<unsigned>(kPushLegacyFirstAfter14) && pushLegacyMaster14(env)) return true;
     if (static_cast<unsigned>(part) >= static_cast<unsigned>(kPushLegacyFirstAfter15) && pushLegacyMaster15(env)) return true;
+    if (static_cast<unsigned>(part) >= static_cast<unsigned>(kPushLegacyFirstAfter16) && pushLegacyMaster16(env)) return true;
     return (part == PushLegacyPart::RobustAdmit || part == PushLegacyPart::GridEarly) && push_legacy_detail::listed(env, n.part);
 }
-// For the start-up lines: "package13=0 package14=0 package15=0 restored=[robustAdmit gridEarly]" ("restored=[]" without any).
+// For the start-up lines: "package13=0 package14=0 package15=0 package16=0 restored=[robustAdmit gridEarly]" ("restored=[]" without any).
 inline std::string pushLegacyDescribe(const PushEnvLookup& env) {
     std::string t = pushLegacyMaster(env) ? "package13=1" : "package13=0";
     t += pushLegacyMaster14(env) ? " package14=1" : " package14=0";
-    t += pushLegacyMaster15(env) ? " package15=1 restored=[" : " package15=0 restored=[";
+    t += pushLegacyMaster15(env) ? " package15=1" : " package15=0";
+    t += pushLegacyMaster16(env) ? " package16=1 restored=[" : " package16=0 restored=[";
     bool first = true;
     for (unsigned i = 0; i < static_cast<unsigned>(PushLegacyPart::Count); ++i)
         if (pushLegacyRestored(static_cast<PushLegacyPart>(i), env)) {
