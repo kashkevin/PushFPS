@@ -83,7 +83,7 @@ void main(uint3 id : SV_DispatchThreadID, uint3 gid : SV_GroupID) {
         }
         if (nearMoving && !surroundMoving(int2(gid.xy))) { nearMoving = false; thinMoving = false; }   // a lone mover
     }
-    if (inAim(id.xy)) iso = aimBusy();   // anything changed around the aim window this frame: the aim anchor is off for it
+    [branch] if (inAim(id.xy)) iso = aimBusy();   // anything changed around the aim window this frame: the aim anchor is off for it
     if (nearMoving) nearby = min(nearby + 1u, 15u);
     if (thinMoving) thin = min(thin + 1u, 15u);
     if (ck.y >= edge) edges = min(edges + 1u, 15u);

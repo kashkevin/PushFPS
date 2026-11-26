@@ -104,6 +104,15 @@ Findings of the same CI run for scenes that do not involve the anchor (SIMULATED
 - Fast camera 60 px/frame and the dark-picture scenes: numbers not yet read (the run stopped earlier in the same test); the
   assertions there are loose (25 % slack) until they are.
 
+- Review, 26 Nov (a reader who did not write the rule): the busy test switches the anchor off for a pair when ANY pixel
+  in the aim window + 64 px changed by more than `still`. Synthetic sky has no grain; a real picture with film grain,
+  dithering or sensor-like noise may trip it on every frame, in which case the anchor never arms and the guard behaves as
+  in Package 16 (safe, but no benefit). Whether it arms on real footage is UNKNOWN until an owner's log shows
+  `anchor` protection counts.
+- Review, 26 Nov: the mask shader's 17 x 17 flat-surround scan and the update shader's busy scan are behind explicit
+  `[branch]`es, so they run only for anchored aim-window pixels (at most 128 x 128), not for every pixel of the picture.
+  Their GPU cost on a real card is unmeasured.
+
 Verification status: unit tests on g++ and MSVC (`remoteplay-checks`) read per run; the WARP anchor comparison is added in
 `PushGpuTests.cpp` and its result is reported separately. Unverified on any graphics card.
 

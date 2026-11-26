@@ -50,7 +50,11 @@ void main(uint3 id : SV_DispatchThreadID, uint gi : SV_GroupIndex) {
         if (inAim) InterlockedMax(gCount[6], run);
         uint m = 0;
         const bool anchored = inAim && anchorFrames > 0 && run >= anchorFrames && ((w >> 28) & 1u) == 0;
-        if ((run >= armFrames(w) && ((w >> 8) & 15u) >= nearFrames) || (anchored && flatSurround(int2(id.xy)))) {
+        // The 17 x 17 scan runs only for anchored pixels (an explicit branch: `&&` need not short-circuit in HLSL, and
+        // the scan on every pixel of a 4K picture would cost hundreds of millions of reads per frame).
+        bool armed = run >= armFrames(w) && ((w >> 8) & 15u) >= nearFrames;
+        [branch] if (!armed && anchored) armed = flatSurround(int2(id.xy));
+        [branch] if (armed) {
             bool structure = false;
             [loop] for (int dy = -int(gate); dy <= int(gate) && !structure; ++dy)
                 [loop] for (int dx = -int(gate); dx <= int(gate) && !structure; ++dx) {
