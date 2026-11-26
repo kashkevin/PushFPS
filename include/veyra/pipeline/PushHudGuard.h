@@ -82,6 +82,7 @@ struct PushHudGuardParams {
     // structure is also protected after anchorFrames still frames (1 s at 30 FPS) without any motion evidence, unless a
     // lone object moves within `reach` px that frame (`iso`: moving pixels near, but the picture around does not move:
     // something passing through, which must never be painted over). 0 switches the anchor off (Package 16 + review rules).
+    std::uint32_t anchorFrames = 30;
     // Scope (second revision, 26 Nov 2026, after the first run showed the anchor protected nearly a whole TEXTURED still
     // picture): the anchor applies only where the surround is flat, i.e. at most anchorFlatMax of the 17 x 17 px around the
     // pixel are a still structure (a crosshair's own arms are about 120; texture or text is far more), and never in a frame in
