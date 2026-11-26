@@ -2449,11 +2449,15 @@ void testHudLock(Gpu& gpu) {
 // and a generated frame composed at t = 1/3, 2/3 and 1/2 is bit-identical to the real frame at every composed pixel
 // where A == B, within one code elsewhere, and untouched at every other pixel. SDR (RGBA8) and HDR10 (RGB10A2, PQ
 // thresholds and BT.2020 luma).
-void testHudGuard(Gpu& gpu, bool tenBit) {
+// anchorCase (26 Nov 2026): a still camera over flat sky with a crosshair, still for 30 frames (the aim anchor protects it:
+// flat surround, state bit 28 clear), then at frame 34 an 8 x 8 square jumps in at 40 px per frame (anything changed around
+// the aim window sets the busy bit and drops the anchor): state words, masks and counters must equal the reference at
+// every frame, so the flat-surround count and the busy test are checked on the GPU as well.
+void testHudGuard(Gpu& gpu, bool tenBit, bool anchorCase = false) {
     using hud_guard_scene::Scene;
     constexpr uint32_t W = 160, H = 112;
     const DXGI_FORMAT F = tenBit ? DXGI_FORMAT_R10G10B10A2_UNORM : DXGI_FORMAT_R8G8B8A8_UNORM;
-    const char* tag = tenBit ? "hud guard hdr10" : "hud guard";
+    const char* tag = anchorCase ? (tenBit ? "hud guard anchor hdr10" : "hud guard anchor") : tenBit ? "hud guard hdr10" : "hud guard";
     auto* device = gpu.device.Get();
     Plane real[2]{{pipeline::makeTexture(device, W, H, F, true), F, W, H, 4}, {pipeline::makeTexture(device, W, H, F, true), F, W, H, 4}};
     Plane generated{pipeline::makeTexture(device, W, H, F, true), F, W, H, 4};
@@ -2466,7 +2470,10 @@ void testHudGuard(Gpu& gpu, bool tenBit) {
     ID3D12Resource* gens[1] = {generated.texture.Get()};
     guard.createViews(device, stager, reals, gens, 1, nullptr);
     pipeline::PushHudGuardReference ref(W, H);
-    const Scene scene(W, H, {hud_guard_scene::Overlay::Kind::Crosshair, 2, 14, 1.0f, 0.96f, 14, 0.55f}, {true, 20}, {}, {true, 14.0f}, tenBit);
+    const Scene scene = anchorCase
+        ? Scene(W, H, {hud_guard_scene::Overlay::Kind::Crosshair, 2, 14, 1.0f, 0.96f, -1, 0.55f}, {false, 0.0f}, {hud_guard_scene::World::Kind::Sky},
+                {true, 40.0f, 8.0f, 8.0f, 0.92f, 52.0f / 112.0f, 34.0f}, tenBit)
+        : Scene(W, H, {hud_guard_scene::Overlay::Kind::Crosshair, 2, 14, 1.0f, 0.96f, 14, 0.55f}, {true, 20}, {}, {true, 14.0f}, tenBit);
     auto bytes = [](const std::vector<uint32_t>& f) { std::vector<uint8_t> b(f.size() * 4); std::memcpy(b.data(), f.data(), b.size()); return b; };
     auto toWords = [](const std::vector<uint8_t>& b) { std::vector<uint32_t> f(b.size() / 4); std::memcpy(f.data(), b.data(), f.size() * 4); return f; };
     auto channelDiff = [&](uint32_t a, uint32_t b) {
@@ -2478,7 +2485,7 @@ void testHudGuard(Gpu& gpu, bool tenBit) {
     std::vector<uint32_t> prev;
     int stateMismatch = 0, maskMismatch = 0, countMismatch = 0, cleanOff = 0, cleanCross = 0, composeBad = 0, composeChecked = 0, keptChecked = 0, untouchedBad = 0, frames = 0;
     uint64_t protectSeen = 0, aimSeen = 0;
-    const int kFrames = 26, kGone = 20;
+    const int kFrames = anchorCase ? 38 : 26, kGone = anchorCase ? 1000 : 20;
     for (int k = 0; k < kFrames; ++k) {
         const unsigned parity = unsigned(k) & 1u;
         const auto b = scene.frame(k, k < kGone);
@@ -2563,7 +2570,7 @@ void testHudGuard(Gpu& gpu, bool tenBit) {
     }
     std::printf("INFO %s: %d frames, protected pixel-frames %llu (aim window %llu), compose checked %d, background kept %d\n", tag, frames,
                 static_cast<unsigned long long>(protectSeen), static_cast<unsigned long long>(aimSeen), composeChecked, keptChecked);
-    checkValue(keptChecked > 0, std::format("{}: background pixels of the clean area kept the generator's output", tag), keptChecked, "> 0");
+    checkValue(keptChecked > 0 || anchorCase,std::format("{}: background pixels of the clean area kept the generator's output", tag), keptChecked, "> 0");
     checkValue(stateMismatch == 0, std::format("{}: state word equals the CPU reference at every pixel and frame", tag), stateMismatch, 0);
     checkValue(maskMismatch == 0, std::format("{}: mask equals the CPU reference at every pixel and frame", tag), maskMismatch, 0);
     checkValue(countMismatch == 0, std::format("{}: evidence counters (aim window included) equal the reference", tag), countMismatch, 0);
@@ -3110,6 +3117,8 @@ int main(int argc, char** argv) {
         {"hud-lock", [](Gpu& g) { testHudLock(g); }},
         {"hud-guard", [](Gpu& g) { testHudGuard(g, false); }},                       // stream "s12-hud"
         {"hud-guard-hdr10", [](Gpu& g) { testHudGuard(g, true); }},
+        {"hud-guard-anchor", [](Gpu& g) { testHudGuard(g, false, true); }},   // aim anchor: flat surround and busy bit
+        {"hud-guard-anchor-hdr10", [](Gpu& g) { testHudGuard(g, true, true); }},
         {"gpu-path-real-wait", [](Gpu& g) { testGpuPathRealWait(g); }},
         {"predict", [](Gpu& g) { testPredict(g, false); }},
         {"predict-hdr10", [](Gpu& g) { testPredict(g, true); }},

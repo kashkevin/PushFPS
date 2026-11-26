@@ -51,6 +51,62 @@ protection starts 6 real frames (200 ms) after an overlay appears and only while
 turn): over large flat areas (sky) little moves, so little is protected there; hit markers shorter than 200 ms are never
 protected.
 
+## Aim anchor (26 Nov 2026)
+
+Why: over a FLAT picture (sky, wall, fog) nothing around the crosshair moves above the thresholds, so the `nearby` rule
+never armed and the crosshair kept its copies. The anchor protects a still structure in the 128 x 128 aim window at the
+exact centre after `anchorFrames` = 30 still frames.
+
+Scope (second revision, after the first CI run showed the first version protected nearly a whole textured still picture,
+`remoteplay-checks` #449, and drove four tests red):
+- Flat surround only: at most `anchorFlatMax` = 144 of the 17 x 17 px around the pixel are a still structure (run and edge
+  counts as for the normal rule). A crosshair's own arms are about 120; texture, and the 2-px strokes of text, are far more.
+  So text over flat sky is NOT anchored (SIMULATED: 836 px protected at frame 39 in the 160 x 112 text-over-sky scene,
+  informational: that is the normal rule's neighbours, not a statement that the text is covered).
+- Never while anything near the aim window changes: state bit 28 (`iso`) is now set for aim-window pixels when any 16 x 16
+  tile overlapping the aim window grown by `anchorMargin` = 64 px has a pixel with change > `still`. This replaces the
+  per-pixel "moving pixel within `reach`" test, which a small object jumping 40 px between real frames escaped. A lone
+  mover that jumps further than the margin in one frame (200+ px at 4K, outside the 256 x 256 area both before and after)
+  is still not seen: a limit.
+- CPU reference (`PushHudGuardReference::update`), `shaders/PushHudGuardUpdate.hlsl` (busy test) and
+  `shaders/PushHudGuardMask.hlsl` (flat surround) implement the same rule; `testHudGuard(..., anchorCase)` in
+  `tests/integration/PushGpuTests.cpp` compares state words, masks and counters at every pixel for a flat-sky scene with a
+  square jumping in at frame 34 (WARP, SDR and HDR10; see below for what was run).
+
+Numbers (all SIMULATED: CPU reference, synthetic 160 x 112 pictures, g++ on Linux CI; the simulated generator moves the
+crosshair with the true camera motion, a real generator over a textureless picture may leave it in place, so the benefit
+may be smaller or absent on real hardware; nothing here was seen on a graphics card):
+- flat sky + crosshair, pan 20 px/frame: crosshair exact in 144/1200 (2X) and 312/2400 (3X) pixel-frames raw, 1200/1200 and
+  2400/2400 with the guard; SDR and HDR10 alike. Wrong pixels 230 -> 112 (2X), 250 -> 133 (3X); the rest are ghosts of the
+  sky's own gradient, not of the crosshair.
+- PERFECT generator, still flat sky, crosshair anchored, an object enters at frame 40 (8x8 at 40 px/frame, 24x2 at 60,
+  6x60 at 20; 2X and 3X): 0 wrong pixels and the crosshair exact in every case (protected pixel-frames 1408-2364).
+- Textured still picture with a crossing object (the original five cases): 0 wrong pixels, as before the anchor.
+- Crosshair gone at frame 45 over still flat sky: protected 352 px at frame 44, 0 at 45 (the picture around changed), then
+  252 px at 46-56 and 0 from 58. KNOWN LIMIT: the still sky beside the old crosshair keeps its `edge` count (falls by 1 a
+  frame from at most 15) and is anchored again once nothing changes, for at most 12 frames. They are unchanged pixels
+  (A + t(B - A) is the truth for them) and anything that changes drops the anchor, so harmless; pinned (gone by frame 58).
+- Dark pictures: nothing moves above the thresholds and the picture's own changes exceed `still` in the aim area, so there
+  is no protection (expected, same as raw); what is pinned is "not worse" (see the test comments for the bound).
+
+Findings of the same CI run for scenes that do not involve the anchor (SIMULATED):
+- HDR10 highlights (gain 1.6), circle pan 24, frames 16-23: the whole crosshair is protected (100 px) from frame 6, exact in
+  699/800 (2X) and 1398/1600 (3X) pixel-frames, raw 5/800 and 2/1600, wrong pixels 6422 -> 6328 and 5730 -> 5646. About one
+  crosshair pixel in eight is not exact: where the bright picture's PQ value is within `backgroundMatch` of the crosshair's
+  the compose keeps the generator's output. (The first run, frames 8-13, gave 510/600 at 2X: the same cause, since protection was
+  already on at frame 6.) Pinned at >= 80 % exact.
+- Soft-edged crosshair (anti-aliased 1-px fringe), circle pan 24, frames 8-13, fringe mean error in 8-bit codes, raw ->
+  guard: fringe 0.5: 41.0 -> 44.3 (2X), 41.8 -> 44.2 (3X); fringe 0.3: 27.4 -> 31.1 (2X), 27.4 -> 31.0 (3X). So the guard is
+  slightly WORSE than the raw generator on the fringe pixels (about +3 codes) while the core goes from 13 to 605 exact
+  pixel-frames and wrong pixels fall (3184 -> 2766). Cause: the pre-clean takes the fringe out of the generator's input and
+  the compose does not touch pixels that change every frame. NOT FIXED: a fix (blend the generator's pixel with the overlay at
+  the pixel's estimated coverage) needs a shader change that could not be run here. Pinned at 1.5 x raw + 5 codes.
+- Fast camera 60 px/frame and the dark-picture scenes: numbers not yet read (the run stopped earlier in the same test); the
+  assertions there are loose (25 % slack) until they are.
+
+Verification status: unit tests on g++ and MSVC (`remoteplay-checks`) read per run; the WARP anchor comparison is added in
+`PushGpuTests.cpp` and its result is reported separately. Unverified on any graphics card.
+
 ## Interface for the own frame generator (branch exp/s11-ownfg, PushWarp)
 
 PushWarp's compose already keeps pixels with A == B (`stillDelta`) as A, which restores the crosshair's core at c (like
