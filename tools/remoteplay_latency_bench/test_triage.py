@@ -211,6 +211,10 @@ class TriageTests(unittest.TestCase):
             self.assertTrue(report.ALLOWED.search("[INFO ] [" + component + "] x=1"), component)
         self.assertTrue(report.ALLOWED.search("[WARN ] [reflex] sleep overrun: in two consecutive blocks"))
         self.assertFalse(report.ALLOWED.search("[INFO ] [reflex-marker] source=1 type=0 status=0"))
+        # Stream "s12-hud" (review MUST 3): Live HUD Lock and HUD Guard evidence.
+        for component in ("hud-lock", "hud-guard"):
+            self.assertTrue(report.ALLOWED.search("[INFO ] [" + component + "] state=executing"), component)
+        self.assertFalse(report.ALLOWED.search("[INFO ] [hud-lockx] x=1"))
         for name in ("scripts/remoteplay/testkit/run-tests.ps1", "scripts/remoteplay/testkit/collect-diagnostics.ps1"):
             with open(os.path.join(os.path.dirname(__file__), "..", "..", name), encoding="utf-8") as f:
                 self.assertIn("'" + report.ALLOWED.pattern + "'", f.read(), name)

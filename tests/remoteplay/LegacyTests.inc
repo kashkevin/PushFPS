@@ -49,7 +49,7 @@ TEST(legacy_each_switch_alone_the_master_and_the_aliases) {
     CHECK(restoredMask(env({{"VEYRA_TEST_RP_FG_SCHED_LEGACY", "gridEarly"}})) == (1u << static_cast<unsigned>(PushLegacyPart::GridEarly)));
     CHECK(restoredMask(env({{"VEYRA_TEST_RP_FG_SCHED_LEGACY", "all"}})) == 3u);
     CHECK(veyra::engine::pushLegacyDescribe(env({{"VEYRA_TEST_RP_LEGACY_PACKAGE13", "1"}})) ==
-          "package13=1 package14=0 package15=0 package16=0 restored=[robustAdmit gridEarly dedupCadence gpuRealWaits uploadRelease nrHold videoOverlay reflexSleep displayUi gsyncRestart stallWitness lowDelaySchedule lowDelayMigrate frameProbe presentDownscale dedupAdmission statsReadings]");
+          "package13=1 package14=0 package15=0 package16=0 restored=[robustAdmit gridEarly dedupCadence gpuRealWaits uploadRelease nrHold videoOverlay reflexSleep displayUi gsyncRestart stallWitness lowDelaySchedule lowDelayMigrate hudGuard hudGuardClean frameProbe presentDownscale dedupAdmission statsReadings]");
     CHECK(veyra::engine::pushLegacyDescribe(env({})) == "package13=0 package14=0 package15=0 package16=0 restored=[]");
 }
 
@@ -65,7 +65,7 @@ TEST(legacy_package14_master_restores_only_what_came_after_package14) {
     CHECK(restoredMask(env({{"VEYRA_TEST_RP_LEGACY_PACKAGE14", "0"}})) == 0);
     CHECK(restoredMask(fromFile("VEYRA_TEST_RP_LEGACY_PACKAGE14 = 1\n")) == after14);
     CHECK(veyra::engine::pushLegacyDescribe(env({{"VEYRA_TEST_RP_LEGACY_PACKAGE14", "1"}})) ==
-          "package13=0 package14=1 package15=0 package16=0 restored=[videoOverlay reflexSleep displayUi gsyncRestart stallWitness lowDelaySchedule lowDelayMigrate frameProbe presentDownscale dedupAdmission statsReadings]");
+          "package13=0 package14=1 package15=0 package16=0 restored=[videoOverlay reflexSleep displayUi gsyncRestart stallWitness lowDelaySchedule lowDelayMigrate hudGuard hudGuardClean frameProbe presentDownscale dedupAdmission statsReadings]");
     // Package 13's master still restores everything, the parts after Package 14 included.
     CHECK(restoredMask(env({{"VEYRA_TEST_RP_LEGACY_PACKAGE13", "1"}})) == (1u << count) - 1);
 }
@@ -90,7 +90,7 @@ TEST(legacy_package15_master_restores_only_what_came_after_package15) {
     // The earlier masters imply it.
     CHECK((restoredMask(env({{"VEYRA_TEST_RP_LEGACY_PACKAGE14", "1"}})) & after15) == after15);
     CHECK((restoredMask(env({{"VEYRA_TEST_RP_LEGACY_PACKAGE13", "1"}})) & after15) == after15);
-    CHECK(veyra::engine::pushLegacyDescribe(env({{"VEYRA_TEST_RP_LEGACY_PACKAGE15", "1"}})).rfind("package13=0 package14=0 package15=1 package16=0 restored=[displayUi gsyncRestart stallWitness lowDelaySchedule lowDelayMigrate frameProbe presentDownscale dedupAdmission statsReadings]", 0) == 0);
+    CHECK(veyra::engine::pushLegacyDescribe(env({{"VEYRA_TEST_RP_LEGACY_PACKAGE15", "1"}})).rfind("package13=0 package14=0 package15=1 package16=0 restored=[displayUi gsyncRestart stallWitness lowDelaySchedule lowDelayMigrate hudGuard hudGuardClean frameProbe presentDownscale dedupAdmission statsReadings]", 0) == 0);
 }
 
 TEST(legacy_package16_master_restores_only_what_came_after_package16) {
@@ -98,12 +98,16 @@ TEST(legacy_package16_master_restores_only_what_came_after_package16) {
     const unsigned first = static_cast<unsigned>(veyra::engine::kPushLegacyFirstAfter16);
     const unsigned count = static_cast<unsigned>(PushLegacyPart::Count);
     const unsigned after16 = ((1u << count) - 1) & ~((1u << first) - 1);
+    CHECK(after16 & (1u << static_cast<unsigned>(PushLegacyPart::HudGuard17)));   // stream "s12-hud"
+    CHECK(after16 & (1u << static_cast<unsigned>(PushLegacyPart::HudGuardClean17)));
+    CHECK(!(after16 & (1u << static_cast<unsigned>(PushLegacyPart::LowDelayMigrate16))));
+    CHECK(restoredMask(env({{"VEYRA_TEST_RP_LEGACY_HUD_GUARD", "1"}})) == (1u << static_cast<unsigned>(PushLegacyPart::HudGuard17)));
+    CHECK(restoredMask(env({{"VEYRA_TEST_RP_LEGACY_HUD_GUARD_CLEAN", "1"}})) == (1u << static_cast<unsigned>(PushLegacyPart::HudGuardClean17)));
     CHECK(after16 & (1u << static_cast<unsigned>(PushLegacyPart::FrameProbe17)));   // stream "s12-pace"
     CHECK(after16 & (1u << static_cast<unsigned>(PushLegacyPart::PresentDownscale17)));
     CHECK(after16 & (1u << static_cast<unsigned>(PushLegacyPart::DedupAdmission17)));
     CHECK(after16 & (1u << static_cast<unsigned>(PushLegacyPart::StatsReadings17)));
     CHECK(restoredMask(env({{"VEYRA_TEST_RP_LEGACY_DEDUP_ADMISSION", "1"}})) == (1u << static_cast<unsigned>(PushLegacyPart::DedupAdmission17)));
-    CHECK(!(after16 & (1u << static_cast<unsigned>(PushLegacyPart::LowDelayMigrate16))));
     CHECK(restoredMask(env({{"VEYRA_TEST_RP_LEGACY_FRAME_PROBE", "1"}})) == (1u << static_cast<unsigned>(PushLegacyPart::FrameProbe17)));
     CHECK(restoredMask(env({{"VEYRA_TEST_RP_LEGACY_PRESENT_DOWNSCALE", "1"}})) == (1u << static_cast<unsigned>(PushLegacyPart::PresentDownscale17)));
     CHECK(restoredMask(env({{"VEYRA_TEST_RP_LEGACY_PACKAGE16", "1"}})) == after16);
@@ -112,7 +116,7 @@ TEST(legacy_package16_master_restores_only_what_came_after_package16) {
     CHECK((restoredMask(env({{"VEYRA_TEST_RP_LEGACY_PACKAGE15", "1"}})) & after16) == after16);
     CHECK((restoredMask(env({{"VEYRA_TEST_RP_LEGACY_PACKAGE13", "1"}})) & after16) == after16);
     CHECK(veyra::engine::pushLegacyDescribe(env({{"VEYRA_TEST_RP_LEGACY_PACKAGE16", "1"}})) ==
-          "package13=0 package14=0 package15=0 package16=1 restored=[frameProbe presentDownscale dedupAdmission statsReadings]");
+          "package13=0 package14=0 package15=0 package16=1 restored=[hudGuard hudGuardClean frameProbe presentDownscale dedupAdmission statsReadings]");
 }
 
 TEST(legacy_switches_work_from_slipstream_ini) {

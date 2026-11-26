@@ -146,6 +146,7 @@ struct PlayerSnapshot {
     uint64_t pacingFrames=0,pacingRepaired=0;
     int hudLockState=0;  // PushFPS Live HUD Lock: EnhanceGraph::hudLockState()
     PushEffectFacts pushEffect;  // stream "s12-settings": the facts of the last [settings-effect] line (PushSettingsEffect.h)
+    int hudGuardState=0; // stream "s12-hud": EnhanceGraph::hudGuardState() (beside hudLockState, which keeps its values)
     // PushFPS experiment VEYRA_EXP_RP_STREAM_DEDUP (remoteplay/StreamCadence.h): duplicate removal for
     // hardware-decoded Remote Play pictures. Refreshed every 10 s while the switch is set; all zero
     // otherwise. Rates are counts over that window divided by its length. Presented frames are counted

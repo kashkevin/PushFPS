@@ -37,9 +37,12 @@
 //                                               source is NOT rolled back (Package 15's strict GPU DIS removed the device)
 //   VEYRA_TEST_RP_LEGACY_LOWDELAY_MIGRATE = 1   no one-time switch-off of a saved "Lower delay" on (pushLowDelayMigrate)
 //
-// Since Package 17 (stream "s12-pace", 25 Nov 2026), restored together by ONE line (every earlier master restores these too):
+// Since Package 17 (streams "s12-hud" and "s12-pace", 25 Nov 2026), restored together by ONE line (every earlier master restores these too):
 //
 //   VEYRA_TEST_RP_LEGACY_PACKAGE16 = 1          every part below as Package 16
+//   VEYRA_TEST_RP_LEGACY_HUD_GUARD = 1          Live HUD Lock without HUD Guard (no crosshair pre-clean, no compose of
+//                                               protected pixels from the real frames: Package 16's lock alone)
+//   VEYRA_TEST_RP_LEGACY_HUD_GUARD_CLEAN = 1    HUD Guard composes but does not pre-clean the generator's input (O1 only)
 //   VEYRA_TEST_RP_LEGACY_FRAME_PROBE = 1        no frame probe (no thumbnail list after each Present, no [frame-probe] line)
 //   VEYRA_TEST_RP_LEGACY_PRESENT_DOWNSCALE = 1  the present blit shrinks a larger picture with one bilinear tap (Package 16)
 //                                               instead of the area filter in linear light
@@ -68,6 +71,7 @@ enum class PushLegacyPart : unsigned {
     DisplayUi, GsyncRestart, StallWitness,
     LowDelaySchedule16, LowDelayMigrate16,   // stream "s10-lowdelay2" (row-ON schedule; the one-time preference reset)
     // Package 17 (after Package 16): restored by PACKAGE16 = 1 and by the earlier masters.
+    HudGuard17, HudGuardClean17,             // stream "s12-hud"
     FrameProbe17, PresentDownscale17, DedupAdmission17, StatsReadings17,   // stream "s12-pace"
     Count
 };
@@ -76,7 +80,7 @@ inline constexpr PushLegacyPart kPushLegacyFirstAfter14 = PushLegacyPart::VideoO
 // The first part that Package 15 did not have: PACKAGE15 = 1 restores this one and every later one.
 inline constexpr PushLegacyPart kPushLegacyFirstAfter15 = PushLegacyPart::DisplayUi;
 // The first part that Package 16 did not have: PACKAGE16 = 1 restores this one and every later one.
-inline constexpr PushLegacyPart kPushLegacyFirstAfter16 = PushLegacyPart::FrameProbe17;
+inline constexpr PushLegacyPart kPushLegacyFirstAfter16 = PushLegacyPart::HudGuard17;
 struct PushLegacyName {
     std::string_view part, name, alias;
 };
@@ -98,6 +102,8 @@ inline constexpr std::array<PushLegacyName, static_cast<std::size_t>(PushLegacyP
     {"stallWitness", "VEYRA_TEST_RP_LEGACY_STALL_WITNESS", ""},
     {"lowDelaySchedule", "VEYRA_TEST_RP_LEGACY_LOWDELAY_SCHEDULE", ""},
     {"lowDelayMigrate", "VEYRA_TEST_RP_LEGACY_LOWDELAY_MIGRATE", ""},
+    {"hudGuard", "VEYRA_TEST_RP_LEGACY_HUD_GUARD", ""},
+    {"hudGuardClean", "VEYRA_TEST_RP_LEGACY_HUD_GUARD_CLEAN", ""},
     {"frameProbe", "VEYRA_TEST_RP_LEGACY_FRAME_PROBE", ""},
     {"presentDownscale", "VEYRA_TEST_RP_LEGACY_PRESENT_DOWNSCALE", ""},
     {"dedupAdmission", "VEYRA_TEST_RP_LEGACY_DEDUP_ADMISSION", ""},

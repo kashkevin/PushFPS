@@ -834,13 +834,16 @@ VGroup {
     VRow {
         objectName: "pushfps-hudlock-row"
         label: qsTr("实时 HUD 锁定")
-        help: qsTr("补出来的帧会把画面上静止的文字、准星和血条跟着背景一起拉动，看起来发糊或抖动。开启后 PushFPS 每一帧都会找出静止的 HUD 像素，补帧时直接用主机原来的像素，不需要画框")
+        help: qsTr("补出来的帧会把画面上静止的文字、准星和血条跟着背景一起拉动，看起来发糊或抖动。开启后 PushFPS 每一帧都会找出静止的 HUD 像素，补帧时直接用主机原来的像素，不需要画框。画面周围在动约 0.2 秒后才开始；半透明的准星和文字不在其内。画面纹理很少（天空、黑暗、雾）时可能不起作用；会让每一帧晚约 0.3–0.7 毫秒显示（估计）；开启“更低延迟”时只放回准星，不去掉残影")
         // What actually runs (EnhanceGraph::hudLockState): a pass that could not start says so.
         readonly property int hudState: Number(quick.liveStats.hudLockState || 0)
+        // HUD Guard beside it (EnhanceGraph::hudGuardState): 2 = the lock runs but the guard could not start.
+        readonly property int guardState: Number(quick.liveStats.hudGuardState || 0)
         hint: !quick.ownTechPossible ? (quick.fgPossible ? qsTr("XeSS 自己生成画面，不能同时使用") : (Support.status(veyra, "frame-generation").reason || ""))
             : veyra.hudLock === true && hudState === 2 ? qsTr("实时 HUD 锁定没能在这台电脑上启动，补帧照常运行（原因见日志）")
-            : veyra.hudLock === true && hudState === 1 ? qsTr("正在运行：文字和准星在补出来的帧里保持清晰")
-            : qsTr("每一帧自动找出 HUD，文字和准星在补出来的帧里保持清晰")
+            : veyra.hudLock === true && hudState === 1 && guardState === 2 ? qsTr("准星残影保护没能启动，实时 HUD 锁定照常运行（原因见日志）")
+            : veyra.hudLock === true && hudState === 1 ? qsTr("正在运行：静止的 HUD 像素在补出来的帧里用主机原来的像素")
+            : qsTr("补帧时把静止的准星和文字留在原位（需要画面先转动起来）")
         VSwitch {
             objectName: "pushfps-hudlock"
             enabled: quick.ownTechPossible && veyra.fgEnabled

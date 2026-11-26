@@ -246,7 +246,12 @@ Item {
             quick.liveStats = ({ hudLockState: 2 })
             compare(control("pushfps-hudlock-row").hint, qsTr("实时 HUD 锁定没能在这台电脑上启动，补帧照常运行（原因见日志）"))
             quick.liveStats = ({ hudLockState: 1 })
-            compare(control("pushfps-hudlock-row").hint, qsTr("正在运行：文字和准星在补出来的帧里保持清晰"))
+            compare(control("pushfps-hudlock-row").hint, qsTr("正在运行：静止的 HUD 像素在补出来的帧里用主机原来的像素"))
+            // Review 2 SHOULD 4: the lock runs but HUD Guard could not start: said, not "running".
+            quick.liveStats = ({ hudLockState: 1, hudGuardState: 2 })
+            compare(control("pushfps-hudlock-row").hint, qsTr("准星残影保护没能启动，实时 HUD 锁定照常运行（原因见日志）"))
+            quick.liveStats = ({ hudLockState: 1, hudGuardState: 3 })
+            compare(control("pushfps-hudlock-row").hint, qsTr("正在运行：静止的 HUD 像素在补出来的帧里用主机原来的像素"))
             veyra.hudLock = false
             quick.liveStats = ({})
         }

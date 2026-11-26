@@ -207,6 +207,29 @@ jobs:
           if ($cap -and $cap.State -ne 'Installed') { Add-WindowsCapability -Online -Name $cap.Name | Out-Host }
           Get-WindowsCapability -Online -Name 'Tools.Graphics.DirectX*' | Format-Table Name, State
 
+      # Stream "s12-hud" (review S12_HUD_REVIEW1 MUST 2): HUD Guard's graph hooks at 2X / 3X / 4X, HDR10 and with Lower
+      # delay, through the real engine with the fake VFG. ffmpeg (for the 10-bit PQ clip of the HDR10 run) from Chocolatey.
+      - name: ffmpeg for the HDR10 clip (HUD Guard end-to-end)
+        continue-on-error: true
+        timeout-minutes: 10
+        run: |
+          choco install ffmpeg -y --no-progress | Select-Object -Last 3 | Out-Host
+          Get-Command ffmpeg -ErrorAction SilentlyContinue | Format-Table Name, Source
+
+      - name: HUD Guard end-to-end engine test
+        timeout-minutes: 30
+        env:
+          E2E_D3D12_DEBUG: '1'
+        run: |
+          $exe = Get-ChildItem $env:BUILD -Recurse -Filter 'veyra_lowdelay_e2e_tests.exe' | Select-Object -First 1
+          $env:PATH = "$($exe.DirectoryName);$env:DEPS\vcpkg\installed\x64-windows\bin;$env:PATH;C:\ProgramData\chocolatey\bin"
+          $out = Join-Path $env:RUNNER_TEMP 'hudguard-e2e'
+          python "$env:GITHUB_WORKSPACE\tests\integration\hudguard_e2e.py" --exe $exe.FullName --out $out --seconds 14
+          $code = $LASTEXITCODE
+          Get-ChildItem $out -Include *.y4m, *.mp4, *.mkv -Recurse | Remove-Item -ErrorAction SilentlyContinue
+          Write-Host "hudguard e2e exit $code"
+          if ($code -ne 0) { exit 1 }
+
       - name: Lower delay end-to-end engine test
         timeout-minutes: 55
         env:

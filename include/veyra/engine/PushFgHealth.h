@@ -91,8 +91,9 @@ struct PushHealthStage {
     const char* name;
 };
 // Package 16: BaseTail 35, VfgCapture 36, RealCompose 37 (the parts of the "picture" that had no timer of their own).
-inline constexpr std::array<PushHealthStage, 8> kPushHealthStages{{{0, "color"}, {5, "fg1"}, {6, "fg2"}, {12, "fgBatch"}, {13, "blit"},
-                                                                  {35, "baseTail"}, {36, "vfgCapture"}, {37, "realCompose"}}};
+// Stream "s12-hud": HudGuard 38 (HUD Guard's update + pre-clean; -1 while Live HUD Lock is off).
+inline constexpr std::array<PushHealthStage, 9> kPushHealthStages{{{0, "color"}, {5, "fg1"}, {6, "fg2"}, {12, "fgBatch"}, {13, "blit"},
+                                                                  {35, "baseTail"}, {36, "vfgCapture"}, {37, "realCompose"}, {38, "hudGuard"}}};
 
 // Session totals the engine keeps (cumulative); the window reports their growth. A total that falls (a new session) counts
 // from zero again.
