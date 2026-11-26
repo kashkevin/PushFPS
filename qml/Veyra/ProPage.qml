@@ -1770,6 +1770,9 @@ VPage {
                             on: veyra.fgEnabled
                             onToggled: on => veyra.fgEnabled = on
                             open: true
+                            // Stream "s12-settings": what runs now, and a status line under each row from the same facts as [settings-effect].
+                            PushEffectBoard { id: fgEffect; active: fgCard.open }
+                            PushRunningNow { objectName: "list-fg-running-now"; effect: fgEffect.facts; Layout.bottomMargin: 4 }
 
                             VRow {
                                 label: qsTr("补帧方式")
@@ -1808,6 +1811,7 @@ VPage {
                                     onPicked: id => veyra.fgMultiplier = Number(id)
                                 }
                             }
+                            PushEffectNote { objectName: "list-fg-note-multiplier"; effect: fgEffect.facts; setting: "multiplier"; pauseSeconds: veyra.fgBackendName === "vfg" ? 3 : 1 }
                             // PushFPS adaptive multiplier (EnhancementSettings::fgAdaptive): the multiplier
                             // above becomes the ceiling. XeSS paces itself; 2X-only backends have nothing to adapt.
                             VRow {
@@ -1826,6 +1830,7 @@ VPage {
                                     }
                                 }
                             }
+                            PushEffectNote { objectName: "list-fg-note-adaptive"; effect: fgEffect.facts; setting: "adaptive"; alsoDedup: true }
                             // PushFPS measurements: ground-truth quality (any source with CPU frames) and the
                             // Remote Play latency test (PS5 streaming).
                             VRow {
@@ -1852,6 +1857,7 @@ VPage {
                                     }
                                 }
                             }
+                            PushEffectNote { objectName: "list-fg-note-pacingRepair"; effect: fgEffect.facts; setting: "pacingRepair"; alsoDedup: true }
                             VRow {
                                 objectName: "list-fg-hudlock-row"
                                 label: qsTr("实时 HUD 锁定")
@@ -1863,6 +1869,7 @@ VPage {
                                     onToggled: checked => veyra.hudLock = checked
                                 }
                             }
+                            PushEffectNote { objectName: "list-fg-note-hudLock"; effect: fgEffect.facts; setting: "hudLock"; pauseSeconds: 1 }
                             VRow {
                                 label: qsTr("DLSS 性能模式")
                                 visible: veyra.fgBackendName === "dlss"
@@ -1886,6 +1893,7 @@ VPage {
                                     onPicked: id => veyra.vfgQuality = Number(id)
                                 }
                             }
+                            PushEffectNote { objectName: "list-fg-note-vfgQuality"; effect: fgEffect.facts; setting: "vfgQuality"; visible: veyra.fgBackendName === "vfg"; pauseSeconds: 3 }
                             VRow {
                                 label: qsTr("PushFlow 档位")
                                 visible: veyra.fgBackendName === "pushflow"
@@ -1939,7 +1947,7 @@ VPage {
                             VRow {
                                 label: qsTr("VFG 自动调控")
                                 visible: veyra.fgBackendName === "vfg"
-                                enabled: veyra.vfgQuality !== 0 && veyra.fgMultiplier === 2
+                                enabled: veyra.vfgQuality > 0 && veyra.vfgQuality < 3 && veyra.fgMultiplier === 2   // s12 D2: mixed levels 3-5 never load the faster model (VfgBackend.cpp)
                                 opacity: enabled ? 1 : 0.5
                                 hint: qsTr("实时采集 2X 时，当前档来不及赶上屏幕刷新，这一对帧就改用下一档，不丢帧也不加延迟。多占约 2 GB 显存，显存不够时不生效")
                                 VSwitch {
@@ -1948,6 +1956,7 @@ VPage {
                                     onToggled: checked => veyra.vfgAutoRegulate = checked
                                 }
                             }
+                            PushEffectNote { objectName: "list-fg-note-vfgAutoRegulate"; effect: fgEffect.facts; setting: "vfgAutoRegulate"; visible: veyra.fgBackendName === "vfg" && parts.length > 0 }
                             VRow {
                                 label: qsTr("严格补帧节奏")
                                 hint: qsTr("帧同步 · 默认关闭")
@@ -1956,6 +1965,7 @@ VPage {
                                     onToggled: checked => veyra.fgStrict = checked
                                 }
                             }
+                            PushEffectNote { objectName: "list-fg-note-strictCadence"; effect: fgEffect.facts; setting: "strictCadence" }
                             VSubGroup {
                                 objectName: "list-fg-flow-group"
                                 Layout.fillWidth: true
@@ -1963,6 +1973,7 @@ VPage {
                                 label: qsTr("光流 · 运动估算")
                                 count: veyra.opticalFlowChoice === 1 ? 5 : 4
                                 expanded: true
+                                PushEffectNote { objectName: "list-fg-note-flow"; effect: fgEffect.facts; setting: "flow"; groupRows: veyra.opticalFlowChoice === 1 ? 3 : 2 }
                                 VRow {
                                     label: qsTr("光流算法")
                                     hint: qsTr("补帧与 NR 共用 · 输入后计算一次")
@@ -1982,6 +1993,7 @@ VPage {
                                         onToggled: checked => veyra.edgeAegis = checked
                                     }
                                 }
+                                PushEffectNote { objectName: "list-fg-note-edgeAegis"; effect: fgEffect.facts; setting: "edgeAegis" }
                                 VRow {
                                     label: qsTr("AMD 性能档")
                                     hint: qsTr("光流宽高减半，更省但更糙")
@@ -2002,8 +2014,11 @@ VPage {
                                     }
                                 }
                                 DedupModeRow { backend: veyra; namePrefix: "list" }
+                                PushEffectNote { objectName: "list-fg-note-dedup"; effect: fgEffect.facts; setting: "dedup" }
                             }
                             NvidiaLowLatencyEditor { namePrefix: "list" }
+                            PushEffectNote { objectName: "list-fg-note-nvidiaLowLatency"; effect: fgEffect.facts; setting: "nvidiaLowLatency"; visible: veyra.nvidiaLowLatencyAvailable === true && parts.length > 0 }
+                            PushEffectNote { objectName: "list-fg-note-lowQueue"; effect: fgEffect.facts; setting: "lowQueue"; visible: veyra.nvidiaLowLatencyAvailable !== true && parts.length > 0 }
                             VRow {
                                 visible: !veyra.nvidiaLowLatencyAvailable
                                 label: qsTr("低延迟队列")

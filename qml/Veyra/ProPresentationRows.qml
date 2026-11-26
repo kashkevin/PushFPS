@@ -25,7 +25,7 @@ ColumnLayout {
     // card asks the driver again.
     VRow {
         label: qsTr("可变刷新")
-        help: qsTr("G-SYNC 或 FreeSync：显示器跟着画面刷新，而不是按固定频率。帧率不稳时也不撕裂、不卡顿")
+        help: qsTr("请求 G-SYNC 或 FreeSync，让显示器按画面刷新而不是按固定频率。是否真的生效只看 NVIDIA 驱动的报告（窗口模式下驱动可能不启用），PushFPS 自己测不到")
         hint: veyra.vrrHint
         VSwitch {
             objectName: "presentation-vrr"
@@ -35,6 +35,9 @@ ColumnLayout {
             onToggled: checked => veyra.variableRefresh = checked
         }
     }
+    // Stream "s12-settings" (review 3 MUST 2): the switch is read only with display sync Automatic; say so.
+    PushEffectBoard { id: presentationEffect; active: presentationRows.visible }
+    PushEffectNote { objectName: "presentation-note-vrr"; effect: presentationEffect.facts; setting: "vrr" }
     NvidiaVrrProfileRow { backend: presentationRows.profileTools }
     VRow {
         label: qsTr("输出上限")

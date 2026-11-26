@@ -1894,8 +1894,10 @@ void EnhanceGraph::streamChangeCounters(uint64_t& measured,uint64_t& timeouts,ui
     waitMsMean=waited?counters.waitMsSum/double(waited):0.0;
 }
 void EnhanceGraph::composeHudLock(ID3D12GraphicsCommandList* list,unsigned generatedSlot,unsigned heldParity){
-    if(hudLock_&&!hudLock_->compose(list,tracker_,generatedSlot,heldParity))
+    if(!hudLock_)return;
+    if(!hudLock_->compose(list,tracker_,generatedSlot,heldParity))
         veyra::log::warn("hud-lock",std::format("compose skipped slot={} held={}",generatedSlot,heldParity));
+    else ++hudLockComposes_;   // stream "s12-settings": a recorded compose dispatch (CPU counter, no readback)
 }
 
 bool EnhanceGraph::fsrActive() const { return fsrFgBackend_&&fsrFgBackend_->available(); }
@@ -3762,7 +3764,7 @@ bool EnhanceGraph::process(const AVFrame* frame, double ptsMs, bool reset, Frame
             tracker_.transition(list,fgBaseFlow_.Get(),D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
             const float c[8]={uintBits(nvofW_),uintBits(nvofH_),uintBits(workW_),uintBits(workH_),0,0,0,0};
             fgFlowAdaptPass_.bind(list,c,gpuHandleOf(fgFlowAdaptPass_,0).ptr,gpuHandleOf(fgFlowAdaptPass_,1).ptr);
-            list->Dispatch((workW_+15)/16,(workH_+15)/16,1);tracker_.uavBarrier(list,fgBaseFlow_.Get());
+            list->Dispatch((workW_+15)/16,(workH_+15)/16,1);tracker_.uavBarrier(list,fgBaseFlow_.Get());++flowRefineDispatches_;   // stream "s12-settings": a recorded dispatch (CPU counter, no readback)
             tracker_.transition(list,fgBaseFlow_.Get(),D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             // Include refinement/fill/adaptation in the existing optical-flow
             // timing. Otherwise the performance panel silently omits this work.

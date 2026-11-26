@@ -958,7 +958,7 @@ PresentationSettings VideoPresenter::configurePresentation(gfx::D3D12DeviceConte
         return line;
     };
     const std::wstring syncMode=vrrSync_?L"显示同步：自动 + 可变刷新":requested.display==DisplaySync::Automatic?L"显示同步：自动":vsync?L"显示同步：垂直同步":L"显示同步：允许撕裂";
-    const std::wstring syncDetail=vrrSync_?(gfx::vrrLevel(vrr_)>=4?L"屏幕跟着画面刷新，不撕裂":L"已请求，等待驱动确认"):requested.display==DisplaySync::Automatic?L"不撕裂，也不等待垂直同步（延迟最低）":L"";
+    const std::wstring syncDetail=vrrSync_?(gfx::vrrLevel(vrr_)>=4?L"驱动报告可变刷新已生效":L"已请求，等待驱动确认"):requested.display==DisplaySync::Automatic?L"不撕裂，也不等待垂直同步（延迟最低）":L"";
     if(!reflexDisabled){effective.enabled=false;effective.nvidiaLowLatency=NvidiaLowLatency::Off;sink_.configurePacing(false,vsync,tearing);status=join({L"英伟达低延迟撤销失败，请关闭视频后重试",syncMode,syncDetail});return effective;}
     if(xessActive()){
         // The provider owns Present for its generated frames, so neither the

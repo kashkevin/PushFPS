@@ -32,6 +32,7 @@
 #include "veyra/engine/PushHudSampler.h"
 #include "veyra/engine/PushPipelineProbe.h"
 #include "veyra/engine/PushQualityProbe.h"
+#include "veyra/engine/PushSettingsEffect.h"
 #include "veyra/engine/PushInputLatencyProbe.h"
 #include "veyra/engine/DisplayStateService.h"
 namespace veyra::source { struct RemotePlayConnectDesc; class RemotePlaySessionSource; struct MoonlightConnectDesc; class MoonlightSessionSource; struct XboxConnectDesc; class XboxSessionSource; }
@@ -144,6 +145,7 @@ struct PlayerSnapshot {
     // PushFPS Frame Pacing Repair counters (PushPacingRepair.h): kept frames seen, re-timed.
     uint64_t pacingFrames=0,pacingRepaired=0;
     int hudLockState=0;  // PushFPS Live HUD Lock: EnhanceGraph::hudLockState()
+    PushEffectFacts pushEffect;  // stream "s12-settings": the facts of the last [settings-effect] line (PushSettingsEffect.h)
     // PushFPS experiment VEYRA_EXP_RP_STREAM_DEDUP (remoteplay/StreamCadence.h): duplicate removal for
     // hardware-decoded Remote Play pictures. Refreshed every 10 s while the switch is set; all zero
     // otherwise. Rates are counts over that window divided by its length. Presented frames are counted

@@ -121,3 +121,6 @@ PushKbmPage 1.0 PushKbmPage.qml
 PushKbmBindings 1.0 PushKbmBindings.qml
 PushKbmWizard 1.0 PushKbmWizard.qml
 PushNeuralRuntime 1.0 PushNeuralRuntime.qml
+PushEffectBoard 1.0 PushEffectBoard.qml
+PushEffectNote 1.0 PushEffectNote.qml
+PushRunningNow 1.0 PushRunningNow.qml

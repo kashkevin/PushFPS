@@ -10,6 +10,7 @@ ColumnLayout {
     VRow {
         objectName: root.namePrefix+"-nvidia-low-latency-row"
         label: qsTr("英伟达低延迟")
+        help: qsTr("PushFPS 在每一帧前通过 NVIDIA 驱动做一次类似 Reflex 的等待（NvAPI Sleep），限制显卡里排队的画面。这不是 NVIDIA 控制面板里的“低延迟模式”。采集卡画面的游戏不在这台电脑上运行，所以它只作用于 PushFPS 自己这一段，效果没有测出来。只在 NVIDIA 显卡上可用")
         hintBelow: true
         hint: !root.available ? qsTr("需要 NVIDIA 显卡") : ""
         VSeg {

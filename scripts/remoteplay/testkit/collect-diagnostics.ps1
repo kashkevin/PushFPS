@@ -26,7 +26,7 @@
         [frame-flow] [frame-rate] [pacing] [present-deviation] [fg-validity] [fg-drops]
         [display-vrr] [display-refresh] [display-latency] [display-query]
         [gpu-failure] [gpu-reconnect] [reset-lifecycle] [engine-hang] [engine-test] [crash]
-        [overlay-hooks] [log-backpressure] [capture-timing] [content-dedup] and the kit's other families (run-tests.ps1),
+        [overlay-hooks] [log-backpressure] [capture-timing] [content-dedup] [settings-effect] and the kit's other families (run-tests.ps1),
         and [qml] lines that start with [update-check]
     and the line holds none of these words: registration, regist_key, rp_key, account, psn (except in psnr=),
     token, secret, passw, ssid, morning, nickname. In every text of the zip: folder and file paths become [path];
@@ -87,7 +87,7 @@ function Get-UtcStamp {
 # --- redaction -----------------------------------------------------------------------------------
 # The same rules as run-tests.ps1 and tools/remoteplay_latency_bench/report.py (redact_line); a test holds
 # the three copies equal. Change them together.
-$allowedLine = '\[(INFO |WARN |ERROR|TRACE)\] \[(push-(latency|quality|benchmark|mode|hardware|profile|adaptive-fg|predict)|remoteplay(-[a-z0-9-]+)?|slipstream-(governor|gpu-budget|watch|config|latency|latency-test|press|delivery|sr|fg|autorun|smartlink|swapchain|present|pipeline|nr|clean|quality|input|input-poll|scanout|cadence|net|smooth|capture|sizes)|capture-(driver-age|buffer|timing|stall|stall-cause)|content-dedup|experiment-switches|nr-(runtime-status|adapt|reuse|model|hold)|frame-(flow|rate)|pacing|present-deviation|present-contract|present-priority|present-path|present-overlay|graph-priority|qml-window|ui-(dialog|fullscreen|window|resume)|fg-(validity|drops|ull|sched|health)|display-(vrr|refresh|latency|query)|gpu-(failure|reconnect|path)|reset-lifecycle|engine-(hang|test)|vrr-profile|scheduler|crash|reflex|overlay-hooks|log-backpressure|qml\] \[update-check)\] '
+$allowedLine = '\[(INFO |WARN |ERROR|TRACE)\] \[(push-(latency|quality|benchmark|mode|hardware|profile|adaptive-fg|predict)|remoteplay(-[a-z0-9-]+)?|slipstream-(governor|gpu-budget|watch|config|latency|latency-test|press|delivery|sr|fg|autorun|smartlink|swapchain|present|pipeline|nr|clean|quality|input|input-poll|scanout|cadence|net|smooth|capture|sizes)|capture-(driver-age|buffer|timing|stall|stall-cause)|content-dedup|settings-effect|experiment-switches|nr-(runtime-status|adapt|reuse|model|hold)|frame-(flow|rate)|pacing|present-deviation|present-contract|present-priority|present-path|present-overlay|graph-priority|qml-window|ui-(dialog|fullscreen|window|resume)|fg-(validity|drops|ull|sched|health)|display-(vrr|refresh|latency|query)|gpu-(failure|reconnect|path)|reset-lifecycle|engine-(hang|test)|vrr-profile|scheduler|crash|reflex|overlay-hooks|log-backpressure|qml\] \[update-check)\] '
 $refusedLine = '\[remoteplay-discovery\]|registration|regist[_ -]?key|rp[_ -]?key|account|psn(?!r=)|token|secret|passw|ssid|morning|nickname'
 
 function Protect-Text([string]$Line) {

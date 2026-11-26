@@ -1,3 +1,4 @@
+#include "veyra/source/PushDriverAge.h"
 #include "veyra/source/CaptureCardSource.h"
 #include "veyra/source/DeckLinkCapture.h"
 #include "veyra/source/CaptureFrameRate.h"
@@ -472,19 +473,24 @@ struct CaptureCardSource::Impl:ISampleGrabberCB {
     // us: graph clock now - (run reference + sample start). Anything the driver queued
     // shows up here and nowhere else (some GC573 users report high latency, others not).
     // The run reference is read just before Run, so the value can read a few ms high.
-    ComPtr<IReferenceClock> ageClock;REFERENCE_TIME runReference=0;std::vector<double> driverAges;
+    ComPtr<IReferenceClock> ageClock;REFERENCE_TIME runReference=0;std::vector<double> driverAges;std::vector<std::pair<double,double>> driverAgePoints;
     void observeDriverAge(REFERENCE_TIME sampleStart){
         if(!ageClock||runReference<=0)return;
         REFERENCE_TIME now=0;if(FAILED(ageClock->GetTime(&now)))return;
         const double ms=double(now-runReference-sampleStart)/10000.0;
-        if(!std::isfinite(ms)||ms<-1000||ms>10000)return;
-        driverAges.push_back(ms);
+        // Review 1 SHOULD 13: no upper bound: the drift alone passes 10 s after about 3 h (his session a ran 21 h).
+        if(!std::isfinite(ms)||ms<-1000)return;
+        driverAges.push_back(ms);driverAgePoints.emplace_back(double(now)/1e7,ms);
         if(driverAges.size()<600)return;
         auto sorted=driverAges;std::sort(sorted.begin(),sorted.end());
-        log::info("capture-driver-age",std::format("frames={} p50Ms={:.1f} p95Ms={:.1f} minMs={:.1f} maxMs={:.1f} driverBuffers={} "
-            "(driver timestamp -> our callback; includes one frame if the driver stamps the frame start; ~few ms high)",
-            sorted.size(),sorted[sorted.size()/2],sorted[sorted.size()*95/100],sorted.front(),sorted.back(),driverBuffers));
-        driverAges.clear();
+        // Stream "s12-settings": the absolute age drifts with the device clock (his Package 16 log: +0.9 ms a second); the
+        // drift and the spread around it (PushDriverAge.h) are the readings to trust, the absolute values are not.
+        const auto fit=pushDriverAgeFit(driverAgePoints);
+        log::info("capture-driver-age",std::format("frames={} p50Ms={:.1f} p95Ms={:.1f} minMs={:.1f} maxMs={:.1f} driverBuffers={} driftMsPerS={:.3f} detrendedP95Ms={:.2f} "
+            "(driver timestamp -> our callback; the absolute values drift with the device clock: read driftMsPerS, and detrendedP95Ms, "
+            "the spread around the drift line, which a driver queue would raise; includes one frame if the driver stamps the frame start)",
+            sorted.size(),sorted[sorted.size()/2],sorted[sorted.size()*95/100],sorted.front(),sorted.back(),driverBuffers,fit.valid?fit.driftMsPerS:0.0,fit.valid?fit.residualP95Ms:-1.0));
+        driverAges.clear();driverAgePoints.clear();
     }
     long driverBuffers=0;
     bool externalTimeAnchored=false;double externalTimeOffset=0;

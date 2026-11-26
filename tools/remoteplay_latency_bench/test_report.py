@@ -180,6 +180,15 @@ class KitFiles(unittest.TestCase):
         for name in ("run-tests.ps1", "collect-diagnostics.ps1"):
             with open(os.path.join(self.kit, name), encoding="ascii") as f: self.assertIn("|cadence|net|smooth|capture|sizes)", f.read())
 
+    def test_the_settings_effect_line_is_copied_by_the_kit(self):
+        # Stream s12-settings: [settings-effect] (engine/PushSettingsEffect.h, pushSettingsEffectLine) in all three lists.
+        line = ("2026-11-25T20:30:00.000Z t=1 [INFO ] [settings-effect] trigger=window multiplier=on/run:limited-by-smoothness "
+                "flow=on/idle:own-motion requestedX=4 adaptiveX=4 capX=4 runningX=3 generatedPerReal=2.00 vfgQuality=5 vfgModels=L,M "
+                "(requested/executing per setting with the reason; window about 10 s; evidence only)")
+        self.assertEqual(report.safe_lines([line]), [line])
+        for name in ("run-tests.ps1", "collect-diagnostics.ps1"):
+            with open(os.path.join(self.kit, name), encoding="ascii") as f: self.assertIn("|content-dedup|settings-effect|", f.read())
+
     def test_the_ull_lines_are_copied_by_the_kit(self):
         # Stream fglat: the [fg-ull] lines FG_LATENCY.md tells the reader to look for must pass the kit's allowlist
         # (it was missing when Package 12 was merged). Both formats as EngineController.cpp writes them.

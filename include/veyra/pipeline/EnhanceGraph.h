@@ -798,6 +798,10 @@ public:
     // could not be created (frame generation runs without it), 3 asked for but this frame generation
     // has no graph frames to lock (off, or XeSS generating inside its presenter).
     int hudLockState() const { if(!desc_.hudLock)return 0; if(hudLock_)return 1; if(!fgEnabled_||presentSinkFg())return 3; return 2; }
+    // Stream "s12-settings": HUD lock compose dispatches recorded since the graph was built (engine thread only).
+    uint64_t hudLockComposes() const { return hudLockComposes_; }
+    // Stream "s12-settings": Edge Aegis (flow refine) adapt dispatches recorded since the graph was built (engine thread only).
+    uint64_t flowRefineDispatches() const { return flowRefineDispatches_; }
     // PushFPS experiment VEYRA_EXP_RP_STREAM_DEDUP (pipeline/StreamChangePass.h): how much a
     // hardware-decoded (D3D12VA, 8-bit NV12) picture differs from the one measured before it.
     // Called by the engine before it decides whether to keep the frame; waits for the GPU until
@@ -1339,6 +1343,8 @@ private:
     bool fgHistorySkipped_ = false;
     Metrics metrics_{};
     std::string mvecSource_ = "nvof";
+    uint64_t hudLockComposes_ = 0;
+    uint64_t flowRefineDispatches_ = 0;
 };
 
 } // namespace veyra::pipeline

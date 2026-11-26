@@ -1475,6 +1475,9 @@ public:
     // --- PushFPS (src/ui/bridge/PushFps.cpp) --------------------------------
     // Live numbers for the latency readout and "Optimise for my PC".
     Q_INVOKABLE QVariantMap pushLiveStats() const;
+    // Stream "s12-settings": requested / applied / executing per frame-generation setting (engine/PushSettingsEffect.h),
+    // the same facts as the log line [settings-effect]; read once a second by PushEffectBoard.qml.
+    Q_INVOKABLE QVariantMap pushSettingsEffect() const;
     // Stream "present" R1 (engine/PushVideoOverlay.h, qml/Veyra/PushInPicture.js): an interface item's picture (a QImage from
     // grabToImage; null removes the item) at x, y (logical pixels from the picture's top left) for the window's pixel ratio,
     // composed with the other items into the one picture the presenter draws; and, per item, whether the presenter has drawn

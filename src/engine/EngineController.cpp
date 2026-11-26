@@ -86,6 +86,34 @@ extern "C" {
 #include <libavutil/pixfmt.h>
 }
 namespace veyra::engine {
+// Stream "s12-settings" (review 1 SHOULD 12): which frame-generation-relevant fields differ, for [settings] lines.
+static std::string pushSettingsChanges(const EnhancementSettings& now,const EnhancementSettings& before){
+    std::string out;
+    const auto add=[&out](bool differs,const char* name,const std::string& value){if(differs){out+=out.empty()?"":",";out+=name;out+='=';out+=value;}};
+    add(now.multiplier!=before.multiplier,"multiplier",std::to_string(now.multiplier));
+    add(now.frameGenerationBackend!=before.frameGenerationBackend,"fgBackend",std::string(frameGenerationBackendName(now.frameGenerationBackend)));
+    add(now.vfgQuality!=before.vfgQuality,"vfgQuality",std::to_string(now.vfgQuality));
+    add(now.content!=before.content,"content",std::to_string(int(now.content)));
+    add(now.hudLock!=before.hudLock,"hudLock",now.hudLock?"1":"0");
+    add(now.fgAdaptive!=before.fgAdaptive,"fgAdaptive",now.fgAdaptive?"1":"0");
+    add(now.pacingRepair!=before.pacingRepair,"pacingRepair",now.pacingRepair?"1":"0");
+    add(now.flow!=before.flow,"flowQuality",std::to_string(int(now.flow)));
+    add(now.opticalFlowBackend!=before.opticalFlowBackend,"flowBackend",std::string(opticalFlowBackendName(now.opticalFlowBackend)));
+    add(now.amdFlowHalfResolution!=before.amdFlowHalfResolution,"amdFlowHalf",now.amdFlowHalfResolution?"1":"0");
+    add(now.fgMotionRefine!=before.fgMotionRefine,"edgeAegis",now.fgMotionRefine?"1":"0");
+    add(now.vfgAutoRegulate!=before.vfgAutoRegulate,"vfgAutoRegulate",now.vfgAutoRegulate?"1":"0");
+    add(now.fgStrictAdmission!=before.fgStrictAdmission,"strictCadence",now.fgStrictAdmission?"1":"0");
+    add(now.nr!=before.nr,"enhance",now.nr?"1":"0");
+    add(now.sr!=before.sr,"sr",now.sr?"1":"0");
+    add(now.clean!=before.clean,"clean",std::to_string(int(now.clean)));
+    add(now.lowDelay!=before.lowDelay,"lowDelay",now.lowDelay?"1":"0");
+    add(!(now.color==before.color),"colour",now.color.enabled?"on":"off");
+    add(!(now.antiAlias==before.antiAlias),"antiAlias",now.antiAlias.enabled?"on":"off");
+    add(now.fgMotion!=before.fgMotion,"fgMotion",std::to_string(int(now.fgMotion)));
+    add(now.dlssgLite!=before.dlssgLite,"dlssgLite",now.dlssgLite?"1":"0");
+    add(!(now.exclusion==before.exclusion),"exclusion",now.exclusion.enabled?"on":"off");
+    return out.empty()?std::string("none-named"):out;
+}
 // TEST ONLY (stream "e2e"): VEYRA_TEST_ASSUME_HDR_DISPLAY=1 makes the graph build its HDR output (HDR10 with frame
 // generation: R10G10B10A2) on a display that reports SDR, as the owner's HDR10 path. Unset: never.
 static bool pushTestAssumeHdrDisplay(){
@@ -1307,6 +1335,8 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
             const bool vfgRetainOverload=GetEnvironmentVariableW(L"VEYRA_TEST_VFG_NO_OVERLOAD_ESTIMATE",nullptr,0)==0;
             int64_t nextVfgOverloadLog=0;
             unsigned previewFgMultiplier=options.fgMultiplier;
+            // Stream "s12-settings" (PushSettingsEffect.h): the per-pair multiplier after each rule, for [settings-effect].
+            unsigned effectAfterAdaptive=options.fgMultiplier,effectAfterCap=options.fgMultiplier;PushSettingsEffectGate effectGate;PushEffectFacts effectLogged;std::optional<EnhancementSettings> effectLastApplied;PushEffectFacts effectCompleted;uint64_t effectExpectedGenerated=0,effectExpectedBase=0,effectSkippedPairs=0;std::array<uint64_t,size_t(diagnostics::GpuStage::Count)> gpuStageSamples{},effectSampleBase{};
             // Live output hint (DisplayFgBudget.h): a status-line suggestion only.
             // VEYRA_TEST_DISPLAY_HZ=<hz> replaces the measured refresh for it.
             DisplayFgBudgetGate displayFgGate;
@@ -2103,7 +2133,13 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
                     if(!videoChanged||graph->applySettings(requested)){
                         options=PlayerOptions::from(requested,requestedOrder);
                         {std::lock_guard lock(mutex_);snapshot_.applied=options.snapshot();snapshot_.applying=desired_!=snapshot_.applied;}
-                        veyra::log::info("settings",std::format("{} revision={} colourEnabled={} exposure={:.2f} contrast={:.2f} temperature={:.2f}",videoChanged?"live parameter update":"stored inactive/non-video parameters; GPU untouched",requested.revision,requested.color.enabled?1:0,requested.color.exposure,requested.color.contrast,requested.color.temperature));
+                        // Stream "s12-settings" (D3): name what changed. Adaptive multiplier and pacing repair are read per pair by
+                        // this thread (no GPU pass), so "GPU untouched" alone read as "nothing happened" in his Package 16 log.
+                        const std::string changedFields=pushSettingsChanges(requested,previous);
+                        const bool engineRead=requested.fgAdaptive!=previous.fgAdaptive||requested.pacingRepair!=previous.pacingRepair;
+                        veyra::log::info("settings",std::format("{} revision={} changed=[{}] colourEnabled={} exposure={:.2f} contrast={:.2f} temperature={:.2f}",
+                            videoChanged?"live parameter update":engineRead?"engine parameter update (read per frame pair on the engine thread; no GPU pass changes)":"stored inactive/non-video parameters; GPU untouched",
+                            requested.revision,changedFields,requested.color.enabled?1:0,requested.color.exposure,requested.color.contrast,requested.color.temperature));
                         // Colour lives inside the ingest dispatch, so a paused
                         // frame has no process() call to upload the new tables or
                         // re-run the chain: remember that the cached frame must
@@ -2685,6 +2721,8 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
                 bool pairRobustAdmitted=false;   // robustAdmit let this pair through (PushRobustAdmitGuard watches its outcome)
                 const auto logAdmission=[&](const pipeline::FrameBatch& batch,int64_t now,int64_t deadline,double elapsed,double blit,bool admitted,bool warmingHistory,const char* timeline,int64_t firstDeadline=0,double queuedMs=0){
                     if(admitted)++fgAdmittedPairs;else ++fgRejectedPairs;
+                    // [settings-effect] pairs-skipped (review 3 MUST 1): every pair offered counts, admitted or not; the warming pair is refused by the graph.
+                    if(!warmingHistory)effectExpectedGenerated+=previewFgMultiplier>1?previewFgMultiplier-1:0u;
                     // Keep the first rejection even if the periodic sample just
                     // logged a success. Both channels remain rate bounded.
                     if(now<nextFgAdmissionLog&&(admitted||now<nextFgRejectionLog))return;
@@ -2740,6 +2778,7 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
                                 options.settings.revision,frameGenerationBackendName(options.settings.frameGenerationBackend),options.fgMultiplier,previewFgMultiplier,pushContentFps,target,pushContentFps*previewFgMultiplier,changed)+even);}
                     }else if(pushAdaptiveGate.valid())previewFgMultiplier=pushAdaptiveGate.applied();
                 }
+                effectAfterAdaptive=previewFgMultiplier;
                 bool capFitRan=false;
                 if(!pushAdaptive&&options.fg&&previewFgMultiplier>2&&presentationEffective.outputRate==OutputRateMode::Custom&&
                    !presentSinkFrameGeneration(options.settings.frameGenerationBackend)){
@@ -2759,6 +2798,7 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
                     }
                 }
                 if(!capFitRan)capFitState.skipped();
+                effectAfterCap=previewFgMultiplier;
                 if(smoothHook.wantsPairs()){
                     // PushFPS stream "smooth" (PushSmoothHook.h): skipped entirely unless a VEYRA_EXP_RP_SMOOTH_* switch that
                     // decides, a Smoothness Mode target or VEYRA_EXP_RP_STATS=1 is set; [slipstream-smooth] with the latter.
@@ -3029,7 +3069,7 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
                         if(reducedGroups&&!warmingHistory&&previewFgMultiplier>2){
                             const auto midpoint=now+int64_t((pipeline::FrameBatch::interpolate(a,batch.b100ns,1,2)-media)/playbackRate);
                             if(fgBudget.canAdmitReduced(now,midpoint,int64_t(interval/playbackRate)/2,elapsed,blit,first,queuedGpuMs)){
-                                ++fgReducedPairs;
+                                ++fgReducedPairs;   // [settings-effect]: counted as offered in logAdmission; showing 1 of M-1 is a real shortfall
                                 if(now>=nextFgReducedLog){nextFgReducedLog=now+10000000;
                                     veyra::log::info("live-fg-admission",std::format("timeline=file-audio revision={} source={} reduced=2X requestedMultiplier={} reducedPairs={} remainingMidpointMs={:.3f} predictedFullMs={:.3f} (history kept; presentable midpoint instead of whole-group hole)",batch.identity.settingsRevision,batch.identity.sourceFrameId,options.fgMultiplier,fgReducedPairs,double(midpoint-now)/10000,fgBudget.predicted(now,false).value_or(-1)));}
                                 return pipeline::EnhanceGraph::FgDecision::Reduced;
@@ -3164,7 +3204,7 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
                 // Published after the metrics window switch above: a snapshot that already reports
                 // the new revision never carries the previous revision's totals. The publish of
                 // this frame's metrics can be a while later.
-                if(transaction||pendingSettingsAck){std::lock_guard lock(mutex_);snapshot_.applied=options.snapshot();snapshot_.applying=desired_!=snapshot_.applied;pendingSettingsAck=false;snapshot_.status=std::format(L"输入 {}×{} / 底图 {}×{} / NR {}×{} / 光流 {}×{} / FG与输出 {}×{} | {}",width,height,gd.workWidth,gd.workHeight,gd.nrWidth,gd.nrHeight,gd.flowWidth,gd.flowHeight,gd.workWidth,gd.workHeight,gd.nrBeforeSr?L"低延迟 · NR先行后超分":gd.nrWidth<gd.workWidth?L"实时内部处理并回填":L"原生NR（性能成本较高）");veyra::log::info("display-color",std::format("hdrInput={} hdrOutput={} forceSdrPreview={}",gd.hdrInput,gd.hdrOutput,options.settings.forceSdrPreview));veyra::log::info("settings",std::format("Applied revision={} sourcePtsMs={} fgBackend={} flowBackend={} multiplier={} (source kept open)",options.settings.revision,pts,frameGenerationBackendName(options.settings.frameGenerationBackend),opticalFlowBackendName(options.settings.opticalFlowBackend),options.snapshot().multiplier));}
+                if(transaction||pendingSettingsAck){std::lock_guard lock(mutex_);snapshot_.applied=options.snapshot();snapshot_.applying=desired_!=snapshot_.applied;pendingSettingsAck=false;snapshot_.status=std::format(L"输入 {}×{} / 底图 {}×{} / NR {}×{} / 光流 {}×{} / FG与输出 {}×{} | {}",width,height,gd.workWidth,gd.workHeight,gd.nrWidth,gd.nrHeight,gd.flowWidth,gd.flowHeight,gd.workWidth,gd.workHeight,gd.nrBeforeSr?L"低延迟 · NR先行后超分":gd.nrWidth<gd.workWidth?L"实时内部处理并回填":L"原生NR（性能成本较高）");veyra::log::info("display-color",std::format("hdrInput={} hdrOutput={} forceSdrPreview={}",gd.hdrInput,gd.hdrOutput,options.settings.forceSdrPreview));veyra::log::info("settings",std::format("Applied revision={} sourcePtsMs={} fgBackend={} flowBackend={} multiplier={} changed=[{}] (source kept open; flowBackend is the stored choice: [settings-effect] flow= says whether flow runs)",options.settings.revision,pts,frameGenerationBackendName(options.settings.frameGenerationBackend),opticalFlowBackendName(options.settings.opticalFlowBackend),options.snapshot().multiplier,effectLastApplied?pushSettingsChanges(options.settings,*effectLastApplied):std::string("first")));effectLastApplied=options.settings;}
                 const double processMs=std::chrono::duration<double,std::milli>(processDone-processStart).count();
                 frameFlow->advanceHistory(out.batch.identity);
                 frameFlow->update([&](auto& m){m.counters.historyResets+=uint64_t(out.historyReset);m.counters.captureDropResets+=uint64_t(pipeline::hasFrameFlag(pkt.flags,pipeline::FrameFlagBits::Drop));});
@@ -3237,7 +3277,7 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
                             pairLookahead=pushGridEarlyDelay(pairDelay,liveInterval,previewFgMultiplier,fgBudget.baseCost(host100ns()),liveInputReady-presentAnchor);
                             windowGridEarly+=pairLookahead!=pairDelay;
                         }
-                        if(isCapture&&!isStream&&options.fg&&capturePairDecision&&*capturePairDecision==pipeline::EnhanceGraph::FgDecision::Skip)++windowSkippedPairs;
+                        if(isCapture&&!isStream&&options.fg&&capturePairDecision&&*capturePairDecision==pipeline::EnhanceGraph::FgDecision::Skip){++windowSkippedPairs;++effectSkippedPairs;}
                         liveTimeline.resetPair(out.batch.identity.epoch,out.batch.b100ns,presentAnchor,pairLookahead,paceSourcePts);
                         if(isCapture&&!isStream&&options.fg&&previewFgMultiplier>1&&!presentSinkFrameGeneration(options.settings.frameGenerationBackend))presentGridSlot=liveInterval/previewFgMultiplier;
                         if((smoothTransportAnchor||smoothContentAnchor)&&host100ns()>=nextLiveAnchorLog){
@@ -3666,7 +3706,7 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
                 }
 
 
-                for(size_t stage=0;stage<measured.gpu.size();++stage){const auto& sample=measured.gpu[stage];if(sample.state==diagnostics::SampleState::Measured&&sample.milliseconds&&sample.end&&sample.end!=lastGpuSampleEnd[stage]){gpuStageTimes[stage].add(*sample.milliseconds);pushFgHealth().gpu(unsigned(stage),*sample.milliseconds);/*stream "present" R2 hook*/lastGpuSampleEnd[stage]=sample.end;}}
+                for(size_t stage=0;stage<measured.gpu.size();++stage){const auto& sample=measured.gpu[stage];if(sample.state==diagnostics::SampleState::Measured&&sample.milliseconds&&sample.end&&sample.end!=lastGpuSampleEnd[stage]){gpuStageTimes[stage].add(*sample.milliseconds);++gpuStageSamples[stage];pushFgHealth().gpu(unsigned(stage),*sample.milliseconds);/*stream "present" R2 hook*/lastGpuSampleEnd[stage]=sample.end;}}
                 measured.resolution=pipeline::ResolutionPlan::make({width,height},options.sr,options.snapshot().nrPolicy,isImage,options.settings.revision,runningSrTarget(options.settings,options.sr,isImage,ctx.adapter().isNvidia,smoothHook.followWidth(),smoothHook.followHeight()),options.settings.lowLatency&&options.nr,0,runningSrPrescale(options.settings,ctx.adapter().isNvidia,isImage),runningSrOutput(options.settings,ctx.adapter().isNvidia),dualSrRuns(options.settings,ctx.adapter().isNvidia,isImage),options.settings.dualSrTarget);measured.decodeCpuMs=decodeMs;measured.submitCpuMs=std::chrono::duration<double,std::milli>(processDone-processStart).count();measured.gpuWaitCpuMs=gpuWaitMs;measured.deadlineWaitCpuMs=frameWaitMs;measured.presentCpuMs=framePresentMs;measured.queueWatermark=out.batch.count;
                 if(!isImage&&sizesHook.due(host100ns())){   // stream "delay90": the real working sizes (PushSizesHook.h; writes only on a change)
                     PushSizesHook::Inputs si;si.graph=graph.get();si.plan=&measured.resolution;si.sr=options.sr;si.dualSr=dualSrRuns(options.settings,ctx.adapter().isNvidia,isImage);si.hdrOutput=graph->hdrOutput();
@@ -3735,6 +3775,62 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
                         streamCadenceWindowStart=cadenceNow;streamCadenceLogAt=cadenceNow+100000000;
                         {std::lock_guard lock(mutex_);snapshot_.streamCadence=report;}
                     }
+                }
+                {
+                    // Stream "s12-settings" (PushSettingsEffect.h): requested / applied / executing per frame-generation setting.
+                    // Values the engine already holds, read on this thread; the line at a change and every 10 s while playing.
+                    // Cost: a struct copy under the snapshot lock per processed frame and one log line per 10 s; no waits.
+                    PushEffectFacts effectFacts;
+                    const auto effectBackend=options.settings.frameGenerationBackend;
+                    effectFacts.known=true;effectFacts.playing=!isImage&&!paused_;effectFacts.liveSource=isCapture;
+                    effectFacts.fgOn=options.fg&&options.fgMultiplier>1;effectFacts.presentSinkFg=presentSinkFrameGeneration(effectBackend);
+                    effectFacts.vfg=effectBackend==FrameGenerationBackend::Vfg;
+                    effectFacts.ownMotion=effectBackend==FrameGenerationBackend::Vfg||effectBackend==FrameGenerationBackend::AmdFrc||effectBackend==FrameGenerationBackend::PushFlow;
+                    effectFacts.fgUsesFlow=motionUsesFlow(options.settings.fgMotion,effectBackend);effectFacts.lowDelayActive=lowDelay.active();effectFacts.revision=options.settings.revision;
+                    effectFacts.requestedMultiplier=options.fg?options.fgMultiplier:1u;effectFacts.afterAdaptive=effectAfterAdaptive;effectFacts.afterCap=effectAfterCap;
+                    effectFacts.executingMultiplier=options.fg?previewFgMultiplier:1u;
+                    effectFacts.adaptiveOn=options.settings.fgAdaptive;
+                    effectFacts.smoothTargetFps=double(pushSmoothShared().targetFps.load(std::memory_order_relaxed));effectFacts.smoothnessOn=effectFacts.smoothTargetFps>0;
+                    effectFacts.capFps=presentationEffective.outputRate==OutputRateMode::Custom&&std::isfinite(presentationEffective.customFps)?presentationEffective.customFps:0.0;
+                    effectFacts.dedupOn=isCapture&&!isImage&&!legacyCadence&&dedupContent(options.settings.content);
+                    effectFacts.contentFps=effectFacts.dedupOn?contentDedup.contentFps():activeSource->info().averageFps;
+                    effectFacts.pacingRepairOn=options.settings.pacingRepair;
+                    effectFacts.hudLockState=graph->hudLockState();
+                    effectFacts.vfgQuality=options.settings.vfgQuality;effectFacts.vfgAutoRegulateOn=options.settings.vfgAutoRegulate;effectFacts.vfgFastLoaded=effectFacts.vfg&&graph->vfgFastReady();
+                    effectFacts.strictOn=options.settings.fgStrictAdmission;effectFacts.edgeAegisOn=options.settings.fgMotionRefine;
+                    effectFacts.nvidiaLowLatencyOn=presentationEffective.nvidiaLowLatency!=NvidiaLowLatency::Off;effectFacts.driverLowLatency=presenter.driverLowLatencyState();
+                    effectFacts.lowQueueOn=presentationEffective.enabled;effectFacts.vsyncPaced=presentationPaced;effectFacts.queueDepth=presenter.queueLatencyNow();
+                    effectFacts.vrrOn=presentationEffective.variableRefresh;{const auto vrrNow=presenter.displayVrr();effectFacts.driverVrr=vrrNow.known?(vrrNow.enabled?1:0):-1;}effectFacts.displayAutomatic=presentationEffective.display==DisplaySync::Automatic;effectFacts.vrrSync=presenter.vrrSync();
+                    effectFacts.enhanceOn=options.nr;
+                    effectFacts.enhanceWidth=measured.resolution.nr.width;effectFacts.enhanceHeight=measured.resolution.nr.height;
+                    effectFacts.outputWidth=measured.resolution.output.width;effectFacts.outputHeight=measured.resolution.output.height;
+                    // Window counters: deltas of the session counters since the last line (they restart with a new flow window).
+                    const auto effectSince=[](uint64_t value,uint64_t base){return value>=base?value-base:value;};
+                    const auto& effectFlow=measured.flow.counters;const auto& effectDedup=contentDedup.stats();const auto& effectPacing=pacingRepair.stats();
+                    effectFacts.realPresented=effectSince(effectFlow.realPresented,effectLogged.realPresented);effectFacts.generatedPresented=effectSince(effectFlow.generatedPresented,effectLogged.generatedPresented);
+                    effectFacts.dedupObserved=effectSince(effectDedup.observed,effectLogged.dedupObserved);effectFacts.dedupRepeats=effectSince(effectDedup.repeats,effectLogged.dedupRepeats);
+                    effectFacts.pacingFrames=effectSince(effectPacing.frames,effectLogged.pacingFrames);effectFacts.pacingRepaired=effectSince(effectPacing.repaired,effectLogged.pacingRepaired);
+                    for(unsigned i=0;i<effectFacts.vfgSubframeMs.size();++i)effectFacts.vfgSubframeMs[i]=gpuStageTimes[size_t(diagnostics::GpuStage::Fg1)+i].p95();
+                    effectFacts.flowGpuMs=gpuStageTimes[size_t(diagnostics::GpuStage::Flow)].p95();effectFacts.enhanceGpuMs=gpuStageTimes[size_t(diagnostics::GpuStage::Nr)].p95();
+                    // Review 2 SHOULD 5: a stage "ran" only when it produced GPU samples in THIS window (the P95 windows keep old samples).
+                    const auto stageSamples=[&](diagnostics::GpuStage stage){return effectSince(gpuStageSamples[size_t(stage)],effectSampleBase[size_t(stage)]);};
+                    for(unsigned i=0;i<effectFacts.vfgSubframeSamples.size();++i)effectFacts.vfgSubframeSamples[i]=stageSamples(diagnostics::GpuStage(unsigned(diagnostics::GpuStage::Fg1)+i));
+                    effectFacts.flowSamples=stageSamples(diagnostics::GpuStage::Flow);effectFacts.enhanceSamples=stageSamples(diagnostics::GpuStage::Nr);
+                    effectFacts.expectedGenerated=effectSince(effectExpectedGenerated,effectExpectedBase);
+                    effectFacts.hudLockComposes=effectSince(graph->hudLockComposes(),effectLogged.hudLockComposes);effectFacts.edgeAegisDispatches=effectSince(graph->flowRefineDispatches(),effectLogged.edgeAegisDispatches);effectFacts.skippedPairs=effectSince(effectSkippedPairs,effectLogged.skippedPairs);effectFacts.vfgFastPairs=effectSince(vfgFastPairs+vfgFastBudgetPairs,effectLogged.vfgFastPairs);
+                    const auto effectTrigger=effectGate.due(int64_t(host100ns()/10000),options.settings.revision,pacingRevision);
+                    if(!effectTrigger.empty()){
+                        veyra::log::info("settings-effect",pushSettingsEffectLine(effectFacts,effectTrigger));
+                        if(effectTrigger=="window")effectCompleted=effectFacts;   // a full 10 s window; a change starts afresh
+                        effectLogged=effectFacts;   // the next window starts here
+                        effectLogged.realPresented=effectFlow.realPresented;effectLogged.generatedPresented=effectFlow.generatedPresented;
+                        effectLogged.dedupObserved=effectDedup.observed;effectLogged.dedupRepeats=effectDedup.repeats;
+                        effectLogged.pacingFrames=effectPacing.frames;effectLogged.pacingRepaired=effectPacing.repaired;
+                        effectLogged.hudLockComposes=graph->hudLockComposes();effectLogged.edgeAegisDispatches=graph->flowRefineDispatches();effectLogged.skippedPairs=effectSkippedPairs;effectLogged.vfgFastPairs=vfgFastPairs+vfgFastBudgetPairs;
+                        effectSampleBase=gpuStageSamples;effectExpectedBase=effectExpectedGenerated;
+                    }
+                    const auto effectShown=pushEffectForDisplay(effectFacts,effectCompleted);   // review 3 SHOULD 5: a young window shows the last completed one
+                    std::lock_guard lock(mutex_);snapshot_.pushEffect=effectShown;
                 }
                 const double ageP95=liveScheduler?completed.ageP95:captureAges.p95(),waitP95=liveScheduler?completed.waitP95:scheduleWaits.p95(),presentP95=liveScheduler?completed.presentP95:presentTimes.p95();
                 // Refresh and VRR state (DisplayStateService, queried on events

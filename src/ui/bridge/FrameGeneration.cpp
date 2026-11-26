@@ -384,10 +384,12 @@ QString QmlPlayerBridge::vrrHintText(int level) const {
     case 1: return tr("当前屏幕不支持可变刷新");
     case 2: return tr("屏幕支持可变刷新，但当前显示模式不可用；请检查连接、刷新率及驱动设置");
     case 3:
-        if (!on) return tr("屏幕跟着画面刷新：不撕裂，也几乎不用等刷新");
+        if (!on) return tr("屏幕支持可变刷新；PushFPS 尚未请求，驱动也没有报告它正在生效");
+        // Review 3 MUST 2: the switch is read only with display sync Automatic (VideoPresenter.h vrrSyncWanted).
+        if (impl_->presentation.display != engine::DisplaySync::Automatic) return tr("显示同步为垂直同步时 PushFPS 不请求可变刷新；是否可变刷新由 NVIDIA 驱动决定");
         return running ? tr("已请求可变刷新，驱动尚未确认生效；可检查窗口/全屏 G-SYNC 设置，当前状态不代表驱动已关闭")
                        : tr("已开启，将在播放时请求可变刷新；是否生效以驱动报告为准");
-    default: return on ? tr("生效中：屏幕跟着画面刷新") : tr("屏幕正处于可变刷新（驱动已开启）");
+    default: return on ? tr("NVIDIA 驱动报告可变刷新正在生效") : tr("NVIDIA 驱动报告屏幕正处于可变刷新（PushFPS 没有请求）");
     }
 }
 QString QmlPlayerBridge::fgDisplayHint() const { return impl_->fgDisplayHint; }
@@ -420,5 +422,104 @@ void QmlPlayerBridge::applyPresentation() {
     emit perfChanged();
 }
 
+// Stream "s12-settings": requested / applied / executing per frame-generation setting. While something plays the
+// engine's facts (PlayerSnapshot::pushEffect, the same as the [settings-effect] line); otherwise the facts the
+// settings alone decide (a flow choice with NVIDIA VFG, strict cadence on a live source...), with playing=false.
+QVariantMap QmlPlayerBridge::pushSettingsEffect() const {
+    const auto& s = impl_->snapshot;
+    const auto settingsNow = settings();
+    engine::PushEffectFacts e;
+    const bool engineFacts = s.running && !s.image && s.pushEffect.known;
+    if (engineFacts) e = s.pushEffect;
+    else {
+        const auto backend = settingsNow.frameGenerationBackend;
+        const QString kind = sourceKind();
+        e.playing = false;
+        e.liveSource = kind == QLatin1String("capture") || kind == QLatin1String("ps5") || kind == QLatin1String("screen") || kind == QLatin1String("frameinput");
+        e.fgOn = fgEnabled() && fgMultiplier() > 1;
+        e.presentSinkFg = engine::presentSinkFrameGeneration(backend);
+        e.vfg = backend == engine::FrameGenerationBackend::Vfg;
+        e.ownMotion = e.vfg || backend == engine::FrameGenerationBackend::AmdFrc || backend == engine::FrameGenerationBackend::PushFlow;
+        e.requestedMultiplier = e.afterAdaptive = e.afterCap = e.executingMultiplier = unsigned(std::max(1, fgMultiplier()));
+        e.adaptiveOn = settingsNow.fgAdaptive;
+        e.dedupOn = settingsNow.content != engine::ContentRate::Transport && settingsNow.content != engine::ContentRate::Capture60To30;   // EngineController dedupContent
+        e.pacingRepairOn = settingsNow.pacingRepair;
+        e.hudLockState = settingsNow.hudLock ? 1 : 0;
+        e.vfgQuality = settingsNow.vfgQuality;
+        e.vfgAutoRegulateOn = settingsNow.vfgAutoRegulate;
+        e.strictOn = impl_->chain.fgStrictAdmission;
+        e.nvidiaLowLatencyOn = impl_->presentation.nvidiaLowLatency != engine::NvidiaLowLatency::Off;
+        e.lowQueueOn = impl_->presentation.enabled;
+        e.vrrOn = impl_->presentation.variableRefresh;
+        e.displayAutomatic = impl_->presentation.display == engine::DisplaySync::Automatic;
+        e.enhanceOn = nrAnyEnabled();
+        // Review 1 MUST 5 / review 2 SHOULD 10: the flow session runs for these consumers under VFG too
+        // (the same predicate as EnhancementSettings::activeVideoSettings' flowUsed, frame generation aside).
+        e.otherFlowConsumer = settingsNow.usesDlaa() || (settingsNow.nr && (engine::motionUsesFlow(settingsNow.nrMotion) || settingsNow.usesNrTemporal())) ||
+                              (settingsNow.sr && settingsNow.temporalSr() && engine::motionUsesFlow(settingsNow.srMotion));
+        e.edgeAegisOn = settingsNow.fgMotionRefine;
+        e.fgUsesFlow = engine::motionUsesFlow(settingsNow.fgMotion, backend);
+    }
+    const auto rows = engine::pushSettingsEffect(e);
+    QVariantMap out, rowMap;
+    for (size_t i = 0; i < rows.size(); ++i) {
+        QVariantMap row;
+        row["why"] = QString::fromLatin1(engine::pushEffectWhyName(rows[i].why).data(), qsizetype(engine::pushEffectWhyName(rows[i].why).size()));
+        row["requested"] = rows[i].requested;
+        row["executing"] = rows[i].executing;
+        const auto name = engine::pushEffectSettingName(engine::PushEffectSetting(i));
+        rowMap[QString::fromLatin1(name.data(), qsizetype(name.size()))] = row;
+    }
+    out["known"] = engineFacts;
+    // Review 1 SHOULD 7: facts measured with older settings are not shown as the new state (a rebuild takes 1-3 s).
+    out["applying"] = s.running && (s.applying || (engineFacts && e.revision != s.applied.revision));
+    out["realPresented"] = QVariant::fromValue(qulonglong(e.realPresented));
+    out["skippedPairs"] = QVariant::fromValue(qulonglong(e.skippedPairs));   // admission skips in the window ([capture-timing] skippedPairs)
+    out["lowDelayActive"] = e.lowDelayActive;
+    out["presentSinkFg"] = e.presentSinkFg;
+    out["vfgFastUsed"] = e.vfgFastPairs > 0;   // review 2 SHOULD 9: some 2X pairs ran the faster model
+    {   // Per generated-frame position at the running multiplier: the model the quality level sets and the GPU time measured.
+        QVariantList positions;
+        for (unsigned sub = 1; e.vfg && sub < e.executingMultiplier && sub <= 4; ++sub) {
+            QVariantMap position;
+            // Review 2 MUST 1: under Lower delay position 1 is the one VFG frame (primary model), position 2 the predicted frame "P".
+            position["model"] = QString(QLatin1Char(engine::pushVfgPositionLetter(e.vfgQuality, e.executingMultiplier, sub, e.lowDelayActive)));
+            // Review 2 SHOULD 5: a time only when that stage produced GPU samples in this window.
+            position["gpuMs"] = e.vfgSubframeSamples[sub - 1] > 0 ? e.vfgSubframeMs[sub - 1] : 0.0;
+            positions << position;
+        }
+        out["vfgPositions"] = positions;
+    }
+    out["playing"] = e.playing;
+    out["rows"] = rowMap;
+    out["requestedX"] = int(e.requestedMultiplier);
+    out["runningX"] = int(e.executingMultiplier);
+    out["generatedPerReal"] = engine::pushGeneratedPerReal(e);
+    out["smoothTargetFps"] = e.smoothnessOn ? e.smoothTargetFps : 0.0;
+    out["capFps"] = e.capFps;
+    out["contentFps"] = e.contentFps;
+    out["vfg"] = e.vfg;
+    out["vfgQuality"] = int(e.vfgQuality);
+    out["vfgModels"] = QString::fromStdString(engine::pushVfgModelsText(e));
+    out["hudLockState"] = e.hudLockState;
+    out["dedupOn"] = e.dedupOn;
+    out["driverLowLatency"] = e.driverLowLatency;
+    out["enhanceWidth"] = int(e.enhanceWidth);
+    out["enhanceHeight"] = int(e.enhanceHeight);
+    out["outputWidth"] = int(e.outputWidth);
+    out["outputHeight"] = int(e.outputHeight);
+    // Review 1 SHOULD 6: the short name (Status.cpp), not the menu label with its decorations.
+    switch (settingsNow.frameGenerationBackend) {
+    case engine::FrameGenerationBackend::Dlss: out["backendLabel"] = QStringLiteral("DLSS"); break;
+    case engine::FrameGenerationBackend::XeSS: out["backendLabel"] = QStringLiteral("XeSS"); break;
+    case engine::FrameGenerationBackend::Fsr: out["backendLabel"] = QStringLiteral("FSR 3.1"); break;
+    case engine::FrameGenerationBackend::Fsr4: out["backendLabel"] = QStringLiteral("FSR 4 ML"); break;
+    case engine::FrameGenerationBackend::Anr: out["backendLabel"] = QStringLiteral("ANR FG"); break;
+    case engine::FrameGenerationBackend::AmdFrc: out["backendLabel"] = QStringLiteral("AMD FRC"); break;
+    case engine::FrameGenerationBackend::PushFlow: out["backendLabel"] = QStringLiteral("PushFlow"); break;
+    case engine::FrameGenerationBackend::Vfg: out["backendLabel"] = QStringLiteral("NVIDIA VFG"); break;
+    }
+    return out;
+}
 
 } // namespace veyra::ui

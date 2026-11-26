@@ -27,7 +27,9 @@ bool PushHudLock::initialize(ID3D12Device* device, uint32_t width, uint32_t heig
     if (!update_.loadShader("PushHudLockUpdate.dxil", cs) || !update_.create(device, cs, 2 * kUpdateStride, 2, 1, kConstants)) return false;
     if (!compose_.loadShader("PushHudLockCompose.dxil", cs) ||
         !compose_.create(device, cs, kMaxGenerated * kHeldSources * kComposeStride, 3, 1, kConstants)) return false;
-    veyra::log::info("hud-lock", std::format("created {}", describe()));
+    // Stream "s12-settings": the generated-frame slots are bound later (createViews), so this line no longer prints a
+    // "generated=0" that read as "no generated frame is locked"; the views line below says how many.
+    veyra::log::info("hud-lock", std::format("created HUD lock {}x{} mode={} (generated-frame slots are bound with the views)", width_, height_, outputMode_));
     return true;
 }
 
@@ -44,6 +46,7 @@ void PushHudLock::createViews(ID3D12Device* device, DescriptorStager& stager, ID
                               ID3D12Resource* const* generated, unsigned generatedCount) {
     real_[0] = real[0]; real_[1] = real[1]; real_[2] = heldCopy_.Get();
     generatedCount_ = std::min<unsigned>(generatedCount, kMaxGenerated);
+    veyra::log::info("hud-lock", std::format("views {} (every generated frame of these slots gets the locked pixels)", describe()));
     for (unsigned i = 0; i < generatedCount_; ++i) generated_[i] = generated[i];
     for (unsigned parity = 0; parity < 2; ++parity) {
         const UINT base = parity * kUpdateStride;

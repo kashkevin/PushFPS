@@ -83,7 +83,10 @@ VGroup {
         const tip = capture > 0 && capture < 100 && (quick.consoleId === "ps5" || quick.consoleId === "ps5pro" || quick.consoleId === "xbox")
                   ? qsTr("主机输出 120 Hz 时每帧还能早约 8 毫秒到达。") : ""
         if (!quick.lowestLatency) return qsTr("一键减少等待：画质、补帧和 AI 增强都不变")
-        return now + (quick.vrrCapable ? qsTr("单帧队列、全屏、可变刷新已开启。") : qsTr("单帧队列和全屏已开启；屏幕不支持可变刷新，帧同步保持不变以免画面撕裂。")) + tip
+        // Review 3 MUST 2: under Vsync PushFPS never asks for variable refresh; only Automatic + the switch does.
+        return now + (quick.vrrCapable ? (veyra.displaySync === 2 ? qsTr("单帧队列、全屏、可变刷新已开启。")
+                                                                  : qsTr("单帧队列和全屏已开启；显示同步为垂直同步，可变刷新只由 NVIDIA 驱动决定"))
+                                       : qsTr("单帧队列和全屏已开启；屏幕不支持可变刷新，帧同步保持不变以免画面撕裂。")) + tip
     }
     objectName: "pushfps-quick-setup"
     // Home shows the short form: no low-latency row and no intro line.
@@ -727,6 +730,11 @@ VGroup {
         }
     }
 
+    // Stream "s12-settings": what runs now (method, the multiplier that runs and why, generated frames per real frame, the
+    // schedule's share of the delay, HUD lock) and a status line under rows, from the facts of [settings-effect].
+    // Professional mode shows the same block in its Frame Generation card, so the compact copy there leaves it out.
+    PushEffectBoard { id: quickEffect; active: quick.visible }
+    PushRunningNow { objectName: "pushfps-running-now"; visible: !quick.compactPro && veyra.fgEnabled === true; effect: quickEffect.facts; Layout.bottomMargin: 4 }
     VRow {
         objectName: "pushfps-target-row"
         label: qsTr("目标帧率")
@@ -748,6 +756,7 @@ VGroup {
             onPicked: id => quick.applyTarget(id)
         }
     }
+    PushEffectNote { objectName: "pushfps-note-multiplier"; effect: quickEffect.facts; setting: "multiplier" }
 
     // Streaming mode has no Professional page beside it: the frame generation method (PushFlow, DLSS, FSR,
     // ...) and PushFlow's tier are chosen here too.
@@ -801,6 +810,7 @@ VGroup {
             onToggled: checked => quick.setAdaptive(checked)
         }
     }
+    PushEffectNote { objectName: "pushfps-note-adaptive"; effect: quickEffect.facts; setting: "adaptive"; alsoDedup: true }
 
     VRow {
         objectName: "pushfps-pacing-row"
@@ -819,6 +829,7 @@ VGroup {
             onToggled: checked => quick.setPacingRepair(checked)
         }
     }
+    PushEffectNote { objectName: "pushfps-note-pacingRepair"; effect: quickEffect.facts; setting: "pacingRepair"; alsoDedup: true }
 
     VRow {
         objectName: "pushfps-hudlock-row"
@@ -838,6 +849,7 @@ VGroup {
             onToggled: checked => veyra.hudLock = checked
         }
     }
+    PushEffectNote { objectName: "pushfps-note-hudLock"; effect: quickEffect.facts; setting: "hudLock"; pauseSeconds: 1 }
 
     VRow {
         objectName: "pushfps-enhance-row"
@@ -853,6 +865,7 @@ VGroup {
             onToggled: checked => quick.setEnhancement(checked)
         }
     }
+    PushEffectNote { objectName: "pushfps-note-enhancement"; effect: quickEffect.facts; setting: "enhancement" }
 
     // The enhancement's look (shown while AI picture enhancement is on).
     VRow {
@@ -931,7 +944,7 @@ VGroup {
     VRow {
         objectName: "pushfps-lowest-latency-row"
         label: qsTr("最低延迟")
-        help: qsTr("一键打开所有不影响画质的低延迟设置：显卡只排队一帧（NVIDIA 显卡用 NVIDIA 低延迟），连接后进入全屏（绕过桌面合成，少等一次刷新），屏幕支持 G-SYNC/FreeSync 时用可变刷新同步（不撕裂、不跳帧）。补帧、AI 增强、HUD 锁定和帧节奏修复保持不变。关闭后恢复之前的设置")
+        help: qsTr("一键打开不影响画质的减少等待设置：显卡只排队一帧（NVIDIA 显卡用 NVIDIA 低延迟，在采集卡画面上的效果没有测出来），连接后进入全屏（绕过桌面合成，少等一次刷新），以及平滑帧节奏（垂直同步加输出上限；可变刷新由 NVIDIA 驱动决定）。补帧、AI 增强、HUD 锁定和帧节奏修复保持不变。关闭后恢复之前的设置")
         hint: quick.ullProfile && !quick.lowestLatency ? qsTr("「极低延迟」方案已经设好了这些；选别的方案或「不使用方案」后可以使用这个开关") : quick.lowestLatencyHint
         VSwitch {
             objectName: "pushfps-lowest-latency"
@@ -1035,7 +1048,7 @@ VGroup {
         objectName: "pushfps-smooth-row"
         visible: !quick.compact
         label: qsTr("流畅帧同步")
-        help: qsTr("等屏幕刷新再显示每一帧，并把输出限制在屏幕刷新率：补出来的每一帧都完整显示，玩起来和录像一样流畅。屏幕支持 G-SYNC/FreeSync 时会请求可变刷新，几乎不增加延迟")
+        help: qsTr("等屏幕刷新再显示每一帧，并把输出限制在屏幕刷新率：补出来的每一帧都完整显示，玩起来和录像一样流畅。垂直同步时 PushFPS 不请求可变刷新，是否可变刷新由 NVIDIA 驱动决定")
         hint: quick.smoothPacing && quick.unevenTarget
               ? qsTr("%1 FPS 不能整除 %2 Hz：每帧显示时间不均匀。请选「匹配显示器」，或把屏幕设为 %1 的整数倍").arg(Math.round(veyra.outputCustomFps)).arg(Math.round(veyra.displayRefreshHz))
               : quick.smoothPacing ? qsTr("每一帧都完整显示；没有可变刷新时最多多等一次屏幕刷新")
@@ -1046,6 +1059,7 @@ VGroup {
             onToggled: checked => quick.setSmoothPacing(checked)
         }
     }
+    PushEffectNote { objectName: "pushfps-note-vrr"; effect: quickEffect.facts; setting: "vrr" }
 
     // G-SYNC set-up. The screen can do variable refresh and PushFPS asks for it, but the NVIDIA driver
     // has not confirmed it for this program: usually the driver only allows G-SYNC in full screen, or
@@ -1129,8 +1143,8 @@ VGroup {
         visible: !quick.compact && quick.gsyncRun > 0
         label: "G-SYNC"
         hint: quick.gsyncRun === 1 ? qsTr("驱动配置已保存：请重启 PushFPS 来完成 G-SYNC 设置")
-            : quick.gsyncRun === 2 ? qsTr("重启后驱动已确认 G-SYNC 对 PushFPS 生效")
-            : qsTr("重启后驱动还没有报告 G-SYNC 对 PushFPS 生效")
+            : quick.gsyncRun === 2 ? qsTr("重启后驱动报告 G-SYNC 对 PushFPS 生效")
+            : qsTr("重启后驱动仍没有报告 G-SYNC 对 PushFPS 生效")
         hintBelow: true
     }
     VRow {
@@ -1139,9 +1153,9 @@ VGroup {
         visible: !quick.compact && quick.gsyncUnconfirmed && veyra.preferences.pushGsyncChecked !== true
                  && (!quick.gsyncChecked || quick.gsyncWanted || quick.gsyncTools.busy || quick.gsyncTools.canRepair)
         label: "G-SYNC"
-        help: qsTr("屏幕支持可变刷新时，画面一准备好屏幕就刷新：不撕裂，每一帧显示的时间都一样长。NVIDIA 驱动要为每个程序单独允许窗口和全屏 G-SYNC")
+        help: qsTr("屏幕支持可变刷新时，驱动可以让屏幕在画面准备好时刷新。NVIDIA 驱动要为每个程序单独允许窗口和全屏 G-SYNC；是否生效只看驱动的报告，窗口模式下驱动可能不启用")
         hint: quick.gsyncWanted || (quick.gsyncTools && quick.gsyncTools.busy) ? qsTr("正在检查驱动配置…")
-            : qsTr("屏幕支持可变刷新，但驱动还没有确认对 PushFPS 生效，画面可能不如录像流畅。点「一键设置」为 PushFPS 允许窗口和全屏 G-SYNC，然后重启 PushFPS")
+            : qsTr("屏幕支持可变刷新，但驱动还没有报告它对 PushFPS 生效。点「一键设置」为 PushFPS 允许窗口和全屏 G-SYNC，然后重启 PushFPS；之后仍以驱动的报告为准")
         hintBelow: true
         VButton {
             objectName: "pushfps-gsync-fix"
@@ -1155,8 +1169,10 @@ VGroup {
         objectName: "pushfps-low-latency-row"
         visible: !quick.compact
         label: qsTr("英伟达低延迟")
-        help: qsTr("减少在显卡里排队等待的画面，从按下按键到画面反应更快。只在 NVIDIA 显卡上可用")
-        hint: veyra.nvidiaLowLatencyAvailable === true ? qsTr("减少处理排队，降低输入延迟") : qsTr("需要 NVIDIA 显卡")
+        // Review 1 MUST 4: no promise of lower input delay. His Package 16 log: no measurable change in a window; the driver
+        // reports the mode active only while the picture is full-screen and in front (driverLowLatency=1 only then).
+        help: qsTr("PushFPS 在每一帧前通过 NVIDIA 驱动做一次类似 Reflex 的等待（NvAPI Sleep），限制显卡里排队的画面。这不是 NVIDIA 控制面板里的“低延迟模式”。采集卡画面的游戏不在这台电脑上运行，所以它只作用于 PushFPS 自己这一段，效果没有测出来。只在 NVIDIA 显卡上可用")
+        hint: veyra.nvidiaLowLatencyAvailable === true ? qsTr("下面显示驱动现在的报告") : qsTr("需要 NVIDIA 显卡")
         VSwitch {
             objectName: "pushfps-low-latency"
             enabled: veyra.nvidiaLowLatencyAvailable === true
@@ -1165,4 +1181,5 @@ VGroup {
             onToggled: checked => veyra.nvidiaLowLatency = checked ? 1 : 0
         }
     }
+    PushEffectNote { objectName: "pushfps-note-nvidiaLowLatency"; visible: !quick.compact && parts.length > 0; effect: quickEffect.facts; setting: "nvidiaLowLatency" }
 }

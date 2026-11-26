@@ -145,6 +145,9 @@ QtObject {
 )qml"
     // MSVC limits one string literal to about 16 KB (C2026); adjacent literals are joined.
     R"qml(    function pushLiveStats() { return liveStats }
+    // Stream "s12-settings" (tst_push_settings_effect.qml): the bridge's pushSettingsEffect(), handed in by the test.
+    property var settingsEffect: ({known: false, playing: false, rows: ({})})
+    function pushSettingsEffect() { return settingsEffect }
     // Stream "present" R1 (tst_push_in_picture.qml): what the in-picture items handed over, and what the presenter "drew".
     property var videoOverlayCalls: []
     property bool videoOverlayEnabled: true

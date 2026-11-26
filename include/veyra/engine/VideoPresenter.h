@@ -143,6 +143,10 @@ public:
         return requested.variableRefresh&&requested.display==DisplaySync::Automatic&&gfx::vrrLevel(vrr)>=3;
     }
     bool vrrSync()const{return vrrSync_;}
+    // Stream "s12-settings": the driver's low-latency mode as last read (NvAPI_D3D_GetSleepStatus every 2 s): 1 on, 0 off, -1 not read.
+    int driverLowLatencyState()const{return sleepStatus_.known?(sleepStatus_.lowLatency?1:0):-1;}
+    // Review 3 SHOULD 8: the swap chain's maximum frame latency in force ([present-path] maxLatency): 1, 3, or -1 unknown.
+    int queueLatencyNow()const{return sink_.queueLatency();}
     diagnostics::GpuSample blitTiming(ID3D12Fence* f,uint64_t revision=0,uint64_t epoch=0){gpuTimer_.collect(presentationFence_?presentationFence_.Get():f);if((revision&&gpuTimer_.last().identity.settingsRevision!=revision)||(epoch&&gpuTimer_.last().identity.epoch!=epoch)){diagnostics::GpuSample pending;pending.state=diagnostics::SampleState::Pending;return pending;}return gpuTimer_.last().gpu[size_t(diagnostics::GpuStage::Blit)];}
     // Application-side frame-generation timing for present-sink backends
     // (XeSS): the copies, barriers and provider prepare work recorded on
