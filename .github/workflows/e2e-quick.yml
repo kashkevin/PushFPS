@@ -224,8 +224,12 @@ jobs:
           $exe = Get-ChildItem $env:BUILD -Recurse -Filter 'veyra_lowdelay_e2e_tests.exe' | Select-Object -First 1
           $env:PATH = "$($exe.DirectoryName);$env:DEPS\vcpkg\installed\x64-windows\bin;$env:PATH;C:\ProgramData\chocolatey\bin"
           $out = Join-Path $env:RUNNER_TEMP 'hudguard-e2e'
-          python "$env:GITHUB_WORKSPACE\tests\integration\hudguard_e2e.py" --exe $exe.FullName --out $out --seconds 14
+          python "$env:GITHUB_WORKSPACE\tests\integration\hudguard_e2e.py" --exe $exe.FullName --out $out --seconds 14 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\hudguard-console.txt" | Out-Host
           $code = $LASTEXITCODE
+          $passCount = @(Select-String -Path "$env:RUNNER_TEMP\hudguard-console.txt" -Pattern '^\s*PASS\b').Count
+          $failLines = @(Select-String -Path "$env:RUNNER_TEMP\hudguard-console.txt" -Pattern '^\s*FAIL\b' | ForEach-Object { $t = $_.Line.Trim(); if ($t.Length -gt 220) { $t = $t.Substring(0, 220) }; $t })
+          Write-Host "::notice::hudguard e2e: PASS lines $passCount, FAIL lines $($failLines.Count), exit $code"
+          if ($failLines.Count) { Write-Host ("::notice::hudguard e2e FAIL lines (first 12):%0A" + (($failLines | Select-Object -First 12) -join '%0A')) }
           Get-ChildItem $out -Include *.y4m, *.mp4, *.mkv -Recurse | Remove-Item -ErrorAction SilentlyContinue
           Write-Host "hudguard e2e exit $code"
           if ($code -ne 0) { exit 1 }
@@ -254,8 +258,13 @@ jobs:
           # GPU DIS costs 40-62 ms a pair there), so the scheduling runs use the TEST-ONLY zero source; predictedMechanics
           # overrides it with the float source (docs/drafts/E2E_ENGINE_TEST.md, "Package 16 gate"). Same in build-windows.yml.
           if ($expect -eq 'fixed') { $env:VEYRA_TEST_PREDICT_FLOW = 'zero' }
-          python "$env:GITHUB_WORKSPACE\tests\integration\lowdelay_e2e.py" --exe $exe.FullName --out $out --expect $expect --seconds 20 @runs
+          python "$env:GITHUB_WORKSPACE\tests\integration\lowdelay_e2e.py" --exe $exe.FullName --out $out --expect $expect --seconds 20 @runs 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\e2e-console.txt" | Out-Host
           $code = $LASTEXITCODE
+          # Run logs cannot be read without signing in: the counts and the first FAIL lines are repeated as annotations.
+          $passCount = @(Select-String -Path "$env:RUNNER_TEMP\e2e-console.txt" -Pattern '^\s*PASS\b').Count
+          $failLines = @(Select-String -Path "$env:RUNNER_TEMP\e2e-console.txt" -Pattern '^\s*FAIL\b' | ForEach-Object { $t = $_.Line.Trim(); if ($t.Length -gt 220) { $t = $t.Substring(0, 220) }; $t })
+          Write-Host "::notice::lowdelay e2e: PASS lines $passCount, FAIL lines $($failLines.Count), exit $code"
+          if ($failLines.Count) { Write-Host ("::notice::lowdelay e2e FAIL lines (first 12):%0A" + (($failLines | Select-Object -First 12) -join '%0A')) }
           Get-ChildItem $out -Include *.y4m, *.mp4, *.mkv -Recurse | Remove-Item -ErrorAction SilentlyContinue
           if (Test-Path "$out\summary.json") { Get-Content "$out\summary.json" | Out-Host }
           Write-Host "lowdelay e2e exit $code"

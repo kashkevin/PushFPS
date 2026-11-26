@@ -734,8 +734,13 @@ jobs:
           if (-not $exe) { Write-Host "::error::veyra_lowdelay_e2e_tests.exe not built"; exit 1 }
           $env:PATH = "$($exe.DirectoryName);$env:DEPS\vcpkg\installed\x64-windows\bin;$env:QT_ROOT_DIR\bin;$env:PATH"
           $out = Join-Path $env:RUNNER_TEMP 'lowdelay-e2e'
-          python "$env:GITHUB_WORKSPACE\tests\integration\lowdelay_e2e.py" --exe $exe.FullName --out $out --expect fixed --seconds 20 --uhd-seconds 12
+          python "$env:GITHUB_WORKSPACE\tests\integration\lowdelay_e2e.py" --exe $exe.FullName --out $out --expect fixed --seconds 20 --uhd-seconds 12 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\e2e-console.txt" | Out-Host
           $code = $LASTEXITCODE
+          # Run logs cannot be read without signing in: the counts and the first FAIL lines are repeated as annotations.
+          $passCount = @(Select-String -Path "$env:RUNNER_TEMP\e2e-console.txt" -Pattern '^\s*PASS\b').Count
+          $failLines = @(Select-String -Path "$env:RUNNER_TEMP\e2e-console.txt" -Pattern '^\s*FAIL\b' | ForEach-Object { $t = $_.Line.Trim(); if ($t.Length -gt 220) { $t = $t.Substring(0, 220) }; $t })
+          Write-Host "::notice::lowdelay e2e: PASS lines $passCount, FAIL lines $($failLines.Count), exit $code"
+          if ($failLines.Count) { Write-Host ("::notice::lowdelay e2e FAIL lines (first 12):%0A" + (($failLines | Select-Object -First 12) -join '%0A')) }
           Get-ChildItem $out -Include *.y4m, *.mp4 -Recurse | Remove-Item -ErrorAction SilentlyContinue
           if (Test-Path "$out\summary.json") { Get-Content "$out\summary.json" | Select-Object -First 400 | Out-Host }
           Write-Host "lowdelay e2e exit $code"
