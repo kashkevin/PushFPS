@@ -52,6 +52,7 @@ Copy-Item (Join-Path $repo 'qml') $files -Recurse
 $shaders = Join-Path $BuildDir 'shaders'
 if (-not (Test-Path $shaders)) { throw "Compiled shaders not found in $shaders" }
 Copy-Item $shaders $files -Recurse
+Remove-Item (Join-Path $files 'shaders\TestVfgBlend.dxil') -ErrorAction SilentlyContinue   # TEST ONLY shader (fake VFG of the CI engine test): never shipped
 foreach ($doc in 'LICENSE', 'NOTICE.md', 'THIRD_PARTY_NOTICES.md') { Copy-Item (Join-Path $repo $doc) $files }
 Copy-Item (Join-Path $repo 'README.md') (Join-Path $files 'PushFPS-README.md')
 Copy-Item (Join-Path $repo 'licenses') $files -Recurse

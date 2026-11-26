@@ -1,5 +1,7 @@
 #include "veyra/ui/UpdateChecker.h"
 #include <QCoreApplication>
+#include <QFile>
+#include <QTemporaryDir>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSignalSpy>
@@ -125,6 +127,68 @@ private slots:
         checker.startAutomaticCheck(); checker.check(true);
         QTRY_COMPARE_WITH_TIMEOUT(done.size(), 1, 3000);
         QTest::qWait(2700); QCOMPARE(server.requests, 1);
+    }
+    // Slipstream (UpdatePolicy.h): a development build, or VEYRA_EXP_RP_NO_UPDATE, never asks the
+    // release server, offers nothing and installs nothing.
+    void disabledByPolicy() {
+        for (const auto policy : {veyra::ui::UpdatePolicy::SlipstreamBuild, veyra::ui::UpdatePolicy::SwitchedOff}) {
+            Server server;
+            UpdateChecker checker("2.0.7", nullptr, server.endpoint());
+            checker.setPolicy(policy);
+            QSignalSpy done(&checker, &UpdateChecker::completed), available(&checker, &UpdateChecker::updateAvailable),
+                       notices(&checker, &UpdateChecker::notice);
+            checker.startAutomaticCheck();
+            checker.check(false); checker.check(true);
+            QCOMPARE(checker.checking(), false);
+            QCOMPARE(done.size(), 2);
+            QCOMPARE(done[0][0].toString(), QString("disabled"));
+            QCOMPARE(done[1][0].toString(), QString("disabled"));
+            QCOMPARE(checker.canInstall(), false);
+            checker.installUpdate();
+            QCOMPARE(checker.installState(), QString("idle"));
+            QTest::qWait(2700);
+            QCOMPARE(server.requests, 0); QCOMPARE(available.size(), 0); QCOMPARE(notices.size(), 0);
+            QVERIFY(checker.latestVersion().isEmpty()); QVERIFY(checker.releaseUrl().isEmpty());
+        }
+    }
+    // Slipstream test copies of builds WITHOUT the policy (the original build): Install-Slipstream puts
+    // "PushFPS 999.0.0" first in the installer's record (scripts/remoteplay/testkit/slipstream-common.ps1,
+    // Set-SlipstreamUpdatePin). The record decides the installed version, so no release is offered.
+    void versionRecordPinKeepsADevelopmentCopyCurrent() {
+        const QByteArray installerRecord = "\xEF\xBB\xBFPushFPS 2.1.5-pushfps.123\r\nRuntime: Veyra-2.1.9-NVIDIA-win64-portable.zip from https://github.com/Likely7/Veyra-NRVideo/releases/tag/v2.1.9\r\n"
+                                           "Runtime SHA-256: 00\r\nNot installed: runtime\\experimental\\nr-ampere\\nvngx_dlssnr.dll (x)\r\n";
+        const QByteArray pin = "PushFPS 999.0.0\r\nSlipstream test copy: the first line is not a version. It keeps the in-app updater of this copy from offering or installing the official release.\r\n";
+        for (const bool pinned : {false, true}) {
+            Server server; server.body = release("v3.2.1");
+            QTemporaryDir install;
+            QFile record(install.filePath("PushFPS-VERSION.txt"));
+            QVERIFY(record.open(QIODevice::WriteOnly));
+            // Get-Content drops the byte order mark before the script writes the lines back.
+            QByteArray text = installerRecord;
+            if (pinned) { text = pin; text += installerRecord.mid(3); }
+            record.write(text);
+            record.close();
+            UpdateChecker checker("2.1.5-pushfps.123", nullptr, server.endpoint());
+            checker.setInstallDirForTests(install.path());
+            QSignalSpy done(&checker, &UpdateChecker::completed), available(&checker, &UpdateChecker::updateAvailable);
+            checker.check(false);
+            QTRY_COMPARE_WITH_TIMEOUT(done.size(), 1, 3000);
+            QCOMPARE(done[0][0].toString(), QString(pinned ? "current" : "available"));
+            QCOMPARE(available.size(), pinned ? 0 : 1);
+            QCOMPARE(checker.latestVersion().isEmpty(), pinned);
+            QCOMPARE(checker.canInstall(), false);
+        }
+    }
+    void enabledPolicyIsTheDefault() {
+        Server server;
+        UpdateChecker checker("2.0.7", nullptr, server.endpoint());
+        QVERIFY(checker.policy() == veyra::ui::UpdatePolicy::Enabled);
+        checker.setPolicy(veyra::ui::updatePolicy(false, true, "off"));
+        QSignalSpy done(&checker, &UpdateChecker::completed);
+        checker.check(false);
+        QTRY_COMPARE_WITH_TIMEOUT(done.size(), 1, 3000);
+        QCOMPARE(done[0][0].toString(), QString("available"));
+        QCOMPARE(server.requests, 1);
     }
     void destructionInFlight() {
         Server server; server.hang = true;

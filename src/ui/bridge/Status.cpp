@@ -2,6 +2,22 @@
 #include "../QmlPlayerBridge_p.h"
 
 namespace veyra::ui {
+namespace {
+// Stream "s12-settings" (D1): why the running multiplier is not the one asked for, in a few words.
+QString pushMultiplierReasonText(engine::PushEffectWhy why, const engine::PushEffectFacts& e) {
+    switch (why) {
+    case engine::PushEffectWhy::LimitedBySmoothness:
+        return e.smoothTargetFps > 0 ? QmlPlayerBridge::tr("流畅模式目标 %1 FPS 限制").arg(e.smoothTargetFps, 0, 'f', 0)
+                                     : QmlPlayerBridge::tr("流畅模式限制");
+    case engine::PushEffectWhy::LimitedByCap:
+        return QmlPlayerBridge::tr("输出上限 %1 FPS 限制").arg(e.capFps, 0, 'f', 0);
+    case engine::PushEffectWhy::LimitedByAdaptive:
+        return QmlPlayerBridge::tr("自适应倍率选择");
+    default:
+        return QmlPlayerBridge::tr("调度降档");
+    }
+}
+}  // namespace
 // --- professional-page readouts ---------------------------------------------
 // These read fields the engine genuinely publishes. Where it publishes nothing,
 // the getter says so and the UI shows an explicit "unmeasured" rather than a
@@ -400,7 +416,9 @@ void QmlPlayerBridge::updateRunStatus() {
         }
     }
     const bool displayChecking=i.displayRecheckPending||displays.busy();
-    if(i.presentation.variableRefresh){
+    if(i.presentation.variableRefresh&&i.presentation.display!=engine::DisplaySync::Automatic&&vrrLevel<4){
+        options<<tr("可变刷新 · 垂直同步时由驱动决定");   // review 3 MUST 2: the switch is unread under Vsync
+    }else if(i.presentation.variableRefresh){
         if(vrrLevel>=4)options<<tr("可变刷新 · 生效中");
         else if(vrrLevel==3)options<<tr("可变刷新 · 等待驱动确认");
         else options<<tr("可变刷新 · 当前屏幕不可用");
@@ -445,8 +463,16 @@ void QmlPlayerBridge::updateRunStatus() {
             case engine::FrameGenerationBackend::PushFlow: backend = QStringLiteral("PushFlow"); break;
             case engine::FrameGenerationBackend::Vfg: backend = QStringLiteral("NVIDIA VFG"); break;
             }
-            detail << tr("补帧 %1X · %2").arg(s.applied.multiplier)
-                          .arg(backend);
+            // Stream "s12-settings" (D1): the multiplier that RUNS, and why it differs from the one asked for
+            // (PushSettingsEffect.h; his Package 16 log: 4X and 6X asked, 3X ran under Smoothness Mode).
+            const auto& e = s.pushEffect;
+            const auto row = engine::pushSettingsEffect(e)[size_t(engine::PushEffectSetting::Multiplier)];
+            if (e.known && e.playing && e.executingMultiplier > 1 && e.executingMultiplier != e.requestedMultiplier)
+                detail << tr("补帧 %1X（设定 %2X，%3）· %4").arg(e.executingMultiplier).arg(e.requestedMultiplier)
+                              .arg(pushMultiplierReasonText(row.why, e)).arg(backend);
+            else
+                detail << tr("补帧 %1X · %2").arg(s.applied.multiplier)
+                              .arg(backend);
         }
         else detail << tr("未补帧");
         if (s.applied.multiplier > 1 && impl_->compareMode != 0) detail << tr("补帧暂停");
