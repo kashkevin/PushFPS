@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 DosukaSOL and the PushFPS contributors. Part of PushFPS, a modified version of Veyra.
 // PushFPS HUD Guard, step 2 (pipeline/PushHudGuard.h, pushHudGuardStep and PushHudGuardReference::update): per pixel
-// the state word (R32_UINT: run 8 bits | nearby 4 | thin 4 | edge 4 | held 2 | recent 6), from this frame's change and
+// the state word (R32_UINT: run 8 bits | nearby 4 | thin 4 | edge 4 | held 2 | recent 6 | iso 1 at bit 28), from this frame's change and
 // contrast, the moving pixels within `reach` px along 4 axes, the share of moving pixels in the 5 x 5 tiles around, and
 // the pixel's mask bit of the previous frame. The axis scan runs only when one of the 3 x 3 tiles around the pixel's own
 // moved (tiles are 16 px, reach <= 16: the early-out never changes the result).
@@ -50,7 +50,7 @@ void main(uint3 id : SV_DispatchThreadID, uint3 gid : SV_GroupID) {
         stateTex[id.xy] = r > 0 ? ((nearby << 8) | (thin << 12) | (edges << 16) | (r << 22)) : 0u;
         return;
     }
-    bool nearMoving = false, thinMoving = false;
+    bool nearMoving = false, thinMoving = false, iso = false;
     bool anyTile = false;
     [unroll] for (int ty = -1; ty <= 1; ++ty)
         [unroll] for (int tx = -1; tx <= 1; ++tx) {
@@ -66,11 +66,11 @@ void main(uint3 id : SV_DispatchThreadID, uint3 gid : SV_GroupID) {
             nearMoving = nearMoving || plus || minus;
             thinMoving = thinMoving || (plus && minus);
         }
-        if (nearMoving && !surroundMoving(int2(gid.xy))) { nearMoving = false; thinMoving = false; }
+        if (nearMoving && !surroundMoving(int2(gid.xy))) { iso = true; nearMoving = false; thinMoving = false; }   // a lone mover near (aim anchor off)
     }
     if (nearMoving) nearby = min(nearby + 1u, 15u);
     if (thinMoving) thin = min(thin + 1u, 15u);
     if (ck.y >= edge) edges = min(edges + 1u, 15u);
     else if (edges > 0) --edges;
-    stateTex[id.xy] = run | (nearby << 8) | (thin << 12) | (edges << 16) | (held << 20) | (recent << 22);
+    stateTex[id.xy] = run | (nearby << 8) | (thin << 12) | (edges << 16) | (held << 20) | (recent << 22) | (iso ? (1u << 28) : 0u);
 }

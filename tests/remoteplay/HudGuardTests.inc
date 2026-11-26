@@ -7,6 +7,7 @@
 // MUST 1); no flicker, release, re-arm after aiming (SHOULD 1), HDR10 thresholds and luma (SHOULD 2, 3).
 #include "HudGuardScene.h"
 #include <cstdint>
+#include <cstdio>
 #include <vector>
 
 namespace hud_guard_tests {
@@ -306,4 +307,208 @@ TEST(hud_guard_clean_leaves_unmasked_pixels_and_fills_from_neighbours) {
     g.compose(gen2, bg, bg, 0.5f, false, &cleaned);
     CHECK(gen2[4 * W + 10] == pushHudGuardPack({0.3f, 0.3f, 0.3f, 1}, false));
     CHECK(gen2[4 * W + 11] == prev[4 * W + 11]);
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Stream "s12-hud", 26 Nov 2026: the aim anchor (protection over flat pictures), moving objects that must never be
+// erased, subtitles, a crosshair that changes, HDR10 highlights, dark pictures, a fast camera and soft edges. Every number
+// printed here is SIMULATED (CPU reference, synthetic pictures); the generator is named per line ("simulated" = the
+// block-motion model of HudGuardScene.h, "perfect" = the truth, so every wrong pixel is the guard's own).
+// ---------------------------------------------------------------------------------------------------------------------
+namespace hud_guard_tests {
+inline void printLine(const char* label, const char* gen, unsigned multiplier, const Result& raw, const Result& guard) {
+    const auto u = [](std::uint64_t v) { return static_cast<unsigned long long>(v); };
+    std::printf("[hud-guard-sim] SIMULATED %-50s %s %uX | raw: exact %llu/%llu ghost %llu wrong %llu wrongFar %llu fringe %.1f ring %.2f | guard: exact %llu/%llu ghost %llu "
+                "wrong %llu wrongFar %llu fringe %.1f ring %.2f protectedPx %llu\n",
+                label, gen, multiplier, u(raw.mean.overlayExact), u(raw.mean.overlayPixels), u(raw.mean.ghostPixels), u(raw.mean.wrongPixels), u(raw.mean.wrongFar),
+                raw.mean.fringeMean, raw.mean.ringMean, u(guard.mean.overlayExact), u(guard.mean.overlayPixels), u(guard.mean.ghostPixels), u(guard.mean.wrongPixels),
+                u(guard.mean.wrongFar), guard.mean.fringeMean, guard.mean.ringMean, u(guard.protectedPixels));
+}
+// Protected pixels per real frame k (counts.protect), the frames fed through the guard like run() does.
+inline std::vector<std::uint64_t> protectedPerFrame(const Scene& s, int frames, PushHudGuardParams rules = {}) {
+    PushHudGuardReference g(s.width(), s.height(), rules);
+    std::vector<std::uint64_t> out(std::size_t(frames), 0);
+    auto prev = s.frame(0, true);
+    g.update(prev, prev, s.hdr(), true);
+    for (int k = 1; k < frames; ++k) {
+        const auto b = s.frame(k, true);
+        out[std::size_t(k)] = g.update(prev, b, s.hdr(), false).protect;
+        prev = b;
+    }
+    return out;
+}
+}  // namespace hud_guard_tests
+
+TEST(hud_guard_aim_anchor_protects_the_crosshair_over_a_flat_picture) {
+    using namespace hud_guard_tests;
+    for (bool hdr : {false, true})
+        for (unsigned m : {2u, 3u}) {
+            const Scene s(160, 112, kCross2, {false, 20}, {World::Kind::Sky}, {}, hdr);
+            PushHudGuardParams off;
+            off.anchorFrames = 0;   // Package 16 + review rules: protection only while the picture around moves
+            const auto raw = run(s, m, Mode::Raw, 48, 36), before = run(s, m, Mode::CleanAndCompose, 48, 36, Generator::Simulated, {}, off);
+            const auto after = run(s, m, Mode::CleanAndCompose, 48, 36);
+            printLine(hdr ? "flat sky + crosshair, pan 20, HDR10" : "flat sky + crosshair, pan 20, SDR", "simulated", m, before, after);
+            // Before: nothing protected (nothing moves around it), the crosshair is where the generator carries it.
+            CHECK(before.protectedPixels == 0 && before.mean.overlayExact == raw.mean.overlayExact && before.mean.overlayExact < before.mean.overlayPixels);
+            // After: protected from the 30th still frame on, the crosshair exact in every generated frame, nothing worse.
+            CHECK(after.protectedPixels > 0 && after.mean.overlayExact == after.mean.overlayPixels);
+            CHECK(after.mean.wrongPixels <= raw.mean.wrongPixels && after.mean.wrongFar <= raw.mean.wrongFar);
+        }
+    // Not before it has been still for anchorFrames real frames (past frames only).
+    const Scene s(160, 112, kCross2, {false, 20}, {World::Kind::Sky});
+    const auto per = protectedPerFrame(s, 40);
+    for (int k = 1; k < 30; ++k) CHECK(per[std::size_t(k)] == 0);
+    CHECK(per[30] > 0 && per[39] > 0);
+    // Outside the aim window nothing is anchored (the window is the 128 x 128 px at the exact centre). A 320 x 200
+    // picture with the text box 40 px left of the centre: protected inside the window only.
+    {
+        const Scene big(320, 200, {Overlay::Kind::Text, 2, 14, 1.0f}, {false, 20}, {World::Kind::Sky});
+        PushHudGuardReference g(320, 200);
+        auto prev = big.frame(0, true);
+        g.update(prev, prev, false, true);
+        for (int k = 1; k < 36; ++k) {
+            const auto b = big.frame(k, true);
+            g.update(prev, b, false, false);
+            prev = b;
+        }
+        std::uint64_t inside = 0, outside = 0;
+        for (std::uint32_t y = 0; y < 200; ++y)
+            for (std::uint32_t x = 0; x < 320; ++x)
+                if (g.isProtected(x, y)) (pushHudGuardAim(x, y, 320, 200) ? inside : outside) += 1;
+        CHECK(inside > 0 && outside == 0);
+    }
+}
+
+TEST(hud_guard_aim_anchor_never_erases_a_moving_object_over_a_still_picture) {
+    using namespace hud_guard_tests;
+    // PERFECT generator (raw = the truth): every wrong pixel is the guard's own. A still camera, a crosshair, a textured
+    // picture that has been still long enough for the anchor, and an object that crosses the picture by itself.
+    struct Case { const char* name; Mover mover; unsigned multiplier; };
+    const Case cases[] = {
+        {"bar 6x60 at 12 px/frame", {true, 12.0f, 6.0f, 60.0f, 0.92f, 0.25f}, 3},
+        {"bar 6x60 at 20 px/frame", {true, 20.0f, 6.0f, 60.0f, 0.92f, 0.25f}, 3},
+        {"pole 2x112 (wire, pole) at 12 px/frame", {true, 12.0f, 2.0f, 112.0f, 0.92f, 0.0f}, 3},
+        {"tracer 24x2 through the centre rows, 30 px/frame", {true, 30.0f, 24.0f, 2.0f, 0.92f, 55.0f / 112.0f}, 3},
+        {"small square 8x8 through the centre, 16 px/frame", {true, 16.0f, 8.0f, 8.0f, 0.92f, 52.0f / 112.0f}, 3},
+    };
+    for (const auto& c : cases) {
+        const Scene s(160, 112, kCross2, {false, 0}, {}, c.mover);
+        PushHudGuardParams off;
+        off.anchorFrames = 0;
+        const auto before = run(s, c.multiplier, Mode::CleanAndCompose, 60, 36, Generator::Perfect, {}, off);
+        const auto after = run(s, c.multiplier, Mode::CleanAndCompose, 60, 36, Generator::Perfect);
+        printLine(c.name, "perfect", c.multiplier, before, after);
+        CHECK(before.mean.wrongPixels == 0);   // as shipped before: one object in a still picture: nothing protected, nothing wrong
+        CHECK(after.mean.wrongFar == 0 && after.mean.wrongPixels == 0 && after.mean.overlayExact == after.mean.overlayPixels);
+    }
+}
+
+TEST(hud_guard_subtitles_appear_and_disappear_without_being_frozen) {
+    using namespace hud_guard_tests;
+    // A subtitle (text strokes) shown from real frame 16 to 35 over a panned picture: past frames only, so not protected
+    // before 6 frames after it appeared; released at once when it goes (a frozen subtitle would be the worst outcome).
+    Overlay text{Overlay::Kind::Text, 2, 14, 1.0f};
+    text.appearAt = 16; text.goneAt = 36;
+    const Scene s(160, 112, text, {true, 20});
+    const auto per = protectedPerFrame(s, 48);
+    for (int k = 1; k < 16 + int(PushHudGuardParams{}.stillFrames); ++k) CHECK(per[std::size_t(k)] == 0);
+    CHECK(per[24] > 0 && per[35] > 0);
+    // Gone from frame 36: its pixels change by far more than `hold` and are released on that frame.
+    CHECK(per[36] * 10 <= per[35] && per[37] * 10 <= per[35] && per[40] * 10 <= per[35]);
+    const auto both = run(s, 3, Mode::CleanAndCompose, 48, 8, Generator::Perfect), raw = run(s, 3, Mode::Raw, 48, 8, Generator::Perfect);
+    printLine("subtitle 16..35 over a circular pan 20", "perfect", 3, raw, both);
+    CHECK(both.mean.wrongFar == 0);
+    // Over a still camera (the anchor): shown long enough to be anchored, then gone: protection ends on the frame it goes.
+    Overlay text2{Overlay::Kind::Text, 2, 14, 1.0f};
+    text2.appearAt = 5; text2.goneAt = 45;
+    const Scene still(160, 112, text2, {false, 0});
+    const auto per2 = protectedPerFrame(still, 52);
+    CHECK(per2[40] > 0 && per2[44] > 0);
+    CHECK(per2[45] * 10 <= per2[44] && per2[46] * 10 <= per2[44]);
+}
+
+TEST(hud_guard_crosshair_that_changes_hit_marker_and_spread_bloom) {
+    using namespace hud_guard_tests;
+    // Spread bloom: the arms grow from 14 to 22 px at real frame 24. The old pixels stay protected without a gap; the new
+    // ones are protected only after stillFrames frames (a new shape is not known as an overlay before that).
+    Overlay bloom{Overlay::Kind::Crosshair, 2, 14, 1.0f};
+    bloom.bloomAt = 24; bloom.bloomArm = 22;
+    const Scene s(160, 112, bloom, {true, 20});
+    PushHudGuardReference g(160, 112);
+    auto prev = s.frame(0, true);
+    g.update(prev, prev, false, true);
+    const std::uint32_t cx = 80, cy = 56;
+    const int still = int(g.params().stillFrames);
+    for (int k = 1; k < 40; ++k) {
+        const auto b = s.frame(k, true);
+        g.update(prev, b, false, false);
+        prev = b;
+        if (k >= 10) CHECK(g.isProtected(cx + 10, cy) || g.isProtected(cx + 10, cy - 1));   // the old arm: no gap
+        if (k >= 24 && k < 24 + still - 1) CHECK(!g.isProtected(cx + 20, cy) && !g.isProtected(cx + 20, cy - 1));
+        if (k >= 24 + still + 3) CHECK(g.isProtected(cx + 20, cy) || g.isProtected(cx + 20, cy - 1));
+    }
+    const auto rawB = run(s, 3, Mode::Raw, 40, 30, Generator::Simulated), bothB = run(s, 3, Mode::CleanAndCompose, 40, 30, Generator::Simulated);
+    printLine("spread bloom 14 -> 22 px at frame 24, pan 20", "simulated", 3, rawB, bothB);
+    CHECK(bothB.mean.wrongPixels <= rawB.mean.wrongPixels);
+    // A hit marker shown for 4 real frames (133 ms): never protected, and nothing it does is made worse.
+    Overlay marker{Overlay::Kind::Crosshair, 2, 14, 1.0f};
+    marker.appearAt = 20; marker.goneAt = 24;
+    const Scene hit(160, 112, marker, {true, 20});
+    for (const auto n : protectedPerFrame(hit, 40)) CHECK(n == 0);
+    const auto hitRaw = run(hit, 3, Mode::Raw, 28, 21, Generator::Simulated), hitBoth = run(hit, 3, Mode::CleanAndCompose, 28, 21, Generator::Simulated);
+    printLine("hit marker 4 frames (frames 20-23), pan 20", "simulated", 3, hitRaw, hitBoth);
+    CHECK(hitBoth.protectedPixels == 0 && hitBoth.mean.wrongPixels == hitRaw.mean.wrongPixels);
+    // Aiming down sights: the crosshair's value changes at frame 20: exact again two frames later (re-arm), at 2X and 3X.
+    for (unsigned m : {2u, 3u}) {
+        const Scene ads(160, 112, {Overlay::Kind::Crosshair, 1, 14, 1.0f, 0.96f, 20, 0.55f}, {true, 20});
+        const auto r = run(ads, m, Mode::Raw, 34, 23, Generator::Simulated), b = run(ads, m, Mode::CleanAndCompose, 34, 23, Generator::Simulated);
+        printLine("aim down sights (value change at 20), pan 20", "simulated", m, r, b);
+        CHECK(b.mean.overlayExact > r.mean.overlayExact * 2);
+    }
+}
+
+TEST(hud_guard_test_matrix_hdr10_highlights_dark_pictures_and_a_fast_camera) {
+    using namespace hud_guard_tests;
+    // HDR10 (PQ, thresholds x 0.6) over a picture with highlights above the SDR span (gain 1.6: PQ codes up to about 0.99).
+    {
+        World w;
+        w.gain = 1.6f;
+        const Scene s(160, 112, kCross2, {true, 24}, w, {}, true);
+        for (unsigned m : {2u, 3u}) {
+            const auto raw = run(s, m, Mode::Raw, 14, 8), both = run(s, m, Mode::CleanAndCompose, 14, 8);
+            printLine("HDR10 PQ highlights (gain 1.6), circle 24", "simulated", m, raw, both);
+            CHECK(both.mean.overlayExact == both.mean.overlayPixels && both.mean.wrongPixels <= raw.mean.wrongPixels);
+        }
+    }
+    // A dark picture (night: range 0.03 around 0.05) and a dim HUD (grey 0.30): is the crosshair still a structure?
+    for (bool hdr : {false, true}) {
+        const Scene s(160, 112, {Overlay::Kind::Crosshair, 2, 14, 1.0f, 0.30f}, {true, 24}, {World::Kind::Dark}, {}, hdr);
+        const auto raw = run(s, 3, Mode::Raw, 16, 8), both = run(s, 3, Mode::CleanAndCompose, 16, 8);
+        printLine(hdr ? "dark picture + dim crosshair 0.30, HDR10" : "dark picture + dim crosshair 0.30, SDR", "simulated", 3, raw, both);
+        CHECK(both.mean.wrongPixels <= raw.mean.wrongPixels);
+        CHECK(both.mean.overlayExact == both.mean.overlayPixels);
+    }
+    // A fast camera: 60 px of shift per real frame (a flick), straight and in a circle.
+    for (bool circle : {false, true}) {
+        const Scene s(160, 112, kCross2, {circle, 60.0f}, {});
+        const auto raw = run(s, 3, Mode::Raw, 16, 8), both = run(s, 3, Mode::CleanAndCompose, 16, 8);
+        printLine(circle ? "fast camera 60 px/frame, circle" : "fast camera 60 px/frame, straight", "simulated", 3, raw, both);
+        CHECK(both.mean.wrongPixels <= raw.mean.wrongPixels);
+    }
+}
+
+TEST(hud_guard_soft_edged_crosshair_edge_metric) {
+    using namespace hud_guard_tests;
+    // An anti-aliased crosshair: a 1-px fringe at 0.5 / 0.3 of the core's opacity over a moving picture. The metric is
+    // the mean error (8-bit codes) on the fringe pixels against the truth, with the generator's own picture as raw.
+    for (float fringe : {0.5f, 0.3f}) {
+        const Scene s(160, 112, {Overlay::Kind::Crosshair, 2, 14, 1.0f, 0.96f, -1, 0.55f, fringe}, {true, 24});
+        for (unsigned m : {2u, 3u}) {
+            const auto raw = run(s, m, Mode::Raw, 14, 8), both = run(s, m, Mode::CleanAndCompose, 14, 8);
+            printLine(fringe > 0.4f ? "soft-edged crosshair (fringe 0.5), circle 24" : "soft-edged crosshair (fringe 0.3), circle 24", "simulated", m, raw, both);
+            CHECK(raw.mean.fringePixels > 0 && both.mean.fringePixels > 0);
+            CHECK(both.mean.fringeMean <= raw.mean.fringeMean);   // the soft edge is not made worse than the raw generator's
+        }
+    }
 }

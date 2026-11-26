@@ -34,12 +34,17 @@ inline float noise(float x, float y, float cell, unsigned seed) {
 }
 
 struct World {
-    enum class Kind { Textured, LowContrast, SkyTrunks } kind = Kind::Textured;
+    enum class Kind { Textured, LowContrast, SkyTrunks, Sky, Dark } kind = Kind::Textured;
     float contrast = 0.05f;   // LowContrast: the texture's range
+    float gain = 1.0f;        // Textured: scales the picture (HDR highlights: above 1 it clips in SDR, goes beyond the SDR span in PQ)
 };
 inline float worldValue(const World& w, float x, float y) {
     switch (w.kind) {
-    case World::Kind::Textured: return 0.15f + 0.45f * noise(x, y, 9.0f, 1u) + 0.25f * noise(x, y, 2.5f, 2u);
+    case World::Kind::Textured: return w.gain * (0.15f + 0.45f * noise(x, y, 9.0f, 1u) + 0.25f * noise(x, y, 2.5f, 2u));
+    // Flat sky: a gentle gradient (0.02 over 80 px: under 0.005 per real frame at 20 px, below every threshold), nothing
+    // else. A wall or fog looks the same to the guard. Dark: a night picture, range 0.03 around 0.05.
+    case World::Kind::Sky: return 0.72f + 0.02f * noise(x, y, 80.0f, 5u);
+    case World::Kind::Dark: return 0.04f + 0.03f * (0.6f * noise(x, y, 9.0f, 1u) + 0.4f * noise(x, y, 2.5f, 2u));
     case World::Kind::LowContrast: return 0.45f + w.contrast * (0.6f * noise(x, y, 9.0f, 1u) + 0.4f * noise(x, y, 2.5f, 2u));
     case World::Kind::SkyTrunks: {
         // 6-px dark trunks (anti-aliased by one pixel) in front of a flat sky, one per 40-px cell at a position that
@@ -62,6 +67,10 @@ struct Overlay {
     int changeAt = -1;      // from this real frame on the overlay's grey is changedValue (aiming at a target)
     float changedValue = 0.55f;
     float fringe = 0.0f;    // coverage of a 1-px anti-aliased edge around the overlay (0: hard edge)
+    int appearAt = -1;      // shown from this real frame on (-1: from the start): subtitles, a hit marker
+    int goneAt = -1;        // not shown from this real frame on (-1: never)
+    int bloomAt = -1;       // from this real frame on a crosshair's arms are bloomArm long (spread bloom)
+    int bloomArm = 22;
 };
 struct Camera {
     bool circle = false;
@@ -73,6 +82,7 @@ struct Camera {
 struct Mover {
     bool on = false;
     float speed = 12.0f, width = 6.0f, height = 60.0f, value = 0.92f;
+    float topFrac = 0.25f;   // top edge as a share of the picture's height
 };
 
 inline constexpr float kHdrSpan = 0.58f;   // SDR's 0-203 nits in PQ codes (about 58 % of the range)
@@ -102,16 +112,23 @@ public:
                 if ((dx || dy) && core(x + dx, y + dy, unused) > 0) return o_.fringe * o_.alpha;
         return 0.0f;
     }
+    // A pixel of the soft edge: covered only by the fringe, not by the overlay's own core.
+    bool isFringe(int x, int y) const {
+        bool inside = false;
+        return o_.fringe > 0 && core(x, y, inside) == 0.0f && coverage(x, y, inside) > 0.0f;
+    }
     float core(int x, int y, bool& insideMap) const {
         insideMap = false;
+        if ((o_.appearAt >= 0 && frameIndex_ < o_.appearAt) || (o_.goneAt >= 0 && frameIndex_ >= o_.goneAt)) return 0.0f;
         const int cx = int(w_) / 2, cy = int(h_) / 2;
         switch (o_.kind) {
         case Overlay::Kind::None: return 0.0f;
         case Overlay::Kind::Crosshair: {
             const int half = o_.lineWidth / 2, lo = -half, hi = lo + o_.lineWidth - 1;
             const int dx = x - cx, dy = y - cy;
-            const bool h = dy >= lo && dy <= hi && std::abs(dx) <= o_.arm && std::abs(dx) >= 3;
-            const bool v = dx >= lo && dx <= hi && std::abs(dy) <= o_.arm && std::abs(dy) >= 3;
+            const int arm = o_.bloomAt >= 0 && frameIndex_ >= o_.bloomAt ? o_.bloomArm : o_.arm;
+            const bool h = dy >= lo && dy <= hi && std::abs(dx) <= arm && std::abs(dx) >= 3;
+            const bool v = dx >= lo && dx <= hi && std::abs(dy) <= arm && std::abs(dy) >= 3;
             const bool dot = dx >= lo && dx <= hi && dy >= lo && dy <= hi;
             return h || v || dot ? o_.alpha : 0.0f;
         }
@@ -138,7 +155,7 @@ public:
         if (!mover_.on) return false;
         const float left = 6.0f + mover_.speed * k, span = float(w_) + 40.0f;
         const float l = left - span * std::floor(left / span) - 20.0f;
-        const float top = float(h_) * 0.25f;
+        const float top = float(h_) * mover_.topFrac;
         return float(x) >= l && float(x) < l + mover_.width && float(y) >= top && float(y) < top + mover_.height;
     }
     // Screen picture of real frame k (overlay over the world at camera position k); withOverlay false: the world only.
@@ -175,6 +192,7 @@ public:
 private:
     std::vector<std::uint32_t> render(float time, int k, bool withOverlay) const {
         float px, py;
+        frameIndex_ = k;   // coverage() (appear / gone / bloom) follows the frame rendered last
         position(time, px, py);
         const float ov = o_.changeAt >= 0 && k >= o_.changeAt ? o_.changedValue : o_.value;
         std::vector<std::uint32_t> out(std::size_t(w_) * h_);
@@ -200,6 +218,7 @@ private:
         const float c = value(f[std::size_t(iy1) * w_ + ix]), d = value(f[std::size_t(iy1) * w_ + ix1]);
         return (a + (b - a) * tx) + ((c + (d - c) * tx) - (a + (b - a) * tx)) * ty;
     }
+    mutable int frameIndex_ = 1 << 20;
     std::uint32_t w_, h_;
     Overlay o_;
     Camera c_;
@@ -219,6 +238,8 @@ struct Measure {
     double near1 = 0, near2 = 0, near3 = 0;   // mean |R - truth| at distance 1, 2, 3 (the grown edge: review SHOULD 4)
     std::uint64_t wrongPixels = 0;   // pixels anywhere (not the map's own content) with |R - truth| > 8 codes
     std::uint64_t wrongFar = 0;      // the same farther than 3 px from the overlay (damage away from any HUD)
+    double fringeMean = 0;           // mean |R - truth| (codes) on the anti-aliased fringe pixels (coverage > 0 beside the core): the soft edge
+    std::uint64_t fringePixels = 0;
 };
 inline Measure measure(const Scene& s, const std::vector<std::uint32_t>& r, const std::vector<std::uint32_t>& g0, const std::vector<std::uint32_t>& truth) {
     const int W = int(s.width()), H = int(s.height());
@@ -240,7 +261,7 @@ inline Measure measure(const Scene& s, const std::vector<std::uint32_t>& r, cons
                         d2[std::size_t(y) * W + x] = std::min(d2[std::size_t(y) * W + x], std::max(std::abs(dx), std::abs(dy)));
                     }
     Measure m;
-    double ghost = 0, over = 0, ring = 0, n[4] = {0, 0, 0, 0};
+    double ghost = 0, over = 0, ring = 0, fringe = 0, n[4] = {0, 0, 0, 0};
     std::uint64_t ghostN = 0, ringN = 0, nN[4] = {0, 0, 0, 0};
     for (int y = 0; y < H; ++y)
         for (int x = 0; x < W; ++x) {
@@ -251,11 +272,13 @@ inline Measure measure(const Scene& s, const std::vector<std::uint32_t>& r, cons
             const double e = std::fabs(rv - tv);
             m.wrongPixels += e > 8.0;
             if (d2[i] > 3) m.wrongFar += e > 8.0;
+            if (d2[i] == 0 && s.isFringe(x, y)) { ++m.fringePixels; fringe += e; }
             if (d2[i] == 0) { ++m.overlayPixels; over += e; m.overlayExact += e < 0.5 / (s.hdr() ? kHdrSpan * 1023.0 / 255.0 : 1.0); }
             else if (d2[i] > 3) { ghost += std::fabs(rv - gv); ++ghostN; m.ghostPixels += std::fabs(rv - gv) > 8.0; }
             if (d2[i] >= 1 && d2[i] <= 3) { n[d2[i]] += e; ++nN[d2[i]]; }
             if (d2[i] >= 4 && d2[i] <= 12) { ring += e; ++ringN; }
         }
+    m.fringeMean = m.fringePixels ? fringe / double(m.fringePixels) : 0;
     m.ghostMean = ghostN ? ghost / double(ghostN) : 0;
     m.overlayMean = m.overlayPixels ? over / double(m.overlayPixels) : 0;
     m.ringMean = ringN ? ring / double(ringN) : 0;
@@ -275,13 +298,13 @@ struct Result { Measure mean; unsigned generated = 0; std::uint64_t protectedPix
 // or "plain" (the generator's output on the overlay-free pictures). For tools/hud_guard_eval --write and its downscale.
 using FrameSink = std::function<void(int k, unsigned sub, float t, const char* kind, const std::vector<std::uint32_t>& words)>;
 inline Result run(const Scene& s, unsigned multiplier, Mode mode, int frames = 16, int from = 8, Generator gen = Generator::Simulated,
-                  const FrameSink& sink = {}) {
-    veyra::pipeline::PushHudGuardReference guard(s.width(), s.height());
+                  const FrameSink& sink = {}, veyra::pipeline::PushHudGuardParams rules = {}) {
+    veyra::pipeline::PushHudGuardReference guard(s.width(), s.height(), rules);
     const bool tenBit = s.hdr();
     Result res;
     std::vector<std::uint32_t> prev = s.frame(0, true), prevClean = prev, prevPlain = s.frame(0, false);
     guard.update(prev, prev, tenBit, true);
-    double sums[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    double sums[8] = {0, 0, 0, 0, 0, 0, 0, 0};   // [6] fringe
     for (int k = 1; k < frames; ++k) {
         const auto b = s.frame(k, true), bPlain = s.frame(k, false);
         const auto counts = guard.update(prev, b, tenBit, false);
@@ -296,9 +319,9 @@ inline Result run(const Scene& s, unsigned multiplier, Mode mode, int frames = 1
                 const auto truthNow = s.truth(k, t, true);
                 const auto m = measure(s, r, g0, truthNow);
                 if (sink) { sink(k, sub, t, "generated", r); sink(k, sub, t, "truth", truthNow); sink(k, sub, t, "plain", g0); }
-                sums[0] += m.ghostMean; sums[1] += m.overlayMean; sums[2] += m.ringMean; sums[3] += m.near1; sums[4] += m.near2; sums[5] += m.near3;
+                sums[6] += m.fringeMean; sums[0] += m.ghostMean; sums[1] += m.overlayMean; sums[2] += m.ringMean; sums[3] += m.near1; sums[4] += m.near2; sums[5] += m.near3;
                 res.mean.ghostPixels += m.ghostPixels; res.mean.overlayExact += m.overlayExact; res.mean.overlayPixels += m.overlayPixels;
-                res.mean.wrongPixels += m.wrongPixels; res.mean.wrongFar += m.wrongFar;
+                res.mean.wrongPixels += m.wrongPixels; res.mean.wrongFar += m.wrongFar; res.mean.fringePixels += m.fringePixels;
                 ++res.generated;
             }
         }
@@ -307,7 +330,7 @@ inline Result run(const Scene& s, unsigned multiplier, Mode mode, int frames = 1
     }
     if (res.generated) {
         const double n = double(res.generated);
-        res.mean.ghostMean = sums[0] / n; res.mean.overlayMean = sums[1] / n; res.mean.ringMean = sums[2] / n;
+        res.mean.ghostMean = sums[0] / n; res.mean.overlayMean = sums[1] / n; res.mean.ringMean = sums[2] / n; res.mean.fringeMean = sums[6] / n;
         res.mean.near1 = sums[3] / n; res.mean.near2 = sums[4] / n; res.mean.near3 = sums[5] / n;
         res.mean.ghostPixels /= res.generated; res.mean.wrongPixels /= res.generated; res.mean.wrongFar /= res.generated;
     }

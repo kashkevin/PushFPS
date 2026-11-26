@@ -77,6 +77,12 @@ struct PushHudGuardParams {
     // pixels) does not, and without this the still scenery next to its path was protected and the object erased where it
     // jumped over it between two real frames (OFFLINE, tools/hud_guard_eval "DAMAGE thin bar").
     float surroundShare = 0.3f;
+    // Aim anchor (stream s12-hud, 26 Nov 2026): over a flat picture (sky, a wall, fog) nothing moves around the crosshair, so
+    // `nearby` never counts and the overlay was never protected. In the 128 x 128 aim window at the exact centre a still
+    // structure is also protected after anchorFrames still frames (1 s at 30 FPS) without any motion evidence, unless a
+    // lone object moves within `reach` px that frame (`iso`: moving pixels near, but the picture around does not move:
+    // something passing through, which must never be painted over). 0 switches the anchor off (Package 16 + review rules).
+    std::uint32_t anchorFrames = 30;
     std::uint32_t holdFrames = 2;      // review MUST 1 c: the hold ends on the 3rd changed frame in a row
     std::uint32_t recentFrames = 60;   // about 2 s at 30 FPS (6 bits in the state)
     std::uint32_t reach = 8;           // px searched along each axis for moving pixels
@@ -122,16 +128,20 @@ inline float pushHudGuardChange(std::uint32_t a, std::uint32_t b, bool tenBit) {
     return pushHudGuardQuantize(std::fabs(pushHudGuardWordLuma(b, tenBit) - pushHudGuardWordLuma(a, tenBit)));
 }
 
-struct PushHudGuardCell { std::uint32_t run = 0, nearby = 0, thin = 0, edge = 0, held = 0, recent = 0; };
-// The GPU's state word (R32_UINT): run 8 bits | nearby 4 | thin 4 | edge 4 | held 2 | recent 6.
+struct PushHudGuardCell { std::uint32_t run = 0, nearby = 0, thin = 0, edge = 0, held = 0, recent = 0, iso = 0; };
+// The GPU's state word (R32_UINT): run 8 bits | nearby 4 | thin 4 | edge 4 | held 2 | recent 6 | iso 1 (bit 28).
 inline std::uint32_t pushHudGuardPackCell(const PushHudGuardCell& c) {
-    return c.run | (c.nearby << 8) | (c.thin << 12) | (c.edge << 16) | (c.held << 20) | (c.recent << 22);
+    return c.run | (c.nearby << 8) | (c.thin << 12) | (c.edge << 16) | (c.held << 20) | (c.recent << 22) | ((c.iso & 1u) << 28);
 }
 inline PushHudGuardCell pushHudGuardUnpackCell(std::uint32_t w) {
-    return {w & 255u, (w >> 8) & 15u, (w >> 12) & 15u, (w >> 16) & 15u, (w >> 20) & 3u, (w >> 22) & 63u};
+    return {w & 255u, (w >> 8) & 15u, (w >> 12) & 15u, (w >> 16) & 15u, (w >> 20) & 3u, (w >> 22) & 63u, (w >> 28) & 1u};
 }
 inline std::uint32_t pushHudGuardArmFrames(const PushHudGuardCell& c, const PushHudGuardParams& p) { return c.recent > 0 ? p.rearmFrames : p.stillFrames; }
 inline bool pushHudGuardArmed(const PushHudGuardCell& c, const PushHudGuardParams& p) { return c.run >= pushHudGuardArmFrames(c, p) && c.nearby >= p.nearFrames; }
+// The aim anchor: still long enough in the aim window with no lone mover near this frame.
+inline bool pushHudGuardAnchored(const PushHudGuardCell& c, const PushHudGuardParams& p, bool inAim) {
+    return inAim && p.anchorFrames > 0 && c.run >= p.anchorFrames && c.iso == 0;
+}
 inline bool pushHudGuardStructure(const PushHudGuardCell& c, const PushHudGuardParams& p) { return c.run >= pushHudGuardArmFrames(c, p) && c.edge >= p.edgeFrames; }
 
 // The surround rule in integers (the GPU compares the same products): moved >= surroundShare x pixels.
@@ -142,7 +152,7 @@ inline bool pushHudGuardSurroundMoving(std::uint64_t moved, std::uint64_t pixels
 // One step of a pixel's state. wasProtected: the pixel's mask bit of the previous frame; scan results and contrast
 // from this frame.
 inline PushHudGuardCell pushHudGuardStep(PushHudGuardCell c, float change, float contrast, bool nearMoving, bool thinMoving, bool wasProtected,
-                                         const PushHudGuardParams& p) {
+                                         const PushHudGuardParams& p, bool isolated = false) {
     if (!wasProtected && c.recent > 0) --c.recent;
     if (change <= p.still) {
         c.run = std::min(c.run + 1u, kPushHudGuardMaxRun);
@@ -156,6 +166,7 @@ inline PushHudGuardCell pushHudGuardStep(PushHudGuardCell c, float change, float
         if (r.recent > 0) { r.nearby = c.nearby; r.thin = c.thin; r.edge = c.edge; }
         return r;
     }
+    c.iso = isolated ? 1u : 0u;
     if (nearMoving) c.nearby = std::min(c.nearby + 1u, kPushHudGuardMaxCount);
     if (thinMoving) c.thin = std::min(c.thin + 1u, kPushHudGuardMaxCount);
     // Up and down: a structure has contrast in most frames (a crosshair against the picture behind it); a sky pixel that
@@ -238,10 +249,10 @@ public:
         for (std::uint32_t y = 0; y < h_; ++y)
             for (std::uint32_t x = 0; x < w_; ++x) {
                 const std::size_t i = std::size_t(y) * w_ + x;
-                bool nearMoving = false, thinMoving = false;
+                bool nearMoving = false, thinMoving = false, isolated = false;
                 scan(x, y, nearMoving, thinMoving);
-                if (nearMoving && !surroundMoving(tiles, tx, ty, x / kPushHudGuardTile, y / kPushHudGuardTile)) nearMoving = thinMoving = false;
-                cells_[i] = pushHudGuardStep(cells_[i], change_[i], contrast_[i], nearMoving, thinMoving, (mask_[i] & 1u) != 0, p_);
+                if (nearMoving && !surroundMoving(tiles, tx, ty, x / kPushHudGuardTile, y / kPushHudGuardTile)) { isolated = true; nearMoving = thinMoving = false; }
+                cells_[i] = pushHudGuardStep(cells_[i], change_[i], contrast_[i], nearMoving, thinMoving, (mask_[i] & 1u) != 0, p_, isolated);
             }
         for (std::uint32_t y = 0; y < h_; ++y)
             for (std::uint32_t x = 0; x < w_; ++x) {
@@ -249,7 +260,7 @@ public:
                 const bool aim = pushHudGuardAim(x, y, w_, h_);
                 if (aim) counts.aimRunMax = std::max(counts.aimRunMax, c.run);
                 std::uint8_t m = 0;
-                if (pushHudGuardArmed(c, p_) && structureNear(int(x), int(y))) {
+                if ((pushHudGuardArmed(c, p_) || pushHudGuardAnchored(c, p_, aim)) && structureNear(int(x), int(y))) {
                     m = c.thin >= 1 ? 3 : 1;
                     ++counts.protect;
                     const bool centre = pushHudGuardCentre(x, y, w_, h_);

@@ -3,13 +3,14 @@
 // PushFPS HUD Guard, step 3 (pipeline/PushHudGuard.h, PushHudGuardReference::update): the mask (R8_UINT, bit 0
 // protected, bit 1 cleaned). Protected = armed (run >= K, nearby >= nearFrames; K = rearmFrames while `recent`, else
 // stillFrames) and a still structure (run >= its K, edge >= edgeFrames) within `gate` px; cleaned = protected and thin.
+// Aim anchor: in the aim window a pixel still for anchorFrames frames with no lone mover near (state bit 28 clear) is armed too.
 // Adds the protected / cleaned pixels (all, the middle tenth, the 128 x 128 aim window) and the aim window's longest run.
 Texture2D<uint> stateTex : register(t0);
 RWTexture2D<uint> maskTex : register(u0);
 RWByteAddressBuffer counters : register(u1);
 cbuffer Constants : register(b0) {
     uint width, height, stillFrames, rearmFrames;
-    uint nearFrames, edgeFrames, gate, pad0;
+    uint nearFrames, edgeFrames, gate, anchorFrames;
     uint pad1, pad2, pad3, pad4;
 };
 groupshared uint gCount[7];
@@ -37,7 +38,8 @@ void main(uint3 id : SV_DispatchThreadID, uint gi : SV_GroupIndex) {
         const bool inAim = aim(id.xy);
         if (inAim) InterlockedMax(gCount[6], run);
         uint m = 0;
-        if (run >= armFrames(w) && ((w >> 8) & 15u) >= nearFrames) {
+        const bool anchored = inAim && anchorFrames > 0 && run >= anchorFrames && ((w >> 28) & 1u) == 0;
+        if ((run >= armFrames(w) && ((w >> 8) & 15u) >= nearFrames) || anchored) {
             bool structure = false;
             [loop] for (int dy = -int(gate); dy <= int(gate) && !structure; ++dy)
                 [loop] for (int dx = -int(gate); dx <= int(gate) && !structure; ++dx) {

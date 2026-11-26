@@ -43,10 +43,10 @@ int64_t steadyMsNow() {
 
 std::string PushHudGuardPass::describe() const {
     return std::format("HUD guard {}x{} mode={} preClean={} stillFrames={} rearmFrames={} nearFrames={} edgeFrames={} gate={} holdFrames={} "
-                       "surroundShare={} reach={} grow={} fillReach={} still={:.4f} hold={:.4f} move={:.4f} edge={:.4f}",
+                       "surroundShare={} reach={} grow={} fillReach={} still={:.4f} hold={:.4f} move={:.4f} edge={:.4f} anchorFrames={}",
                        width_, height_, outputMode_, preClean() ? 1 : 0, params_.stillFrames, params_.rearmFrames, params_.nearFrames, params_.edgeFrames,
                        params_.gate, params_.holdFrames, params_.surroundShare, params_.reach, params_.grow, params_.fillReach, params_.still, params_.hold,
-                       params_.move, params_.edge);
+                       params_.move, params_.edge, params_.anchorFrames);
 }
 
 bool PushHudGuardPass::initialize(ID3D12Device* device, uint32_t width, uint32_t height, DXGI_FORMAT format, unsigned outputMode, bool preCleanOn,
@@ -160,7 +160,7 @@ bool PushHudGuardPass::update(ID3D12GraphicsCommandList* list, StateTracker& tra
     {   // 3: the mask and the evidence counters.
         float c[kConstants]{};
         c[0] = bitsOf(width_); c[1] = bitsOf(height_); c[2] = bitsOf(params_.stillFrames); c[3] = bitsOf(params_.rearmFrames);
-        c[4] = bitsOf(params_.nearFrames); c[5] = bitsOf(params_.edgeFrames); c[6] = bitsOf(params_.gate);
+        c[4] = bitsOf(params_.nearFrames); c[5] = bitsOf(params_.edgeFrames); c[6] = bitsOf(params_.gate); c[7] = bitsOf(params_.anchorFrames);
         mask_pass_.bind(list, c, gpuHandleOf(mask_pass_, 0).ptr, gpuHandleOf(mask_pass_, 1).ptr);
         list->Dispatch(tilesX_, tilesY_, 1);
     }
