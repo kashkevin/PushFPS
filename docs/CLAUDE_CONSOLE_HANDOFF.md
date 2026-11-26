@@ -114,6 +114,37 @@ heads; do not treat any of it as accepted.**
 | ownfg | `work/ownfg` `04829397` (one commit on `83209dd6`: reference refinement rules, duplicate tests) | `ck/gpu-ownfg` only | not checked on `ck/ownfg` | CPU reference only, never compiled by the core-test lane |
 | bench | `work/bench` `73fd6765` (workflow `quality-bench.yml`, data-driven downscale kernels) | `ck/bench` | quality-bench #2 green on `f955fd98` (run 45867581929: the first time the bench ran in CI; its artifact holds the report); #3 on `73fd6765` was running | `OBJECTIVE_COMPARISON.md` not written yet |
 
+### 0-A.3b Third takeover, 26 Nov 2026 ~18:50-21:30 UTC (state: read this before the tables above)
+
+How this session had to work (it matters for the next one):
+- A session started in one worktree can only reach the others after the owner adds `C:\Users\kashh\PushFPS-wt` as a
+  working directory. Background sub-agents are refused the shell; **foreground** sub-agents work. CI is read without `gh`
+  from `https://api.github.com/repos/kashkevin/PushFPS/actions/runs?branch=<lane>&per_page=4`, `.../runs/<id>/jobs` and
+  `.../check-runs/<job id>/annotations` (the workflows repeat error and FAIL lines as annotations; job logs need a sign-in).
+  `origin` is `kashkevin/PushFPS`, not the upstream project.
+- **Windows trap in `scripts/i18n/extract.py`:** it sorts paths case-insensitively on Windows, so a catalogue regenerated
+  on this PC attributes some strings to a different `"src"` than Linux CI does and `checks` fails its byte comparison
+  (this was `checks` #481: `src/ui/bridge/Preferences.cpp` instead of `src/ui/QmlPlayerBridge.cpp`). After regenerating,
+  revert `"src"`-only changes, or sort by `as_posix()` when comparing.
+- `remoteplay-checks` takes 35-45 minutes when it passes (the kit dry runs); a failing run ends in 5-10.
+
+| Stream | Head (local = pushed) | CI on that head | What happened |
+|---|---|---|---|
+| settings | `45173758` on `ck/s12-settings` | `checks` #484, `remoteplay-checks` #450 green | catalogue attribution fixed. Open review item: the `smoothness` / `outputCap` rows are in the log line and the bridge only (the draft says so); no note in the interface |
+| pace | `c8e53472` on `ck/s12-pace` and `ck/gpu-s12-pace` | `checks` #489, `remoteplay-checks` #455, `gpu-quick` green | the interrupted team's uncommitted work was committed as found (`ca1e1f96`), then: a broken `printf` in `OnScreenCadenceTests.inc`, exact sums in the spread estimators, a slow-pan test for `[frame-probe]`, the MSVC annotation filter, `docs/drafts/PACE_DOWNSCALE.md` (new). The two QML failures: the test mock lacked `pushSteadyDetail` / `pushUnfocusedNotice`, already added by the batch (verified only by a full build). Open: downscale kernel table never run (no numbers, sharpest variant not chosen); window-occlusion checks off the presentation thread not started |
+| hud | `0d176349` on `ck/s12-hud` and `ck/gpu-s12-hud` | g++ / sanitizers green on `55b2b282`; MSVC and `gpu-quick` on `0d176349`: read them | the aim anchor protected nearly a whole still textured picture (4 failing tests): now only over a flat surround (`anchorFlatMax`), and off for a pair when anything changes in the aim window + 64 px (`anchorMargin`, state bit 28); scans behind explicit shader branches; scene numbers printed as CI notices. Known limits pinned by tests and in `HUD_GUARD.md`: soft-edged crosshair fringe slightly worse than raw (+3 codes), HDR highlights 87 % exact, dark / fast-camera numbers never read. **Unknown: whether the anchor ever arms on real pictures with grain** |
+| ownfg | `04829397` on `ck/ownfg`, `ck/gpu-ownfg` | green on `ck/gpu-ownfg` (#447, `gpu-quick` #47) | not worked on (not part of Package 17) |
+| bench | `73fd6765` on `ck/bench` | `quality-bench` #3 green | not worked on; `OBJECTIVE_COMPARISON.md` still unwritten (its artifact needs a sign-in to download) |
+
+**Integration:** `work/rel-17` = `ck/rel17` `c1136e4e`: the three streams as snapshot commits on `ck/rel16` (`95ad6e0e`
+settings, `63527bf4` pace, `98a8393a` hud), merged with real merge commits, so later stream commits merge the same way
+(`git commit-tree <stream>^{tree} -p <previous snapshot of that stream>`, then `git merge`). Conflicts were only lists both
+sides append to: the three kit allow-lists, `PushLegacy.h` / `LegacyTests.inc` (order: `HudGuard17`, `HudGuardClean17`, then
+the four s12-pace parts; `kPushLegacyFirstAfter16 = HudGuard17`), the `gpu-quick.yml` case list, one member each in
+`EngineController.h` / `EnhanceGraph.h`, the `CoreTests.cpp` includes. A script confirmed that every line a stream added
+is present. Catalogue: 4411 entries, 0 missing, 0 placeholder problems. Full build: `slipstream/dev3` `d2fd02f7` (the
+integration + the lane-only CI commit); the lane's old head is kept as `archive/592a90f0`.
+
 ### 0-A.4 Package 17: what it is to contain and what remains before packaging
 
 Planned content: the settings readout, the on-screen (`[cadence]`) and frame-content (`[frame-probe]`) checks, the
