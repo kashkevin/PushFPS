@@ -136,8 +136,31 @@ How this session had to work (it matters for the next one):
 | ownfg | `04829397` on `ck/ownfg`, `ck/gpu-ownfg` | green on `ck/gpu-ownfg` (#447, `gpu-quick` #47) | not worked on (not part of Package 17) |
 | bench | `73fd6765` on `ck/bench` | `quality-bench` #3 green | not worked on; `OBJECTIVE_COMPARISON.md` still unwritten (its artifact needs a sign-in to download) |
 
-**Integration:** `work/rel-17` = `ck/rel17` `c1136e4e`: the three streams as snapshot commits on `ck/rel16` (`95ad6e0e`
-settings, `63527bf4` pace, `98a8393a` hud), merged with real merge commits, so later stream commits merge the same way
+**Later the same session (to about 23:00 UTC), read this first:**
+- Pace is now `6d9ecc50` (`ck/s12-pace`): the `present-shrink` WARP test allows 3 codes of 1023 for the two unclamped
+  negative-lobe kernels in HDR10 (build-windows #102 and #103 read 2.02 for Lanczos-2 at 1.5x where `gpu-quick` on another
+  machine stayed within 1.5; the filter itself was not changed). HUD's MSVC job is green on `0d176349` (#461).
+- The motion-check correction (`ck/ffxcheck` `8f96aa92`, snapshot `031c623f`) is merged into the integration too: it is
+  planned content and was in none of the three streams. No conflicts.
+- Full builds on `slipstream/dev3`: #102 / #103 stopped at that one WARP check; **#104 (`28eeabbf`, run 45898482220)
+  compiled with MSVC /W4 /WX and passed the unit tests, the WARP GPU tests, going-live, MP4 and BOTH QML suites (so the
+  two `tst_push_quick_setup.qml` failures are gone), then failed in the install test with a bare exit code**. The step
+  now repeats what stops it as an annotation (`work/rel-17`); #105 is the build to read.
+- **Package branch `work/package-17` = `ck/package-17`** (rel17 worktree; switch branches there with `git checkout`):
+  the integration + Package 16's package text (`1bccf71f` = snapshot of `ck/package-16`) + `labels/17.txt`, the Package 17
+  section of `docs/SLIPSTREAM_STATUS.md`, default label 17, the three stream drafts in `DOC_FILES`, and a drafted
+  `CHECKED.txt` whose build facts are still in `<angle brackets>` (the packager refuses to package until they are filled).
+  `python -B packaging/slipstream/test_slipstream_package.py` passes. After a good build: merge `work/rel-17` into it,
+  fill `CHECKED.txt`, then the package commit goes on `origin/slipstream/package` (`4f802db1`, keep it as
+  `archive/package-16` first) as in section 6.
+- **The package run itself needs a signed-in GitHub call** (`gh workflow run slipstream-package.yml ...` or the REST
+  dispatch, and cancelling the builds a push to `slipstream/package` starts). This PC has no `gh` and the session had no
+  token: that step is the owner's, or needs him to provide a way to authenticate.
+- Honest gaps for the package text: the fixes made in this session's reviews were not reviewed a second time and the
+  merged package was not reviewed as a whole (`CHECKED.txt` says so).
+
+**Integration:** `work/rel-17` = `ck/rel17`: the three streams as snapshot commits on `ck/rel16` (`95ad6e0e`
+settings, `63527bf4` then `1f94f3f1` pace, `98a8393a` hud), merged with real merge commits, so later stream commits merge the same way
 (`git commit-tree <stream>^{tree} -p <previous snapshot of that stream>`, then `git merge`). Conflicts were only lists both
 sides append to: the three kit allow-lists, `PushLegacy.h` / `LegacyTests.inc` (order: `HudGuard17`, `HudGuardClean17`, then
 the four s12-pace parts; `kPushLegacyFirstAfter16 = HudGuard17`), the `gpu-quick.yml` case list, one member each in
