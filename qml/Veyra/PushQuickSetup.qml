@@ -1143,8 +1143,8 @@ VGroup {
         visible: !quick.compact && quick.gsyncRun > 0
         label: "G-SYNC"
         hint: quick.gsyncRun === 1 ? qsTr("驱动配置已保存：请重启 PushFPS 来完成 G-SYNC 设置")
-            : quick.gsyncRun === 2 ? qsTr("重启后驱动已确认 G-SYNC 对 PushFPS 生效")
-            : qsTr("重启后驱动还没有报告 G-SYNC 对 PushFPS 生效")
+            : quick.gsyncRun === 2 ? qsTr("重启后驱动报告 G-SYNC 对 PushFPS 生效")
+            : qsTr("重启后驱动仍没有报告 G-SYNC 对 PushFPS 生效")
         hintBelow: true
     }
     VRow {
@@ -1153,9 +1153,9 @@ VGroup {
         visible: !quick.compact && quick.gsyncUnconfirmed && veyra.preferences.pushGsyncChecked !== true
                  && (!quick.gsyncChecked || quick.gsyncWanted || quick.gsyncTools.busy || quick.gsyncTools.canRepair)
         label: "G-SYNC"
-        help: qsTr("屏幕支持可变刷新时，画面一准备好屏幕就刷新：不撕裂，每一帧显示的时间都一样长。NVIDIA 驱动要为每个程序单独允许窗口和全屏 G-SYNC")
+        help: qsTr("屏幕支持可变刷新时，驱动可以让屏幕在画面准备好时刷新。NVIDIA 驱动要为每个程序单独允许窗口和全屏 G-SYNC；是否生效只看驱动的报告，窗口模式下驱动可能不启用")
         hint: quick.gsyncWanted || (quick.gsyncTools && quick.gsyncTools.busy) ? qsTr("正在检查驱动配置…")
-            : qsTr("屏幕支持可变刷新，但驱动还没有确认对 PushFPS 生效，画面可能不如录像流畅。点「一键设置」为 PushFPS 允许窗口和全屏 G-SYNC，然后重启 PushFPS")
+            : qsTr("屏幕支持可变刷新，但驱动还没有报告它对 PushFPS 生效。点「一键设置」为 PushFPS 允许窗口和全屏 G-SYNC，然后重启 PushFPS；之后仍以驱动的报告为准")
         hintBelow: true
         VButton {
             objectName: "pushfps-gsync-fix"
@@ -1171,7 +1171,7 @@ VGroup {
         label: qsTr("英伟达低延迟")
         // Review 1 MUST 4: no promise of lower input delay. His Package 16 log: no measurable change in a window; the driver
         // reports the mode active only while the picture is full-screen and in front (driverLowLatency=1 only then).
-        help: qsTr("让 NVIDIA 驱动减少显卡里排队等待的画面。在采集卡画面上的效果没有测出来。只在 NVIDIA 显卡上可用")
+        help: qsTr("PushFPS 在每一帧前通过 NVIDIA 驱动做一次类似 Reflex 的等待（NvAPI Sleep），限制显卡里排队的画面。这不是 NVIDIA 控制面板里的“低延迟模式”。采集卡画面的游戏不在这台电脑上运行，所以它只作用于 PushFPS 自己这一段，效果没有测出来。只在 NVIDIA 显卡上可用")
         hint: veyra.nvidiaLowLatencyAvailable === true ? qsTr("下面显示驱动现在的报告") : qsTr("需要 NVIDIA 显卡")
         VSwitch {
             objectName: "pushfps-low-latency"

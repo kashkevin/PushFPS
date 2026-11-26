@@ -384,12 +384,12 @@ QString QmlPlayerBridge::vrrHintText(int level) const {
     case 1: return tr("当前屏幕不支持可变刷新");
     case 2: return tr("屏幕支持可变刷新，但当前显示模式不可用；请检查连接、刷新率及驱动设置");
     case 3:
-        if (!on) return tr("屏幕跟着画面刷新：不撕裂，也几乎不用等刷新");
+        if (!on) return tr("屏幕支持可变刷新；PushFPS 尚未请求，驱动也没有报告它正在生效");
         // Review 3 MUST 2: the switch is read only with display sync Automatic (VideoPresenter.h vrrSyncWanted).
         if (impl_->presentation.display != engine::DisplaySync::Automatic) return tr("显示同步为垂直同步时 PushFPS 不请求可变刷新；是否可变刷新由 NVIDIA 驱动决定");
         return running ? tr("已请求可变刷新，驱动尚未确认生效；可检查窗口/全屏 G-SYNC 设置，当前状态不代表驱动已关闭")
                        : tr("已开启，将在播放时请求可变刷新；是否生效以驱动报告为准");
-    default: return on ? tr("生效中：屏幕跟着画面刷新") : tr("屏幕正处于可变刷新（驱动已开启）");
+    default: return on ? tr("NVIDIA 驱动报告可变刷新正在生效") : tr("NVIDIA 驱动报告屏幕正处于可变刷新（PushFPS 没有请求）");
     }
 }
 QString QmlPlayerBridge::fgDisplayHint() const { return impl_->fgDisplayHint; }
@@ -474,6 +474,7 @@ QVariantMap QmlPlayerBridge::pushSettingsEffect() const {
     // Review 1 SHOULD 7: facts measured with older settings are not shown as the new state (a rebuild takes 1-3 s).
     out["applying"] = s.running && (s.applying || (engineFacts && e.revision != s.applied.revision));
     out["realPresented"] = QVariant::fromValue(qulonglong(e.realPresented));
+    out["skippedPairs"] = QVariant::fromValue(qulonglong(e.skippedPairs));   // admission skips in the window ([capture-timing] skippedPairs)
     out["lowDelayActive"] = e.lowDelayActive;
     out["presentSinkFg"] = e.presentSinkFg;
     out["vfgFastUsed"] = e.vfgFastPairs > 0;   // review 2 SHOULD 9: some 2X pairs ran the faster model

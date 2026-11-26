@@ -84,6 +84,9 @@ TEST(settings_effect_multiplier_reason_follows_the_rule_order){
     r = pushSettingsEffect(f);
     CHECK(T::why(r, PushEffectSetting::Multiplier) == PushEffectWhy::LimitedByAdaptive);
     CHECK(T::why(r, PushEffectSetting::Adaptive) == PushEffectWhy::Running && T::runs(r, PushEffectSetting::Adaptive));
+    f.generatedPresented = 0;   // the engine's choice with no generated frame shown is not "executing"
+    CHECK(!T::runs(pushSettingsEffect(f), PushEffectSetting::Adaptive));
+    f.generatedPresented = 600;
     f.executingMultiplier = 3;   // Smoothness Mode after adaptive: adaptive's choice is overridden
     CHECK(T::why(pushSettingsEffect(f), PushEffectSetting::Adaptive) == PushEffectWhy::LimitedBySmoothness);
     f = T::his(); f.adaptiveOn = true;   // a 3X ceiling at 180 Hz: adaptive keeps 3X
@@ -156,8 +159,12 @@ TEST(settings_effect_hud_lock_flow_enhancement_and_vrr){
     CHECK(T::why(r, PushEffectSetting::FlowGroup) == PushEffectWhy::Running && T::runs(r, PushEffectSetting::FlowGroup));
     CHECK(T::why(r, PushEffectSetting::EdgeAegis) == PushEffectWhy::OwnMotion && !T::runs(r, PushEffectSetting::EdgeAegis));
     f = T::his(); f.vfg = false; f.ownMotion = false; f.fgUsesFlow = true; f.flowSamples = 300; f.edgeAegisOn = true;
+    // A flow stage that ran proves nothing about the refine: only the refine's own recorded dispatches make Edge Aegis "run".
     r = pushSettingsEffect(f);
-    CHECK(T::why(r, PushEffectSetting::EdgeAegis) == PushEffectWhy::Running);
+    CHECK(T::why(r, PushEffectSetting::EdgeAegis) == PushEffectWhy::Unknown && !T::runs(r, PushEffectSetting::EdgeAegis));
+    f.edgeAegisDispatches = 300;
+    r = pushSettingsEffect(f);
+    CHECK(T::why(r, PushEffectSetting::EdgeAegis) == PushEffectWhy::Running && T::runs(r, PushEffectSetting::EdgeAegis));
     CHECK(T::why(r, PushEffectSetting::VfgQuality) == PushEffectWhy::OtherMethod && !r[std::size_t(PushEffectSetting::VfgQuality)].requested);
     f.flowSamples = 0; f.flowGpuMs = 0.4;   // review 2 SHOULD 5: an old P95 without samples in this window is not running
     CHECK(T::why(pushSettingsEffect(f), PushEffectSetting::FlowGroup) == PushEffectWhy::NoFlowConsumer);
@@ -209,12 +216,15 @@ TEST(settings_effect_young_window_and_queue){
     CHECK(pushEffectForDisplay(young, completed).realPresented == 2);
     young.revision = 7; young.realPresented = 30;
     CHECK(pushEffectForDisplay(young, completed).realPresented == 30);
+    // The queue depth is the value PushFPS asked DXGI for (no readback): applied, never "executing".
     auto q = T::his(); q.vsyncPaced = false; q.queueDepth = 1;
-    CHECK(T::why(pushSettingsEffect(q), PushEffectSetting::LowQueue) == PushEffectWhy::Running && T::runs(pushSettingsEffect(q), PushEffectSetting::LowQueue));
+    CHECK(T::why(pushSettingsEffect(q), PushEffectSetting::LowQueue) == PushEffectWhy::NotMeasurable && !T::runs(pushSettingsEffect(q), PushEffectSetting::LowQueue));
     q.queueDepth = 3;
-    CHECK(T::why(pushSettingsEffect(q), PushEffectSetting::LowQueue) == PushEffectWhy::Unknown);
+    CHECK(T::why(pushSettingsEffect(q), PushEffectSetting::LowQueue) == PushEffectWhy::NotMeasurable && !T::runs(pushSettingsEffect(q), PushEffectSetting::LowQueue));
     q.queueDepth = -1;
     CHECK(T::why(pushSettingsEffect(q), PushEffectSetting::LowQueue) == PushEffectWhy::NotMeasurable);
+    q.lowQueueOn = false;
+    CHECK(T::why(pushSettingsEffect(q), PushEffectSetting::LowQueue) == PushEffectWhy::Off);
     // Review 3 MUST 2: the VRR switch under Vsync says so even when nothing plays.
     auto v = T::his(); v.playing = false; v.vrrOn = true; v.displayAutomatic = false;
     CHECK(T::why(pushSettingsEffect(v), PushEffectSetting::Vrr) == PushEffectWhy::NeedsAutomaticSync);
@@ -260,4 +270,44 @@ TEST(driver_age_drift_is_not_a_queue){
     const auto queued = pushDriverAgeFit(points);
     CHECK(queued.valid && std::fabs(queued.driftMsPerS) < 0.2 && queued.residualP95Ms > 15.0);
     CHECK(!pushDriverAgeFit({{0.0, 1.0}, {1.0, 2.0}}).valid);
+}
+
+// Package 14's steadiness counter skippedPairs ([capture-timing]) is also in [settings-effect] and survives a young window.
+TEST(settings_effect_reports_skipped_pairs){
+    namespace T = settings_effect_tests; using namespace veyra::engine;
+    auto f = T::his(); f.skippedPairs = 9; f.edgeAegisDispatches = 4;
+    const auto line = pushSettingsEffectLine(f, "window");
+    CHECK(T::has(line, " skippedPairs=9"));
+    CHECK(T::has(line, " edgeAegisDispatches=4 "));
+    CHECK(T::has(pushSettingsEffectLine(T::his(), "window"), " skippedPairs=0"));
+    auto completed = f; completed.revision = 7;
+    auto young = T::his(); young.revision = 7; young.realPresented = 2;
+    CHECK(pushEffectForDisplay(young, completed).skippedPairs == 9);
+}
+
+// Rows added by the audit: Smoothness Mode and the output cap had a control and no readout of their own.
+TEST(settings_effect_smoothness_and_output_cap_rows){
+    namespace T = settings_effect_tests; using namespace veyra::engine;
+    auto f = T::his(); f.requestedMultiplier = 4; f.afterAdaptive = 4; f.afterCap = 4; f.executingMultiplier = 3;   // his 4X asked, 3X ran
+    auto r = pushSettingsEffect(f);
+    CHECK(T::why(r, PushEffectSetting::Smoothness) == PushEffectWhy::Running && T::runs(r, PushEffectSetting::Smoothness));
+    CHECK(T::why(r, PushEffectSetting::OutputCap) == PushEffectWhy::Off && !T::runs(r, PushEffectSetting::OutputCap));   // no cap set
+    f.executingMultiplier = 4;   // the target is met by the multiplier: nothing chosen
+    r = pushSettingsEffect(f);
+    CHECK(T::why(r, PushEffectSetting::Smoothness) == PushEffectWhy::NothingToChoose && !T::runs(r, PushEffectSetting::Smoothness));
+    f.generatedPresented = 0; f.executingMultiplier = 3;   // nothing shown yet: unknown, never run
+    r = pushSettingsEffect(f);
+    CHECK(T::why(r, PushEffectSetting::Smoothness) == PushEffectWhy::Unknown && !T::runs(r, PushEffectSetting::Smoothness));
+    f = T::his(); f.smoothnessOn = false;
+    CHECK(T::why(pushSettingsEffect(f), PushEffectSetting::Smoothness) == PushEffectWhy::Off);
+    // The cap: 6X asked, the 120 FPS cap made 4X (his revision 40): it ran; a cap that changed nothing is "not measured".
+    f = T::his(); f.smoothnessOn = false; f.capFps = 120; f.requestedMultiplier = f.afterAdaptive = 6; f.afterCap = f.executingMultiplier = 4;
+    r = pushSettingsEffect(f);
+    CHECK(T::why(r, PushEffectSetting::OutputCap) == PushEffectWhy::Running && T::runs(r, PushEffectSetting::OutputCap));
+    f = T::his(); f.smoothnessOn = false; f.capFps = 180;
+    r = pushSettingsEffect(f);
+    CHECK(T::why(r, PushEffectSetting::OutputCap) == PushEffectWhy::NotMeasurable && !T::runs(r, PushEffectSetting::OutputCap));
+    CHECK(T::has(pushSettingsEffectLine(f, "window"), " outputCap=on/idle:not-measurable"));
+    f.playing = false;
+    CHECK(T::why(pushSettingsEffect(f), PushEffectSetting::OutputCap) == PushEffectWhy::NotPlaying);
 }

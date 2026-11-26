@@ -61,10 +61,10 @@ Text {
         case "limited-by-cap": return qsTr("正在运行 %1X：输出上限 %2 FPS 限制").arg(x).arg(Number(e.capFps || 0).toFixed(0))
         case "limited-by-adaptive": return qsTr("正在运行 %1X：自适应倍率选择").arg(x)
         case "pairs-skipped": return qsTr("正在运行 %1X，但每个真实帧之后平均只显示了 %2 个生成帧（有些被跳过）").arg(x).arg(Number(e.generatedPerReal || 0).toFixed(2))
-        case "already-by-vsync": return qsTr("已生效（显示同步为垂直同步时队列本来就是 1 帧）")
+        case "already-by-vsync": return qsTr("显示同步为垂直同步时，PushFPS 请求的队列本来就是 1 帧")
         case "needs-automatic-sync": return qsTr("只在显示同步为“自动”时使用；可变刷新由驱动决定")
         case "driver-vrr-off": return qsTr("已请求；NVIDIA 驱动上次报告此显示器没有启用可变刷新")
-        case "driver-reports-off": return qsTr("已开启，但 NVIDIA 驱动现在报告低延迟模式未启用（一次测试中只在 PushFPS 全屏并在最前面时启用）")
+        case "driver-reports-off": return qsTr("已开启，但 NVIDIA 驱动对 PushFPS 的 Sleep 状态查询现在报告未启用（一次测试中只在 PushFPS 全屏并在最前面时启用）")
         case "needs-2x": return qsTr("只在 2X 时有效")
         case "needs-single-model": return qsTr("混合质量档不会加载更快的模型，此开关不起作用")
         case "no-faster-model": return qsTr("“低”档没有更快的模型")
@@ -73,7 +73,7 @@ Text {
         case "not-loaded": return qsTr("更快的模型没有加载（显存不足）")
         case "unavailable": return qsTr("没能在这台电脑上启动")
         case "unknown": return qsTr("已开启；最近几秒没有测到它在运行")
-        case "not-measurable": return qsTr("已开启；PushFPS 无法测量这一项")
+        case "not-measurable": return qsTr("已开启；PushFPS 没有计数器能测到它是否在起作用")
         case "works-at-lower-size": return qsTr("内部以 %1×%2 处理，以 %3×%4 显示").arg(e.enhanceWidth).arg(e.enhanceHeight).arg(e.outputWidth).arg(e.outputHeight)
         }
         return ""

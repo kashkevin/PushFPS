@@ -1336,7 +1336,7 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
             int64_t nextVfgOverloadLog=0;
             unsigned previewFgMultiplier=options.fgMultiplier;
             // Stream "s12-settings" (PushSettingsEffect.h): the per-pair multiplier after each rule, for [settings-effect].
-            unsigned effectAfterAdaptive=options.fgMultiplier,effectAfterCap=options.fgMultiplier;PushSettingsEffectGate effectGate;PushEffectFacts effectLogged;std::optional<EnhancementSettings> effectLastApplied;PushEffectFacts effectCompleted;uint64_t effectExpectedGenerated=0,effectExpectedBase=0;std::array<uint64_t,size_t(diagnostics::GpuStage::Count)> gpuStageSamples{},effectSampleBase{};
+            unsigned effectAfterAdaptive=options.fgMultiplier,effectAfterCap=options.fgMultiplier;PushSettingsEffectGate effectGate;PushEffectFacts effectLogged;std::optional<EnhancementSettings> effectLastApplied;PushEffectFacts effectCompleted;uint64_t effectExpectedGenerated=0,effectExpectedBase=0,effectSkippedPairs=0;std::array<uint64_t,size_t(diagnostics::GpuStage::Count)> gpuStageSamples{},effectSampleBase{};
             // Live output hint (DisplayFgBudget.h): a status-line suggestion only.
             // VEYRA_TEST_DISPLAY_HZ=<hz> replaces the measured refresh for it.
             DisplayFgBudgetGate displayFgGate;
@@ -3277,7 +3277,7 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
                             pairLookahead=pushGridEarlyDelay(pairDelay,liveInterval,previewFgMultiplier,fgBudget.baseCost(host100ns()),liveInputReady-presentAnchor);
                             windowGridEarly+=pairLookahead!=pairDelay;
                         }
-                        if(isCapture&&!isStream&&options.fg&&capturePairDecision&&*capturePairDecision==pipeline::EnhanceGraph::FgDecision::Skip)++windowSkippedPairs;
+                        if(isCapture&&!isStream&&options.fg&&capturePairDecision&&*capturePairDecision==pipeline::EnhanceGraph::FgDecision::Skip){++windowSkippedPairs;++effectSkippedPairs;}
                         liveTimeline.resetPair(out.batch.identity.epoch,out.batch.b100ns,presentAnchor,pairLookahead,paceSourcePts);
                         if(isCapture&&!isStream&&options.fg&&previewFgMultiplier>1&&!presentSinkFrameGeneration(options.settings.frameGenerationBackend))presentGridSlot=liveInterval/previewFgMultiplier;
                         if((smoothTransportAnchor||smoothContentAnchor)&&host100ns()>=nextLiveAnchorLog){
@@ -3817,7 +3817,7 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
                     for(unsigned i=0;i<effectFacts.vfgSubframeSamples.size();++i)effectFacts.vfgSubframeSamples[i]=stageSamples(diagnostics::GpuStage(unsigned(diagnostics::GpuStage::Fg1)+i));
                     effectFacts.flowSamples=stageSamples(diagnostics::GpuStage::Flow);effectFacts.enhanceSamples=stageSamples(diagnostics::GpuStage::Nr);
                     effectFacts.expectedGenerated=effectSince(effectExpectedGenerated,effectExpectedBase);
-                    effectFacts.hudLockComposes=effectSince(graph->hudLockComposes(),effectLogged.hudLockComposes);effectFacts.vfgFastPairs=effectSince(vfgFastPairs+vfgFastBudgetPairs,effectLogged.vfgFastPairs);
+                    effectFacts.hudLockComposes=effectSince(graph->hudLockComposes(),effectLogged.hudLockComposes);effectFacts.edgeAegisDispatches=effectSince(graph->flowRefineDispatches(),effectLogged.edgeAegisDispatches);effectFacts.skippedPairs=effectSince(effectSkippedPairs,effectLogged.skippedPairs);effectFacts.vfgFastPairs=effectSince(vfgFastPairs+vfgFastBudgetPairs,effectLogged.vfgFastPairs);
                     const auto effectTrigger=effectGate.due(int64_t(host100ns()/10000),options.settings.revision,pacingRevision);
                     if(!effectTrigger.empty()){
                         veyra::log::info("settings-effect",pushSettingsEffectLine(effectFacts,effectTrigger));
@@ -3826,7 +3826,7 @@ void EngineController::run(HWND window,std::wstring path,PlayerOptions options,s
                         effectLogged.realPresented=effectFlow.realPresented;effectLogged.generatedPresented=effectFlow.generatedPresented;
                         effectLogged.dedupObserved=effectDedup.observed;effectLogged.dedupRepeats=effectDedup.repeats;
                         effectLogged.pacingFrames=effectPacing.frames;effectLogged.pacingRepaired=effectPacing.repaired;
-                        effectLogged.hudLockComposes=graph->hudLockComposes();effectLogged.vfgFastPairs=vfgFastPairs+vfgFastBudgetPairs;
+                        effectLogged.hudLockComposes=graph->hudLockComposes();effectLogged.edgeAegisDispatches=graph->flowRefineDispatches();effectLogged.skippedPairs=effectSkippedPairs;effectLogged.vfgFastPairs=vfgFastPairs+vfgFastBudgetPairs;
                         effectSampleBase=gpuStageSamples;effectExpectedBase=effectExpectedGenerated;
                     }
                     const auto effectShown=pushEffectForDisplay(effectFacts,effectCompleted);   // review 3 SHOULD 5: a young window shows the last completed one

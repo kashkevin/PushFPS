@@ -94,7 +94,7 @@ constexpr bool pushEffectWhyEffective(PushEffectWhy why) {
 
 enum class PushEffectSetting : std::uint8_t {
     Multiplier = 0, Adaptive, PacingRepair, Dedup, HudLock, VfgQuality, VfgAutoRegulate, StrictCadence, FlowGroup,
-    EdgeAegis, NvidiaLowLatency, LowQueue, Vrr, Enhancement, Count
+    EdgeAegis, NvidiaLowLatency, LowQueue, Vrr, Enhancement, Smoothness, OutputCap, Count
 };
 inline constexpr std::size_t kPushEffectSettings = std::size_t(PushEffectSetting::Count);
 
@@ -114,6 +114,8 @@ constexpr std::string_view pushEffectSettingName(PushEffectSetting s) {
     case PushEffectSetting::LowQueue: return "lowQueue";
     case PushEffectSetting::Vrr: return "vrr";
     case PushEffectSetting::Enhancement: return "enhancement";
+    case PushEffectSetting::Smoothness: return "smoothness";
+    case PushEffectSetting::OutputCap: return "outputCap";
     case PushEffectSetting::Count: break;
     }
     return "?";
@@ -177,6 +179,8 @@ struct PushEffectFacts {
     std::uint64_t dedupObserved = 0, dedupRepeats = 0;
     std::uint64_t pacingFrames = 0, pacingRepaired = 0;
     std::uint64_t hudLockComposes = 0;       // HUD lock compose dispatches recorded (CPU counter, no readback)
+    std::uint64_t edgeAegisDispatches = 0;   // Edge Aegis flow-refine adapt dispatches recorded (CPU counter, no readback)
+    std::uint64_t skippedPairs = 0;          // pairs the admission refused on a capture source in the window (the same decision as [capture-timing] skippedPairs)
     std::uint64_t vfgFastPairs = 0;          // pairs that ran VFG's faster model (auto regulation)
     std::array<double, 4> vfgSubframeMs{};   // GPU time per generated-frame position (Fg1..Fg4 stages, P95 of the stage's recent samples, ms)
     std::array<std::uint64_t, 4> vfgSubframeSamples{};   // GPU samples of those stages IN THIS WINDOW (review 2 SHOULD 5: the evidence)
@@ -235,7 +239,8 @@ inline PushEffectRows pushSettingsEffect(const PushEffectFacts& f) {
         else if (f.afterAdaptive >= f.requestedMultiplier) why = PushEffectWhy::NothingToChoose;
         else if (f.executingMultiplier < f.afterAdaptive) why = PushEffectWhy::LimitedBySmoothness;
         // Measured: the engine's own per-pair choice lowered the multiplier.
-        set(PushEffectSetting::Adaptive, f.adaptiveOn, why, fg && f.playing && f.afterAdaptive < f.requestedMultiplier);
+        // (the engine's choice, and generated frames really shown: a choice nobody saw is not "executing")
+        set(PushEffectSetting::Adaptive, f.adaptiveOn, why, fg && f.playing && f.afterAdaptive < f.requestedMultiplier && f.generatedPresented > 0);
     }
     {
         PushEffectWhy why = PushEffectWhy::Running;
@@ -312,8 +317,9 @@ inline PushEffectRows pushSettingsEffect(const PushEffectFacts& f) {
         else if (f.ownMotion) why = PushEffectWhy::OwnMotion;
         else if (!f.fgUsesFlow) why = PushEffectWhy::NoFlowConsumer;
         else if (!f.playing) why = PushEffectWhy::NotPlaying;
-        else if (f.flowSamples == 0) why = PushEffectWhy::Unknown;
-        set(PushEffectSetting::EdgeAegis, f.edgeAegisOn, why, fg && f.playing && f.fgUsesFlow && !f.ownMotion && f.flowSamples > 0);
+        else if (f.edgeAegisDispatches == 0) why = PushEffectWhy::Unknown;
+        // Measured: the refine's own dispatches were recorded in the window (a flow stage that ran proves nothing about the refine).
+        set(PushEffectSetting::EdgeAegis, f.edgeAegisOn, why, fg && f.playing && f.fgUsesFlow && !f.ownMotion && f.edgeAegisDispatches > 0);
     }
     {
         PushEffectWhy why = PushEffectWhy::Running;
@@ -324,15 +330,15 @@ inline PushEffectRows pushSettingsEffect(const PushEffectFacts& f) {
         set(PushEffectSetting::NvidiaLowLatency, f.nvidiaLowLatencyOn, why, f.playing && f.driverLowLatency == 1);
     }
     {
-        // Review 3 SHOULD 8: the presenter's maximum frame latency is the measurement. Under Vsync pacing it is one frame
-        // whether the switch is on or not.
-        PushEffectWhy why = PushEffectWhy::Running;
+        // The presenter's maximum frame latency (queueDepth) is the value PushFPS ASKED the swap chain for and DXGI accepted
+        // (PresentSink::queueLatency() is derived from its own pacing flag, no GetMaximumFrameLatency readback), so it is
+        // "applied", not "executing": the row never reads "run". Under Vsync pacing the queue is one frame whether the
+        // switch is on or not.
+        PushEffectWhy why = PushEffectWhy::NotMeasurable;
         if (f.vsyncPaced && f.playing) why = PushEffectWhy::AlreadyByVsync;
         else if (!f.lowQueueOn) why = PushEffectWhy::Off;
         else if (!f.playing) why = PushEffectWhy::NotPlaying;
-        else if (f.queueDepth < 0) why = PushEffectWhy::NotMeasurable;
-        else if (f.queueDepth != 1) why = PushEffectWhy::Unknown;
-        set(PushEffectSetting::LowQueue, f.lowQueueOn, why, f.playing && f.queueDepth == 1);
+        set(PushEffectSetting::LowQueue, f.lowQueueOn, why, false);
     }
     {
         PushEffectWhy why = PushEffectWhy::Running;
@@ -354,6 +360,27 @@ inline PushEffectRows pushSettingsEffect(const PushEffectFacts& f) {
             why = PushEffectWhy::WorksAtLowerSize;
         set(PushEffectSetting::Enhancement, f.enhanceOn, why, ran);
     }
+    {
+        // Smoothness Mode (a target FPS) picks the multiplier per pair: it "runs" when it lowered the multiplier the other rules
+        // left and generated frames were shown at that multiplier. A target the multiplier already meets chooses nothing.
+        PushEffectWhy why = PushEffectWhy::Running;
+        const bool lowered = f.executingMultiplier < f.afterCap && f.executingMultiplier < f.afterAdaptive;
+        if (!f.smoothnessOn || !fg) why = PushEffectWhy::Off;
+        else if (!f.playing) why = PushEffectWhy::NotPlaying;
+        else if (f.generatedPresented == 0) why = PushEffectWhy::Unknown;
+        else if (!lowered) why = PushEffectWhy::NothingToChoose;
+        set(PushEffectSetting::Smoothness, f.smoothnessOn && fg, why, f.playing && lowered && f.generatedPresented > 0);
+    }
+    {
+        // The output cap also limits how often frames are shown; no counter measures that, so only its effect on the multiplier
+        // (it chose a lower one, frames shown at it) can read "run"; otherwise a cap that is set reads "not measured".
+        PushEffectWhy why = PushEffectWhy::NotMeasurable;
+        const bool lowered = f.afterCap < f.afterAdaptive;
+        if (!(f.capFps > 0) || !fg) why = PushEffectWhy::Off;
+        else if (!f.playing) why = PushEffectWhy::NotPlaying;
+        else if (lowered && f.generatedPresented > 0) why = PushEffectWhy::Running;
+        set(PushEffectSetting::OutputCap, f.capFps > 0 && fg, why, f.playing && lowered && f.generatedPresented > 0);
+    }
     return r;
 }
 
@@ -367,7 +394,7 @@ inline PushEffectFacts pushEffectForDisplay(const PushEffectFacts& current, cons
     f.expectedGenerated = completed.expectedGenerated;
     f.dedupObserved = completed.dedupObserved; f.dedupRepeats = completed.dedupRepeats;
     f.pacingFrames = completed.pacingFrames; f.pacingRepaired = completed.pacingRepaired;
-    f.hudLockComposes = completed.hudLockComposes; f.vfgFastPairs = completed.vfgFastPairs;
+    f.hudLockComposes = completed.hudLockComposes; f.edgeAegisDispatches = completed.edgeAegisDispatches; f.skippedPairs = completed.skippedPairs; f.vfgFastPairs = completed.vfgFastPairs;
     f.vfgSubframeSamples = completed.vfgSubframeSamples; f.flowSamples = completed.flowSamples; f.enhanceSamples = completed.enhanceSamples;
     return f;
 }
@@ -434,7 +461,8 @@ inline std::string pushSettingsEffectLine(const PushEffectFacts& f, std::string_
     num("flowGpuP95Ms", f.flowGpuMs, 3);
     num("enhanceGpuP95Ms", f.enhanceGpuMs, 3);
     s += " flowSamples=" + std::to_string(f.flowSamples) + " enhanceSamples=" + std::to_string(f.enhanceSamples);
-    s += " hudLockComposes=" + std::to_string(f.hudLockComposes) + " vfgFastPairs=" + std::to_string(f.vfgFastPairs);
+    s += " hudLockComposes=" + std::to_string(f.hudLockComposes) + " edgeAegisDispatches=" + std::to_string(f.edgeAegisDispatches) +
+         " vfgFastPairs=" + std::to_string(f.vfgFastPairs) + " skippedPairs=" + std::to_string(f.skippedPairs);
     s += " driverVrr=" + std::to_string(f.driverVrr) + " revision=" + std::to_string(f.revision);
     s += std::string(" lowDelayActive=") + (f.lowDelayActive ? "1" : "0");
     s += " enhanceSize=" + std::to_string(f.enhanceWidth) + "x" + std::to_string(f.enhanceHeight) +

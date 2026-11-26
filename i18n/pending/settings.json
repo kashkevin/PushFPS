@@ -59,11 +59,6 @@
   "zh-TW": "對 %1 沒有作用（它自己估算運動）",
   "ja": "%1 では効果がありません（動きを自分で推定します）"
  },
- "已生效（显示同步为垂直同步时队列本来就是 1 帧）": {
-  "en": "already in force (display sync Vsync keeps a one-frame queue)",
-  "zh-TW": "已生效（顯示同步為垂直同步時佇列本來就是 1 幀）",
-  "ja": "すでに有効です（垂直同期ではキューが常に 1 フレーム）"
- },
  "延迟 %1 ms，其中 %2 ms 是真实帧排在 %3 个生成帧之后等待显示：%4X 时固定": {
   "en": "of %1 ms delay, %2 ms is the real frame waiting behind %3 generated frames: fixed at %4X",
   "zh-TW": "延遲 %1 ms，其中 %2 ms 是真實幀排在 %3 個生成幀之後等待顯示：%4X 時固定",
@@ -239,11 +234,6 @@
   "zh-TW": "（部分幀對使用了更快的模型）",
   "ja": "（一部のペアはより速いモデルを使用）"
  },
- "已开启；PushFPS 无法测量这一项": {
-  "en": "on; PushFPS cannot measure this one",
-  "zh-TW": "已開啟；PushFPS 無法測量這一項",
-  "ja": "オン。PushFPS はこの項目を計測できません"
- },
  "没有重复画面可去除；仍按游戏时钟安排帧（在一次测试中：更均匀，延迟约高 2 ms）": {
   "en": "no repeated pictures to remove; it still times frames by the game's clock (in one test: more even, about 2 ms more delay)",
   "zh-TW": "沒有重複畫面可去除；仍依遊戲時鐘安排幀（在一次測試中：更均勻，延遲約高 2 ms）",
@@ -254,20 +244,10 @@
   "zh-TW": "已請求；NVIDIA 驅動上次回報此顯示器沒有啟用可變刷新",
   "ja": "要求済み。NVIDIA ドライバーは前回、このディスプレイで可変リフレッシュがオフと報告しました"
  },
- "已开启，但 NVIDIA 驱动现在报告低延迟模式未启用（一次测试中只在 PushFPS 全屏并在最前面时启用）": {
-  "en": "On, but the NVIDIA driver reports low-latency mode off right now (in one test it was on only while PushFPS filled the screen and was in front)",
-  "zh-TW": "已開啟，但 NVIDIA 驅動現在回報低延遲模式未啟用（一次測試中只在 PushFPS 全螢幕並在最前面時啟用）",
-  "ja": "オンですが、NVIDIA ドライバーは現在低遅延モードがオフだと報告しています（ある測定では PushFPS が全画面で最前面のときだけオンでした）"
- },
  "正在运行 %1X，但每个真实帧之后平均只显示了 %2 个生成帧（有些被跳过）": {
   "en": "%1X running, but only %2 generated frames on average after each real frame (some were skipped)",
   "zh-TW": "正在執行 %1X，但每個真實幀之後平均只顯示了 %2 個生成幀（有些被跳過）",
   "ja": "%1X で実行中ですが、実フレームごとの生成フレームは平均 %2 枚だけです（一部はスキップ）"
- },
- "让 NVIDIA 驱动减少显卡里排队等待的画面。在采集卡画面上的效果没有测出来。只在 NVIDIA 显卡上可用": {
-  "en": "Asks the NVIDIA driver to keep fewer frames waiting in the graphics card. No effect has been measured on a capture card picture yet. NVIDIA graphics cards only",
-  "zh-TW": "讓 NVIDIA 驅動減少顯示卡裡排隊等待的畫面。在擷取卡畫面上的效果沒有測出來。只在 NVIDIA 顯示卡上可用",
-  "ja": "NVIDIA ドライバーにグラフィックスカード内で待つフレームを減らすよう求めます。キャプチャーカードの映像での効果はまだ計測されていません。NVIDIA グラフィックスカードのみ"
  },
  "下面显示驱动现在的报告": {
   "en": "the line below shows what the driver reports now",
@@ -298,5 +278,70 @@
   "en": "Shows every frame on a screen refresh and limits the output to the refresh rate: every generated frame is shown whole, as smooth as a recording. With Vsync PushFPS does not ask for variable refresh; whether it is used is up to the NVIDIA driver",
   "zh-TW": "等螢幕刷新再顯示每一幀，並把輸出限制在螢幕更新率：補出來的每一幀都完整顯示，玩起來和錄影一樣流暢。垂直同步時 PushFPS 不請求可變刷新，是否可變刷新由 NVIDIA 驅動決定",
   "ja": "画面のリフレッシュを待って各フレームを表示し、出力をリフレッシュレートに制限します：生成フレームもすべて完全に表示され、録画のように滑らかです。垂直同期では PushFPS は可変リフレッシュを要求せず、使われるかは NVIDIA ドライバー次第です"
+ },
+ "NVIDIA 驱动报告可变刷新正在生效": {
+  "en": "The NVIDIA driver reports variable refresh is in effect",
+  "zh-TW": "NVIDIA 驅動回報可變更新率正在生效",
+  "ja": "NVIDIA ドライバーが可変リフレッシュの有効を報告しています"
+ },
+ "NVIDIA 驱动报告屏幕正处于可变刷新（PushFPS 没有请求）": {
+  "en": "The NVIDIA driver reports the screen is in variable refresh (PushFPS did not ask for it)",
+  "zh-TW": "NVIDIA 驅動回報螢幕正處於可變更新率（PushFPS 沒有要求）",
+  "ja": "NVIDIA ドライバーは画面が可変リフレッシュ中と報告しています（PushFPS は要求していません）"
+ },
+ "PushFPS 在每一帧前通过 NVIDIA 驱动做一次类似 Reflex 的等待（NvAPI Sleep），限制显卡里排队的画面。这不是 NVIDIA 控制面板里的“低延迟模式”。采集卡画面的游戏不在这台电脑上运行，所以它只作用于 PushFPS 自己这一段，效果没有测出来。只在 NVIDIA 显卡上可用": {
+  "en": "Before each frame PushFPS asks the NVIDIA driver for a Reflex-style wait (NvAPI Sleep) that bounds the frames queued on the GPU. It is not the \"Low Latency Mode\" of the NVIDIA control panel. With a capture card the game does not run on this PC, so it only acts on PushFPS's own part of the path; no effect was measured. NVIDIA graphics cards only",
+  "zh-TW": "PushFPS 在每一幀前透過 NVIDIA 驅動做一次類似 Reflex 的等待（NvAPI Sleep），限制顯示卡裡排隊的畫面。這不是 NVIDIA 控制面板裡的「低延遲模式」。擷取卡畫面的遊戲不在這台電腦上執行，所以它只作用於 PushFPS 自己這一段，效果沒有測出來。只在 NVIDIA 顯示卡上可用",
+  "ja": "PushFPS は各フレームの前に NVIDIA ドライバーへ Reflex 風の待機（NvAPI Sleep）を要求し、GPU にキューされるフレームを抑えます。NVIDIA コントロールパネルの「低遅延モード」ではありません。キャプチャーカードのゲームはこの PC で動かないため、PushFPS 自身の区間にだけ作用し、効果は測定されていません。NVIDIA グラフィックスカードのみ"
+ },
+ "屏幕支持可变刷新时，驱动可以让屏幕在画面准备好时刷新。NVIDIA 驱动要为每个程序单独允许窗口和全屏 G-SYNC；是否生效只看驱动的报告，窗口模式下驱动可能不启用": {
+  "en": "When the screen supports variable refresh the driver can refresh it when a picture is ready. The NVIDIA driver must allow windowed and full-screen G-SYNC for each program separately; whether it is in effect is only what the driver reports, and in windowed mode the driver may not enable it",
+  "zh-TW": "螢幕支援可變更新率時，驅動可以讓螢幕在畫面準備好時更新。NVIDIA 驅動要為每個程式單獨允許視窗和全螢幕 G-SYNC；是否生效只看驅動的回報，視窗模式下驅動可能不啟用",
+  "ja": "画面が可変リフレッシュに対応していれば、ドライバーは画像の準備ができた時点で画面を更新できます。NVIDIA ドライバーではプログラムごとにウィンドウと全画面の G-SYNC を許可する必要があります。有効かどうかはドライバーの報告だけが根拠で、ウィンドウモードでは有効にならないことがあります"
+ },
+ "屏幕支持可变刷新，但驱动还没有报告它对 PushFPS 生效。点「一键设置」为 PushFPS 允许窗口和全屏 G-SYNC，然后重启 PushFPS；之后仍以驱动的报告为准": {
+  "en": "The screen supports variable refresh, but the driver has not yet reported it in effect for PushFPS. Press \"One-click set-up\" to allow windowed and full-screen G-SYNC for PushFPS, then restart PushFPS; the driver's report still decides afterwards",
+  "zh-TW": "螢幕支援可變更新率，但驅動還沒有回報它對 PushFPS 生效。點「一鍵設定」為 PushFPS 允許視窗和全螢幕 G-SYNC，然後重新啟動 PushFPS；之後仍以驅動的回報為準",
+  "ja": "画面は可変リフレッシュに対応していますが、ドライバーはまだ PushFPS で有効と報告していません。「ワンクリック設定」で PushFPS にウィンドウと全画面の G-SYNC を許可し、PushFPS を再起動してください。その後も判断はドライバーの報告に従います"
+ },
+ "屏幕支持可变刷新；PushFPS 尚未请求，驱动也没有报告它正在生效": {
+  "en": "The screen supports variable refresh; PushFPS has not asked for it and the driver does not report it in effect",
+  "zh-TW": "螢幕支援可變更新率；PushFPS 尚未要求，驅動也沒有回報它正在生效",
+  "ja": "画面は可変リフレッシュに対応しています。PushFPS は要求しておらず、ドライバーも有効とは報告していません"
+ },
+ "已开启，但 NVIDIA 驱动对 PushFPS 的 Sleep 状态查询现在报告未启用（一次测试中只在 PushFPS 全屏并在最前面时启用）": {
+  "en": "On, but the NVIDIA driver's Sleep status query for PushFPS now reports it as not active (in one test it was active only while PushFPS was full screen and in front)",
+  "zh-TW": "已開啟，但 NVIDIA 驅動對 PushFPS 的 Sleep 狀態查詢現在回報未啟用（一次測試中只在 PushFPS 全螢幕並在最前面時啟用）",
+  "ja": "オンですが、NVIDIA ドライバーの PushFPS に対する Sleep 状態の照会は現在「無効」と報告しています（ある測定では PushFPS が全画面で最前面のときだけ有効でした）"
+ },
+ "已开启；PushFPS 没有计数器能测到它是否在起作用": {
+  "en": "On; PushFPS has no counter that shows whether it is doing anything",
+  "zh-TW": "已開啟；PushFPS 沒有計數器能測到它是否在起作用",
+  "ja": "オン。PushFPS には、これが働いているかを測るカウンターがありません"
+ },
+ "显示同步为垂直同步时，PushFPS 请求的队列本来就是 1 帧": {
+  "en": "With display sync set to Vsync, the queue PushFPS asks for is one frame anyway",
+  "zh-TW": "顯示同步為垂直同步時，PushFPS 要求的佇列本來就是 1 幀",
+  "ja": "表示同期が垂直同期のとき、PushFPS が要求するキューはもともと 1 フレームです"
+ },
+ "请求 G-SYNC 或 FreeSync，让显示器按画面刷新而不是按固定频率。是否真的生效只看 NVIDIA 驱动的报告（窗口模式下驱动可能不启用），PushFPS 自己测不到": {
+  "en": "Asks for G-SYNC or FreeSync so the monitor refreshes with the picture instead of at a fixed rate. Whether it really takes effect is only what the NVIDIA driver reports (in windowed mode the driver may not enable it); PushFPS cannot measure it itself",
+  "zh-TW": "要求 G-SYNC 或 FreeSync，讓顯示器按畫面更新而不是按固定頻率。是否真的生效只看 NVIDIA 驅動的回報（視窗模式下驅動可能不啟用），PushFPS 自己測不到",
+  "ja": "G-SYNC または FreeSync を要求し、モニターを固定周期ではなく画像に合わせて更新させます。実際に有効かどうかは NVIDIA ドライバーの報告だけが根拠で（ウィンドウモードでは有効にならないことがあります）、PushFPS 自身では測れません"
+ },
+ "重启后驱动仍没有报告 G-SYNC 对 PushFPS 生效": {
+  "en": "After the restart the driver still does not report G-SYNC in effect for PushFPS",
+  "zh-TW": "重新啟動後驅動仍沒有回報 G-SYNC 對 PushFPS 生效",
+  "ja": "再起動後も、ドライバーは PushFPS で G-SYNC が有効とは報告していません"
+ },
+ "重启后驱动报告 G-SYNC 对 PushFPS 生效": {
+  "en": "After the restart the driver reports G-SYNC in effect for PushFPS",
+  "zh-TW": "重新啟動後驅動回報 G-SYNC 對 PushFPS 生效",
+  "ja": "再起動後、ドライバーは PushFPS で G-SYNC が有効と報告しています"
+ },
+ "驱动报告可变刷新已生效": {
+  "en": "the driver reports variable refresh in effect",
+  "zh-TW": "驅動回報可變更新率已生效",
+  "ja": "ドライバーが可変リフレッシュの有効を報告"
  }
 }

@@ -89,6 +89,14 @@ Item {
             verify(vfgNote.text.indexOf(qsTr("（相邻的生成帧来自不同模型）")) < 0, vfgNote.text)
             tryVerify(() => running.line2.indexOf(qsTr("预测帧")) >= 0)
         }
+        function test_low_latency_and_queue_say_only_what_is_observed() {
+            // The driver's Sleep status is the only observation: the text names it, never the control panel's mode.
+            verify(llNote.text.indexOf("Sleep") >= 0 && llNote.text.indexOf(qsTr("低延迟模式")) < 0, llNote.text)
+            const f = root.his(); f.rows.lowQueue = {why: "not-measurable", requested: true, executing: false}
+            board.stateSource = () => f; board.refresh()
+            verify(queueNote.visible && queueNote.text.indexOf("1 帧") < 0, queueNote.text)
+            compare(queueNote.tone, "grey")
+        }
         function test_not_measurable_is_grey() {
             const f = root.his(); f.rows.hudLock = {why: "not-measurable", requested: true, executing: false}
             board.stateSource = () => f; board.refresh()
