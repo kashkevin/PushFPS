@@ -510,8 +510,7 @@ TEST(onscreen_unbiased_scores_are_identical_at_2x_and_3x_for_identical_jitter) {
     const auto s3 = unbiasedTimeline(2, delays, delays.size());   // 3X: 2 refreshes per frame
     const auto s2 = unbiasedTimeline(3, delays, delays.size());   // 2X: 3 refreshes per frame
     if (std::getenv("ONSCREEN_SIM_PRINT"))
-        std::printf("unbiased 3X: k=%d holds=%llu covered %.1f %% even %.2f..%.2f %% judderMs %.4f holdSdMs %.4f showJitterMs %.4f judderPct %.2f | 2X: k=%d holds=%llu covered %.1f %% even %.2f..%.2f %% judderMs %.4f holdSdMs %.4f showJitterMs %.4f judderPct %.2f
-",
+        std::printf("unbiased 3X: k=%d holds=%llu covered %.1f %% even %.2f..%.2f %% judderMs %.4f holdSdMs %.4f showJitterMs %.4f judderPct %.2f | 2X: k=%d holds=%llu covered %.1f %% even %.2f..%.2f %% judderMs %.4f holdSdMs %.4f showJitterMs %.4f judderPct %.2f\n",
                     s3.k, static_cast<unsigned long long>(s3.holds), s3.coveredPct, s3.evenPctMin, s3.evenPctMax, s3.judderMs, s3.holdSdMs, s3.showJitterMs, s3.judderPct,
                     s2.k, static_cast<unsigned long long>(s2.holds), s2.coveredPct, s2.evenPctMin, s2.evenPctMax, s2.judderMs, s2.holdSdMs, s2.showJitterMs, s2.judderPct);
     CHECK(s3.k == 2 && s2.k == 3);
