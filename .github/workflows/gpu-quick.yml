@@ -182,7 +182,7 @@ jobs:
           $env:VEYRA_PUSH_GPU_DEBUG = '1'
           $out = Join-Path $env:RUNNER_TEMP 'gpu-quick'; New-Item -ItemType Directory -Force $out | Out-Null
           $bad = 0
-          foreach ($case in 'hud-lock', 'hud-guard', 'hud-guard-hdr10', 'predict', 'predict-hud-lock', 'predict-flow-marker', 'predict-flow-self-check', 'predict-flow-small-waves', 'predict-fidelityfx-sizes', 'predict-fidelityfx', 'predict-fidelityfx-hdr10') {
+          foreach ($case in 'hud-lock', 'hud-guard', 'hud-guard-hdr10', 'hud-guard-anchor', 'hud-guard-anchor-hdr10', 'predict', 'predict-hud-lock', 'predict-flow-marker', 'predict-flow-self-check', 'predict-flow-small-waves', 'predict-fidelityfx-sizes', 'predict-fidelityfx', 'predict-fidelityfx-hdr10') {
             & $exe.FullName --only $case --test-timeout 900 2>&1 | Tee-Object -FilePath "$out\$case.log" | Out-Host
             Write-Host "$case exit $LASTEXITCODE"
             if ($LASTEXITCODE -ne 0) { $bad++ }
