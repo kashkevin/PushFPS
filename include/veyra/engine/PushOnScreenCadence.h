@@ -261,15 +261,16 @@ private:
     struct Gap { std::uint32_t frames = 0, refreshes = 0; };
     void summariseHolds(Summary& s) {
         std::uint64_t even = 0, shorter = 0, longer = 0, evenReal = 0, evenGen = 0, run = 0, deviation = 0;
-        double holdMsSum = 0, holdMsSq = 0, dn = 0, dx = 0, dy = 0, dxx = 0, dxy = 0, dyy = 0;
+        double holdSum = 0, holdSq = 0, x0 = 0, y0 = 0, dn = 0, dx = 0, dy = 0, dxx = 0, dxy = 0, dyy = 0;
         std::uint32_t lastId = 0;
         for (std::size_t i = 0; i < holdCount_; ++i) {
             const auto& h = holds_[i];
             ++s.histogram[h.refreshes];
-            holdMsSum += double(h.refreshes) * periodMs_;
-            holdMsSq += double(h.refreshes) * periodMs_ * double(h.refreshes) * periodMs_;
+            holdSum += double(h.refreshes);   // whole refreshes: these sums are exact, so a perfect schedule has a spread of exactly 0
+            holdSq += double(h.refreshes) * double(h.refreshes);
             if (h.refresh >= 0 && h.callMs > 0) {
-                const double x = h.callMs, y = double(h.refresh) * periodMs_ - h.callMs;
+                if (dn == 0) { x0 = h.callMs; y0 = double(h.refresh) * periodMs_ - h.callMs; }   // shifted by the first sample: no cancellation
+                const double x = h.callMs - x0, y = double(h.refresh) * periodMs_ - h.callMs - y0;
                 ++dn; dx += x; dy += y; dxx += x * x; dxy += x * y; dyy += y * y;
             }
             if (h.refreshes == 0) { ++s.replaced; continue; }
@@ -292,8 +293,8 @@ private:
             s.longestUnevenRun = std::max(s.longestUnevenRun, ++run);
         }
         if (holdCount_ > 1 && periodMs_ > 0) {
-            const double n = double(holdCount_), mean = holdMsSum / n;
-            s.holdSdMs = std::sqrt(std::max(0.0, holdMsSq / n - mean * mean));
+            const double n = double(holdCount_), mean = holdSum / n;
+            s.holdSdMs = std::sqrt(std::max(0.0, holdSq / n - mean * mean)) * periodMs_;
             if (s.k && s.holds) s.judderMs = double(deviation) * periodMs_ / double(s.holds);
         }
         if (dn > 2) {   // residual standard deviation of y = (first shown vblank time - Present call) against the call time: a line removes the period drift

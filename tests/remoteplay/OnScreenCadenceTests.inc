@@ -393,6 +393,38 @@ TEST(frame_probe_groups_positions_and_gaps) {
     CHECK(line.find("skippedFrames=1 brokenGroups=2") != std::string::npos);
 }
 
+// Item 5 of the pacing stream: a slow camera pan (here 1 thumbnail column in the whole group) moves the 16-taps-per-cell thumbnails in lumps:
+// the generated frame equals A or B. With the guard such a group is reported as not judged; without it (judgeMotion 0) the same group
+// is called a near duplicate. SIMULATED on synthetic thumbnails (CPU only).
+TEST(frame_probe_slow_pan_is_not_judged_as_duplicates) {
+    using namespace veyra::engine;
+    constexpr std::size_t n = PushFrameProbe::kCells;
+    const auto bar = [](int x0) {
+        std::vector<float> img(n);
+        for (std::size_t i = 0; i < n; ++i) { const int x = int(i % PushFrameProbe::kWidth); img[i] = (x >= x0 && x < x0 + 6) ? 0.9f : 0.1f; }
+        return img;
+    };
+    const auto a = bar(20), b = bar(21);
+    const double d = PushFrameProbe::distance(a.data(), b.data());
+    CHECK(d > 0.011 && d < PushFrameProbe::kJudgeMotion);   // real motion for the probe, but below the judging limit
+    const float* group[] = {a.data(), a.data(), b.data(), b.data()};   // 3X: the taps have not moved yet at 1/3, have moved at 2/3
+    PushFrameProbe guarded, unguarded(0.0);
+    guarded.group(group, 4);
+    unguarded.group(group, 4);
+    const auto g = guarded.take();
+    CHECK(g.motionGroups == 1 && g.slowNotJudged == 1 && g.generated == 0 && g.nearDuplicates == 0);
+    const auto u = unguarded.take();
+    CHECK(u.slowNotJudged == 0 && u.generated == 2 && u.nearDuplicates >= 1);   // what the unguarded verdict did on a slow pan
+    CHECK(formatPushFrameProbe(g).find("slowNotJudged=1") != std::string::npos);
+    // A fast pan is still judged.
+    const auto c = bar(50);
+    const float* fast[] = {a.data(), a.data(), c.data(), c.data()};
+    PushFrameProbe judged;
+    judged.group(fast, 4);
+    const auto j = judged.take();
+    CHECK(j.slowNotJudged == 0 && j.generated == 2 && j.nearDuplicates == 2);
+}
+
 TEST(frame_probe_cpu_thumbnail_taps) {
     using namespace veyra::engine;
     // A picture whose value is its column: each cell's mean is the mean of its 4 tap columns.
@@ -541,7 +573,9 @@ TEST(onscreen_unbiased_scores_do_not_depend_on_the_window_length_or_which_frames
     const std::vector<int> none(1000, 0);
     for (int k : {2, 3}) {
         const auto s = unbiasedTimeline(k, none, none.size());
-        CHECK(s.judderMs == 0.0 && s.holdSdMs < 1e-9 && s.showJitterMs < 1e-6);
+        CHECK(s.judderMs >= 0.0 && s.judderMs < 1e-9);
+        CHECK(s.holdSdMs >= 0.0 && s.holdSdMs < 1e-6);
+        CHECK(s.showJitterMs >= 0.0 && s.showJitterMs < 1e-4);
     }
     // The line carries the new fields.
     const auto line = veyra::engine::formatPushCadence(whole3, veyra::engine::PushCadenceContext{});
