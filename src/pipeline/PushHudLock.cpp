@@ -8,8 +8,9 @@ namespace veyra::pipeline {
 namespace {
 constexpr DXGI_FORMAT kStateFormat = DXGI_FORMAT_R16G16_FLOAT;  // x: stillness 0..1, y: held contrast
 // Descriptor layouts. update: per parity { t0 current, t1 previous, u0 state }.
-// compose: per (slot, held parity) { t0 generated, t1 held real, t2 state, u0 scratch }.
-constexpr UINT kUpdateStride = 3, kComposeStride = 4;
+// compose: per (slot, held) { t0 generated, t1 held real, t2 state, u0 scratch }; held 0, 1: the real frames by parity,
+// 2: the copy of the real frame a predicted frame follows (Package 16, only when enablePredictedHeld was called).
+constexpr UINT kUpdateStride = 3, kComposeStride = 4, kHeldSources = 3;
 }
 
 std::string PushHudLock::describe() const {
@@ -22,17 +23,27 @@ bool PushHudLock::initialize(ID3D12Device* device, uint32_t width, uint32_t heig
     state_ = makeTexture(device, width_, height_, kStateFormat, true);
     scratch_ = makeTexture(device, width_, height_, format_, true);
     if (!state_ || !scratch_) return false;
+    state_->SetName(L"PushFPS HUD Lock state"); scratch_->SetName(L"PushFPS HUD Lock scratch");
     std::vector<uint8_t> cs;
     if (!update_.loadShader("PushHudLockUpdate.dxil", cs) || !update_.create(device, cs, 2 * kUpdateStride, 2, 1, kConstants)) return false;
     if (!compose_.loadShader("PushHudLockCompose.dxil", cs) ||
-        !compose_.create(device, cs, kMaxGenerated * 2 * kComposeStride, 3, 1, kConstants)) return false;
+        !compose_.create(device, cs, kMaxGenerated * kHeldSources * kComposeStride, 3, 1, kConstants)) return false;
     veyra::log::info("hud-lock", std::format("created {}", describe()));
     return true;
 }
 
+static_assert(PushHudLock::kPredictedHeld + 1 == kHeldSources, "the held copy is the last held source");
+
+bool PushHudLock::enablePredictedHeld(ID3D12Device* device) {
+    if (!device || !width_ || !height_ || format_ == DXGI_FORMAT_UNKNOWN) return false;
+    if (!heldCopy_) heldCopy_ = makeTexture(device, width_, height_, format_, false);
+    if (heldCopy_) veyra::log::info("hud-lock", std::format("predicted-frame held copy {}x{} (Lower delay)", width_, height_));
+    return heldCopy_ != nullptr;
+}
+
 void PushHudLock::createViews(ID3D12Device* device, DescriptorStager& stager, ID3D12Resource* const real[2],
                               ID3D12Resource* const* generated, unsigned generatedCount) {
-    real_[0] = real[0]; real_[1] = real[1];
+    real_[0] = real[0]; real_[1] = real[1]; real_[2] = heldCopy_.Get();
     generatedCount_ = std::min<unsigned>(generatedCount, kMaxGenerated);
     for (unsigned i = 0; i < generatedCount_; ++i) generated_[i] = generated[i];
     for (unsigned parity = 0; parity < 2; ++parity) {
@@ -42,8 +53,9 @@ void PushHudLock::createViews(ID3D12Device* device, DescriptorStager& stager, ID
         makeUav(device, state_.Get(), kStateFormat, cpuHandleOf(update_, base + 2));
     }
     for (unsigned slot = 0; slot < generatedCount_; ++slot)
-        for (unsigned held = 0; held < 2; ++held) {
-            const UINT base = (slot * 2 + held) * kComposeStride;
+        for (unsigned held = 0; held < kHeldSources; ++held) {
+            if (!real_[held]) continue;
+            const UINT base = (slot * kHeldSources + held) * kComposeStride;
             stager.stageSrv(generated_[slot], nullptr, compose_.heap.Get(), base);
             stager.stageSrv(real_[held], nullptr, compose_.heap.Get(), base + 1);
             stager.stageSrv(state_.Get(), nullptr, compose_.heap.Get(), base + 2);
@@ -70,7 +82,7 @@ bool PushHudLock::update(ID3D12GraphicsCommandList* list, StateTracker& tracker,
 }
 
 bool PushHudLock::compose(ID3D12GraphicsCommandList* list, StateTracker& tracker, unsigned slot, unsigned heldParity) {
-    if (!list || slot >= generatedCount_ || heldParity > 1 || !generated_[slot] || !real_[heldParity]) return false;
+    if (!list || slot >= generatedCount_ || heldParity >= kHeldSources || !generated_[slot] || !real_[heldParity]) return false;
     auto* generated = generated_[slot];
     float c[kConstants]{};
     c[0] = std::bit_cast<float>(width_); c[1] = std::bit_cast<float>(height_);
@@ -79,7 +91,7 @@ bool PushHudLock::compose(ID3D12GraphicsCommandList* list, StateTracker& tracker
     tracker.transition(list, real_[heldParity], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     tracker.transition(list, state_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     tracker.transition(list, scratch_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    const UINT base = (slot * 2 + heldParity) * kComposeStride;
+    const UINT base = (slot * kHeldSources + heldParity) * kComposeStride;
     compose_.bind(list, c, gpuHandleOf(compose_, base).ptr, gpuHandleOf(compose_, base + 3).ptr);
     list->Dispatch((width_ + 15) / 16, (height_ + 15) / 16, 1);
     tracker.uavBarrier(list, scratch_.Get());
