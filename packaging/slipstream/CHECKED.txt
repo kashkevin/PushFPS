@@ -6,7 +6,11 @@
 # so that no package ships with a blank. Plain ASCII, lines of at most 100 characters, two spaces of indent.
 # Rule: say what was compiled, run and tested and on which machine; anything that only passed checks on GitHub's
 # Windows machine has NOT run on a gaming PC. Never write "validated" or a latency figure here.
-  Experimental build: <build-windows number and run id, date, what passed and what failed>
+  Experimental build: build-windows number 106 (run 45906207852), 26 November 2026, compiled by
+  MSVC with warnings as errors. Every step passed EXCEPT THE LAST ONE: the unit tests, the
+  software-renderer GPU tests, the going-live and MP4 tests, both QML test suites, the
+  packaging and the install test passed; the end-to-end test of "Lower delay" FAILED, as it
+  did in Package 16's build.
   What the end-to-end test of "Lower delay" is (it failed 5 of 569 checks in Package 16's
   build): the real engine on GitHub's Windows machine with a software renderer, a small picture,
   a stand-in for NVIDIA's generator and no real motion. Its timing varies from run to run; it is
@@ -17,9 +21,12 @@
   the new shrink filter (Lanczos-2 without clamping, HDR10; reachable only through a developers'
   line, never the default) differed from its reference by 2.02 of 1023 brightness steps where
   the test allowed 1.5. We did not change the filter: the test's limit for the two unclamped
-  variants in HDR10 is now 3 steps. The default filter and all others keep 1.5.
+  variants in HDR10 is now 3 steps. The default filter and all others keep 1.5. Builds 104 and
+  105 then stopped in the install test: a new check in the test script itself read the wrong
+  folder (a fault of the script, corrected; the program did not change).
   On GitHub's machines (software renderer, no graphics card, no capture card, no PS5), for the
-  merged source: <remoteplay-checks number, core test count, checks number>
+  merged source: remoteplay-checks number 466 (the core tests on Linux plain and with
+  sanitizers and with MSVC, and the kit's dry runs) and checks number 504: passed.
   The new parts' own tests: HUD Guard, a matrix of synthetic scenes on the CPU reference (the
   limits it found are pinned by tests and listed in part A) and the GPU passes against that
   reference on the software renderer; the settings rules as unit tests and their texts as
