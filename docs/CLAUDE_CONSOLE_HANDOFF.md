@@ -145,9 +145,18 @@ How this session had to work (it matters for the next one):
 | hud | `work/s12-hud` = `ck/s12-hud` = `ck/gpu-s12-hud` `d0aebca5` | + the busy scan only for pixels with `run >= anchorFrames`; parity and core tests passed inside build #107 and `remoteplay-checks` #477; read the lanes' own runs |
 | integration | `work/rel-17` = `ck/rel17` `853ea0c1` (snapshots: settings `c7e7ccc9`, pace `1f94f3f1`, hud `f1ad7331`, ffxcheck `031c623f`) | `checks` #523, `remoteplay-checks` #477 green |
 | full build | `slipstream/dev3` `f6b30e87` (integration + lane-only CI commit), **build-windows #107, run 45920935731** | every step passed (MSVC /W4 /WX, unit, WARP GPU, going-live, MP4, both QML suites, packaging, install test, artifact upload) **except the last: "Lower delay" end-to-end 435 passed / 17 failed** (Package 16's #92: 564 / 5) |
-| package source | `work/package-17` = `ck/package-17` `3f48c9d2` = the built tree + package text only (`labels/17.txt`, `CHECKED.txt` filled, status section, label 17, documents) | `test_slipstream_package.py` passes; no `<angle brackets>` left |
+| package source | `work/package-17` = `ck/package-17` `264281a1` = the built tree + package text only (`labels/17.txt`, `CHECKED.txt` filled, status section, label 17, documents) | `test_slipstream_package.py` passes; no `<angle brackets>` left |
 
-**The open finding, which is the owner's decision before packaging:** with the owner's settings ("Lower delay" off, 3X,
+**UPDATE, about 03:10 UTC: `e2e-quick` #45 (HUD Guard off, same tree) finished: 507 passed / 13 failed, the
+"pipeline keeps up" check passes and "Lower delay" enters again. So the cause IS HUD Guard's per-real-frame work on the
+software renderer; `CHECKED.txt`, `17.txt` and the status section say so (`work/package-17` = `ck/package-17`, newest
+commit "Package 17 text: the end-to-end finding is HUD Guard's work on the software renderer"). What it costs on a
+graphics card is still unmeasured. The 13 left are timing comparisons, exit kinds and the `ownerHdr` format check, which
+failed in all three runs of that lane (not explained; not compared with Package 16's lane). The decision that remains is
+the owner's: ship HUD Guard on with Live HUD Lock as built (the text warns and names the undo line), or make it opt-in /
+cheaper first (then rebuild and re-read the end-to-end counts).**
+
+**The finding as first written (before #45 finished):** with the owner's settings ("Lower delay" off, 3X,
 Smoothness Mode 90, Live HUD Lock, HDR10) the software renderer no longer keeps up since this package: 0.41-0.68
 generated frames per real frame where the test asks for 0.9 (`e2e-quick` on `ck/e2e-rel17-gate`: #43 438 / 25, #44
 469 / 18 after the busy-scan change; HUD Guard's own end-to-end test 70 / 0 in both). Likely cause: HUD Guard's work in
