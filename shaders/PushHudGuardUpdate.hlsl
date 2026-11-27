@@ -13,7 +13,7 @@ cbuffer Constants : register(b0) {
     uint width, height, reset, tilesX;
     uint tilesY, reach, shareMille, holdFrames;
     float still, hold, move, edge;
-    uint recentFrames, anchorMargin, pad1, pad2;
+    uint recentFrames, anchorMargin, anchorFrames, pad2;
 };
 // The aim anchor's busy test (PushHudGuardReference::update): a changed pixel in the tiles that overlap the 128 x 128 aim
 // window grown by anchorMargin px.
@@ -83,7 +83,9 @@ void main(uint3 id : SV_DispatchThreadID, uint3 gid : SV_GroupID) {
         }
         if (nearMoving && !surroundMoving(int2(gid.xy))) { nearMoving = false; thinMoving = false; }   // a lone mover
     }
-    [branch] if (inAim(id.xy)) iso = aimBusy();   // anything changed around the aim window this frame: the aim anchor is off for it
+    // Anything changed around the aim window this frame: the aim anchor is off for it. Only pixels still long enough for the
+    // anchor read the bit (pushHudGuardStep), so only they pay for the scan.
+    [branch] if (anchorFrames > 0 && run >= anchorFrames && inAim(id.xy)) iso = aimBusy();
     if (nearMoving) nearby = min(nearby + 1u, 15u);
     if (thinMoving) thin = min(thin + 1u, 15u);
     if (ck.y >= edge) edges = min(edges + 1u, 15u);
