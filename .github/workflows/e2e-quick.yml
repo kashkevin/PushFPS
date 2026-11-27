@@ -241,6 +241,7 @@ jobs:
           E2E_EXPECT: ${{ inputs.expect || 'p15' }}
           E2E_EXPECT_INPUT: ${{ inputs.expect }}
           E2E_D3D12_DEBUG: '1'
+          VEYRA_TEST_RP_LEGACY_HUD_GUARD: '1'   # scratch lane only: the same test with HUD Guard off (A/B for e2e-quick #44)
         run: |
           $exe = Get-ChildItem $env:BUILD -Recurse -Filter 'veyra_lowdelay_e2e_tests.exe' | Select-Object -First 1
           $env:PATH = "$($exe.DirectoryName);$env:DEPS\vcpkg\installed\x64-windows\bin;$env:PATH"
