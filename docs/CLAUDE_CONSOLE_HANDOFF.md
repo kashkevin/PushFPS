@@ -136,7 +136,43 @@ How this session had to work (it matters for the next one):
 | ownfg | `04829397` on `ck/ownfg`, `ck/gpu-ownfg` | green on `ck/gpu-ownfg` (#447, `gpu-quick` #47) | not worked on (not part of Package 17) |
 | bench | `73fd6765` on `ck/bench` | `quality-bench` #3 green | not worked on; `OBJECTIVE_COMPARISON.md` still unwritten (its artifact needs a sign-in to download) |
 
-**Later the same session (to about 23:00 UTC), read this first:**
+**FINAL STATE of that session (27 Nov 2026, about 01:30 UTC). Package 17 is prepared, NOT packaged:**
+
+| What | Where | State |
+|---|---|---|
+| settings | `work/s12-settings` = `ck/s12-settings` `269671fb` | green; + the install check's variable clash (`$qmldir` overwrote `$qmlDir`: PowerShell names ignore case; builds #104 / #105 failed there) |
+| pace | `work/s12-pace` = `ck/s12-pace` `6d9ecc50` | green |
+| hud | `work/s12-hud` = `ck/s12-hud` = `ck/gpu-s12-hud` `d0aebca5` | + the busy scan only for pixels with `run >= anchorFrames`; parity and core tests passed inside build #107 and `remoteplay-checks` #477; read the lanes' own runs |
+| integration | `work/rel-17` = `ck/rel17` `853ea0c1` (snapshots: settings `c7e7ccc9`, pace `1f94f3f1`, hud `f1ad7331`, ffxcheck `031c623f`) | `checks` #523, `remoteplay-checks` #477 green |
+| full build | `slipstream/dev3` `f6b30e87` (integration + lane-only CI commit), **build-windows #107, run 45920935731** | every step passed (MSVC /W4 /WX, unit, WARP GPU, going-live, MP4, both QML suites, packaging, install test, artifact upload) **except the last: "Lower delay" end-to-end 435 passed / 17 failed** (Package 16's #92: 564 / 5) |
+| package source | `work/package-17` = `ck/package-17` `3f48c9d2` = the built tree + package text only (`labels/17.txt`, `CHECKED.txt` filled, status section, label 17, documents) | `test_slipstream_package.py` passes; no `<angle brackets>` left |
+
+**The open finding, which is the owner's decision before packaging:** with the owner's settings ("Lower delay" off, 3X,
+Smoothness Mode 90, Live HUD Lock, HDR10) the software renderer no longer keeps up since this package: 0.41-0.68
+generated frames per real frame where the test asks for 0.9 (`e2e-quick` on `ck/e2e-rel17-gate`: #43 438 / 25, #44
+469 / 18 after the busy-scan change; HUD Guard's own end-to-end test 70 / 0 in both). Likely cause: HUD Guard's work in
+every real frame (it is ON whenever Live HUD Lock runs, which the owner uses); WARP does it on the CPU. **Not proven:
+`e2e-quick` #45 on `ck/e2e-rel17-gate-nohud` (run 45923810826, the same tree with
+`VEYRA_TEST_RP_LEGACY_HUD_GUARD=1` in the workflow, a scratch lane) decides it; read its annotations
+(`.../actions/runs/45923810826/jobs`, then the check-run's annotations: the notices carry the PASS / FAIL counts and the
+first FAIL lines).** If it passes like Package 16, HUD Guard is the cause and the choice is: ship it on with the warning
+that is in `17.txt`, ship it off by default, or make it cheaper first. If it still fails, look at the s12-pace parts that
+are on by default (frame probe, extra frame-statistics readings: `VEYRA_TEST_RP_LEGACY_FRAME_PROBE`, `_STATS_READINGS`).
+Update `CHECKED.txt` / `17.txt` / the status section with the answer before packaging.
+
+**To package (needs `gh` or a token; this session had neither):**
+`git push origin 4f802db1:refs/heads/archive/package-16`; make the package commit on Package 16's
+(`git commit-tree "work/package-17^{tree}" -p origin/slipstream/package -m "Package 17 package source"`), push it to
+`slipstream/package` (fast-forward), cancel the runs that push starts, then
+`gh workflow run slipstream-package.yml -R kashkevin/PushFPS --ref slipstream/package -f package_label=17 -f experimental_run=45920935731 -f experimental_branch=slipstream/dev3`.
+If code changes first, rebuild on `slipstream/dev3` and use that run instead.
+
+Not done in this session: a second independent review of the fixes and a review of the merged package (said in
+`CHECKED.txt`); the settings notes for `smoothness` / `outputCap`; pace's kernel table and the occlusion check; anything
+on ownfg and bench. CI now repeats what stops the install test and the PASS / FAIL counts of the end-to-end steps as
+annotations (`build-windows.yml`, `e2e-quick.yml`).
+
+**Later the same session (to about 23:00 UTC), superseded where the table above differs:**
 - Pace is now `6d9ecc50` (`ck/s12-pace`): the `present-shrink` WARP test allows 3 codes of 1023 for the two unclamped
   negative-lobe kernels in HDR10 (build-windows #102 and #103 read 2.02 for Lanczos-2 at 1.5x where `gpu-quick` on another
   machine stayed within 1.5; the filter itself was not changed). HUD's MSVC job is green on `0d176349` (#461).
