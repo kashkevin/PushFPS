@@ -173,7 +173,10 @@ inline PushHudGuardCell pushHudGuardStep(PushHudGuardCell c, float change, float
         if (r.recent > 0) { r.nearby = c.nearby; r.thin = c.thin; r.edge = c.edge; }
         return r;
     }
-    c.iso = isolated ? 1u : 0u;
+    // The bit is read only by the aim anchor, which needs run >= anchorFrames: it is set only then, so the GPU runs its
+    // busy scan (up to 256 tile reads) for pixels that have been still that long, not for every pixel of the aim window
+    // (e2e-quick #43, 26 Nov 2026: the software renderer no longer kept up with the scan on every aim pixel).
+    c.iso = (isolated && p.anchorFrames > 0 && c.run >= p.anchorFrames) ? 1u : 0u;
     if (nearMoving) c.nearby = std::min(c.nearby + 1u, kPushHudGuardMaxCount);
     if (thinMoving) c.thin = std::min(c.thin + 1u, kPushHudGuardMaxCount);
     // Up and down: a structure has contrast in most frames (a crosshair against the picture behind it); a sky pixel that
