@@ -100,12 +100,12 @@ WHAT TO EXPECT, HONESTLY
     that is a finding: please send the log.
   - A WARNING SIGN FROM THE BUILD MACHINE: in the engine test with your settings its software
     renderer no longer keeps up since this package (0.4 to 0.7 generated frames per real frame
-    where Package 16 kept up; see section "what has been checked"). The likely cause is part
-    A's extra work per real frame, which a software renderer does on the processor; it is not
-    proven. A graphics card should do that work in well under a millisecond, but nobody has
-    measured it. If you see skipped generated frames, a multiplier that drops below 3X, or
-    stutter that Package 16 did not have: add  VEYRA_TEST_RP_LEGACY_HUD_GUARD = 1  (see TO UNDO),
-    check again, and send the log either way.
+    where Package 16 kept up; see section "what has been checked"). The cause is part A's
+    extra work per real frame, which a software renderer does on the processor: with part A
+    switched off the same test keeps up again. A graphics card should do that work in well
+    under a millisecond, but nobody has measured it. If you see skipped generated frames, a
+    multiplier that drops below 3X, or stutter that Package 16 did not have: add
+    VEYRA_TEST_RP_LEGACY_HUD_GUARD = 1  (see TO UNDO), check again, and send the log either way.
   - Part A should remove most copies of a hard-edged crosshair in camera turns. It can also be
     wrong in ways the synthetic pictures did not show. You are the first to see it on a game.
   - Parts B and C change nothing in how frames are made, timed or shown (by reading the code and
@@ -456,8 +456,8 @@ KNOWN ISSUES IN 17
   - Part A: the soft-edge and HDR-highlight limits listed there; its GPU cost at 4K is an
     estimate; whether the flat-picture addition ever acts on a real game is unknown.
   - The build machine's end-to-end test with the owner's settings got worse with this package
-    (17 failed checks against 5 in Package 16): its software renderer no longer keeps up. Cause
-    not proven; part A is the likely one (see "WHAT TO EXPECT, HONESTLY").
+    (17 failed checks against 5 in Package 16): its software renderer no longer keeps up
+    with part A's work (with part A off it does). Its cost on a real card is not measured.
   - Part D: no variant is chosen as the sharpest; its cost on a real card is not measured.
   - Checking whether the window is covered still runs on the thread that shows frames (moving
     it was planned for this package and is not done).

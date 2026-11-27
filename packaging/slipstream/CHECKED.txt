@@ -23,12 +23,16 @@
   test alone on another machine (e2e-quick number 44): 469 passed, 18 failed, 0.68 generated
   frames per real frame. Before one correction made on 27 November (a scan of HUD Guard that
   ran for every pixel in the middle of the picture) it was 438 passed, 25 failed, 0.42.
-  WE DO NOT KNOW THE CAUSE FOR CERTAIN. The likely one is HUD Guard: it adds work to every real
-  frame, and a software renderer does that work on the processor. A run of the same test with
-  HUD Guard switched off was started (branch ck/e2e-rel17-gate-nohud, e2e-quick number 45) and
-  had not finished when this was written. On a graphics card the same work is estimated at
-  well under a millisecond, but THAT IS AN ESTIMATE: if frames are skipped or the delay rises
-  on your PC with Live HUD Lock on, use the undo line of part A and send the log.
+  THE CAUSE IS HUD GUARD (part A), shown on the build machine: the same test of the same source
+  with HUD Guard switched off by its undo line (e2e-quick number 45) passed 507 checks and
+  failed 13; the software renderer kept up again and "Lower delay" started. HUD Guard adds work
+  to every real frame, and a software renderer does that work on the processor. The 13 that
+  still failed there are timing comparisons and exits of the kind Package 16's build also had,
+  and one check of the HDR10 format in that test lane that we have not explained.
+  WHAT THIS DOES NOT TELL US: what HUD Guard costs on a graphics card. The estimate is well
+  under a millisecond per real frame at 4K, and it is only an estimate. HUD Guard is ON with
+  Live HUD Lock. If frames are skipped, the multiplier drops or the delay rises on your PC,
+  use the undo line of part A and send the log.
   HUD Guard's own end-to-end test (the real engine with the graphics debug layer, software
   renderer): 70 checks passed, none failed, in e2e-quick numbers 43 and 44.
   Earlier builds of this package's source: number 106 passed every step but the same last one
