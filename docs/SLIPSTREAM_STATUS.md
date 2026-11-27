@@ -33,6 +33,16 @@ recovering session read itself (see `packaging/slipstream/CHECKED.txt`).
 | "Lower delay": the FidelityFX start-up self-check's test picture corrected (`pipeline/PushPredictCheck.h`) | with the row (off) | unit tests, `tools/pushwarp_eval/ffx_check_sim.py`; WARP cannot run the estimator | - | no |
 | Everything above back to Package 16 except the settings notes and `[settings-effect]` | - | `LegacyTests.inc` | `VEYRA_TEST_RP_LEGACY_PACKAGE16` (implied by the earlier masters) | - |
 
+**The end-to-end engine test got worse with this package and the cause is not proven.** Build-windows #107 (run
+45920935731, the integration `ck/rel17` `853ea0c1`): every step passed except the last one, 435 checks passed and 17
+failed (Package 16's build #92: 564 / 5). With "Lower delay" off and the owner's settings the software renderer shows
+0.41 generated frames per real frame (the test asks for 0.9), so pairs are skipped, the multiplier leaves 3X and "Lower
+delay" cannot enter in several runs. `e2e-quick` on `ck/e2e-rel17-gate`: #43 438 / 25 (0.42), #44 after the HUD Guard
+busy scan was limited to pixels that can be anchored 469 / 18 (0.68); HUD Guard's own end-to-end test 70 / 0 in both.
+The likely cause is HUD Guard's work in every real frame's base list, which WARP executes on the CPU; the same test with
+`VEYRA_TEST_RP_LEGACY_HUD_GUARD=1` (`ck/e2e-rel17-gate-nohud`, `e2e-quick` #45) decides it and had not finished when this
+was written. Nothing here says what it costs on a graphics card.
+
 Not in this package: the project's own frame generator (PushWarp; never selected automatically), the offline quality
 bench's comparison document, moving the window-occlusion check off the presentation thread.
 
